@@ -51,23 +51,32 @@
 #                                 (num-cpus) job count. Raise it if your
 #                                 Docker Desktop VM has more memory
 #                                 allocated (see README.md).
-#   APPLIANCE_BOOT_COUNTING=<n>   Ship the factory UKI with sd-boot's boot
-#                                 counting armed: names it
-#                                 duduclaw-os_<ver>+<n>.efi and stages
-#                                 /etc/kernel/tries. DEFAULT OFF (H3a ships
-#                                 no counting suffix). n must be 1..9 — sd-boot
-#                                 v257 does not zero-pad the counter, so a
-#                                 two-digit value shortens the filename on
-#                                 each rename, which is the non-atomic-rename
-#                                 hazard the Boot Loader Specification warns
-#                                 about on FAT32.
-#                                 DO NOT TURN THIS ON until systemd-bless-boot
-#                                 is confirmed working inside the image
-#                                 (H3b's job). Counting without anything to
-#                                 clear the counter is strictly worse than no
-#                                 counting: every boot decrements, nothing
-#                                 ever resets, and a perfectly healthy machine
-#                                 rolls itself back on the 3rd reboot.
+#   APPLIANCE_BOOT_COUNTING=<n>   sd-boot boot counting on the factory UKI:
+#                                 names it duduclaw-os_<ver>+<n>.efi and
+#                                 stages /etc/kernel/tries. DEFAULT 3 (H3b,
+#                                 2026-08-23 — this is the shipping default
+#                                 now, it was OFF through H3a). n must be
+#                                 1..9: sd-boot v257 does not zero-pad the
+#                                 counter, so a two-digit value shortens the
+#                                 filename on each rename, which is the
+#                                 non-atomic-rename hazard the Boot Loader
+#                                 Specification warns about on FAT32.
+#                                 Set to 0 (or "off") to build an image with
+#                                 no counting at all — an escape hatch for
+#                                 bisecting, not a supported shipping shape.
+#                                 THE TWO THINGS THAT MAKE THIS SAFE, both
+#                                 landed before the default flipped:
+#                                   * systemd-bless-boot is in the image
+#                                     (H3a, package `systemd-boot`) — without
+#                                     something to CLEAR the counter, every
+#                                     boot decrements and a perfectly healthy
+#                                     machine rolls itself back on the 3rd
+#                                     reboot. Counting half-done is strictly
+#                                     worse than no counting.
+#                                   * duduclaw-health-check.service (H3c)
+#                                     decides what "successful boot" means,
+#                                     so blessing is not granted merely for
+#                                     reaching sysinit.
 #
 
 # Not yet run end-to-end as of this writing (needs a Linux environment +
@@ -112,13 +121,22 @@ if [[ -z "$IMAGE_VERSION" ]]; then
 fi
 echo "[build] image version: $IMAGE_VERSION"
 
-# Boot counting is opt-in and default OFF — see the APPLIANCE_BOOT_COUNTING
-# note in the usage block above for why turning it on before H3b is dangerous.
+# Boot counting is ON by default as of H3b (2026-08-23) — see the
+# APPLIANCE_BOOT_COUNTING note in the usage block above for the two
+# preconditions that had to land first (bless-boot in the image; a real
+# health gate deciding what "successful" means).
 UKI_FORMAT_ARGS=()
-BOOT_COUNTING="${APPLIANCE_BOOT_COUNTING:-}"
+BOOT_COUNTING="${APPLIANCE_BOOT_COUNTING-3}"
+# An explicitly empty value, 0, or "off" all mean "build without counting".
+# `${VAR-3}` (no colon) above is deliberate so that only an *unset* variable
+# takes the default and an explicit `APPLIANCE_BOOT_COUNTING=` is honoured as
+# the opt-out it reads like.
+case "$BOOT_COUNTING" in
+    ""|0|off|OFF) BOOT_COUNTING="" ;;
+esac
 if [[ -n "$BOOT_COUNTING" ]]; then
     if [[ ! "$BOOT_COUNTING" =~ ^[1-9]$ ]]; then
-        echo "[build] APPLIANCE_BOOT_COUNTING must be a single digit 1-9 (got '$BOOT_COUNTING')" >&2
+        echo "[build] APPLIANCE_BOOT_COUNTING must be a single digit 1-9, or 0/off (got '$BOOT_COUNTING')" >&2
         exit 1
     fi
     # %v is expanded only when mkosi parses it out of a config FILE; on the

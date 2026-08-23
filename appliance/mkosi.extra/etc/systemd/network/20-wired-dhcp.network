@@ -19,3 +19,14 @@ IPv6AcceptRA=yes
 # fallback list; this feeds timesyncd, it does not disable it.
 UseNTP=yes
 UseDNS=yes
+# D4b (2026-08-23) -- both links stay up and the ROUTE METRIC decides which
+# one carries traffic, rather than one of them being switched off. Lower wins,
+# so wired (100) beats wireless (600, see 25-wireless-dhcp.network) whenever a
+# cable is plugged in, and unplugging it falls back to Wi-Fi with no operator
+# action. This is the macOS/Windows convention and it is what the settings
+# app's network page tells the operator is happening. networkd's own default
+# for both would be 1024, i.e. a tie broken arbitrarily.
+# The static-IP drop-in duduclaw-sysd writes to /run/systemd/network/ carries
+# the same Metric=100 on its [Route], so switching a box to a fixed address
+# does not change which link is preferred.
+RouteMetric=100

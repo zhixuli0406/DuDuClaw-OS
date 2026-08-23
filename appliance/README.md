@@ -161,11 +161,14 @@ The two `.slot-*.efi` files are the A/B update payload's UKI half. They are
 built every time but nothing consumes them yet — the signed payload pipeline
 is H3d.
 
-One extra build knob exists for the A/B work and **defaults to off**:
-`APPLIANCE_BOOT_COUNTING=<1-9>` arms sd-boot's boot counting on the factory
-UKI. Do not set it until H3b has confirmed `systemd-bless-boot` works inside
-the image; see "A/B updates" below for why arming it early is worse than
-leaving it off.
+One extra build knob exists for the A/B work: `APPLIANCE_BOOT_COUNTING=<1-9>`
+sets how many attempts sd-boot gives the factory UKI. It **defaults to 3**
+(since H3b, 2026-08-23) — the factory UKI ships as
+`duduclaw-os_<ver>+3.efi` and the first healthy boot renames it back to
+`duduclaw-os_<ver>.efi`. `APPLIANCE_BOOT_COUNTING=0` builds without counting.
+Never above 9: sd-boot v257 does not zero-pad the counter, so a two-digit
+value shortens the filename on every rename — the non-atomic-rename hazard the
+Boot Loader Specification warns about on FAT32.
 
 ## QEMU smoke test
 
@@ -238,6 +241,13 @@ onboarding flow all need a real machine.
 7. `duduclaw-flatpak-setup.service`: creates `/data/flatpak` and adds the
    flathub remote to it (retried on later boots if there's no uplink yet).
    See "Flatpak app layer" below.
+8. `duduclaw-health-check.service` (only on boots sd-boot is counting, i.e.
+   the first boot after an update or at the factory): probes the gateway's
+   `/healthz` and the `duduclaw-sysd` socket for up to 180s. Passing lets
+   `boot-complete.target` be reached, which is what runs
+   `systemd-bless-boot good` and makes this version permanent; failing leaves
+   the counter alone so the next boots decrement it and sd-boot eventually
+   falls back to the previous entry. See "A/B updates" below.
 
 ## Kiosk display session
 
@@ -359,7 +369,7 @@ an estimate per the task, not a benchmark result):
   the unit actually starts; headless boxes pay nothing beyond the
   binaries already sitting unused on disk.
 
-## A/B updates — what is wired as of H3a
+## A/B updates — what is wired as of H3c
 
 Full design and rollout order:
 `commercial/docs/DESIGN-ab-update-rollback-2026-08.md`. What is actually in
@@ -372,8 +382,8 @@ the image today:
 | `systemd-bless-boot` (marks a boot successful) | `Packages=systemd-boot` | ✅ H3a — **was missing from every earlier image** |
 | Transfer definitions (`.transfer`, arch-generic, boot-counting-aware) | `mkosi.extra/etc/sysupdate.d/` | ✅ H3a |
 | Per-slot UKI: each UKI boots its own root slot | `mkosi.conf` `root=PARTUUID` + `tools/uki-slots.py` | ✅ H3a |
-| Boot counting armed on the factory UKI | `APPLIANCE_BOOT_COUNTING=` | ⬜ H3b — deliberately off |
-| Health gate deciding what "a successful boot" means | — | ⬜ H3c |
+| Boot counting armed on the factory UKI | `APPLIANCE_BOOT_COUNTING=` (default **3**) | ✅ H3b — on by default since 2026-08-23 |
+| Health gate deciding what "a successful boot" means | `duduclaw-health-check.service` + `usr/local/sbin/duduclaw-health-check.sh` | ✅ H3c |
 | Signed payload pipeline (independent OS key) | — | ⬜ H3d |
 | `device.update_rollback` doing something | `duduclaw-sysd` | ⬜ H3f — still returns `Unsupported` |
 
@@ -388,12 +398,50 @@ alongside the old one, which is exactly what gives sd-boot something to fall
 back to. Shipping a second entry at the factory would mean shipping a boot
 entry pointing at an empty partition.
 
-**The ordering between H3a and H3b is not interchangeable.** Boot counting
-without `systemd-bless-boot` is worse than no boot counting: sd-boot
+**The ordering between H3a, H3b and H3c is not interchangeable.** Boot
+counting without `systemd-bless-boot` is worse than no boot counting: sd-boot
 decrements the counter on every boot and nothing ever resets it, so a
 perfectly healthy machine marks its own only boot entry bad on the third
-reboot. That is why the binaries land first (H3a) and the counter is armed
-second (H3b), and why `APPLIANCE_BOOT_COUNTING` defaults to off.
+reboot. That is why the binaries landed first (H3a), the counter was armed
+second (H3b), and the gate that decides what "successful" means landed with it
+(H3c). `APPLIANCE_BOOT_COUNTING` now defaults to **3**; `=0` builds an image
+with no counting at all, which is a bisecting tool, not a shipping shape.
+
+**What blesses a boot.** sd-boot renames `duduclaw-os_<ver>+3.efi` to
+`+2-1` *before* starting it, so the counter is already spent by the time
+userspace runs. Clearing it requires reaching `boot-complete.target`, and
+`duduclaw-health-check.service` is `RequiredBy=` that target — so the sequence
+is: gateway `/healthz` returns 200 with `"ok":true` (which also covers the
+cron/heartbeat schedulers, not just the HTTP listener) **and**
+`/run/duduclaw/sysd.sock` accepts a connection ⇒ `boot-complete.target` ⇒
+`systemd-bless-boot good` ⇒ the filename loses its suffix and the version is
+permanent. Fail any of that and nothing clears the counter, so the next boots
+decrement it and sd-boot falls back to the previous entry. Deliberately *not*
+gated on: network reachability, the compositor/shell (headless is the primary
+shape), and `systemd-boot-check-no-failures` (upstream itself says it is not
+suitable as a deployment criterion). Budget is 180s, set as
+`Environment=DUDUCLAW_HEALTH_TIMEOUT=` in the unit.
+
+Two tests cover this, both runnable without a real machine:
+
+```sh
+python3 appliance/tests/ab-update/health_check_test.py            # host-only: the gate's decision logic
+appliance/tests/ab-update/boot-ab.sh &                            # VM (fresh disk each run)
+python3 -u appliance/tests/ab-update/h3bc_probe.py t0             # counting is real + this boot got blessed
+python3 -u appliance/tests/ab-update/h3bc_probe.py t1             # 3 healthy reboots must NOT drift into a rollback
+python3 -u appliance/tests/ab-update/h3bc_probe.py t4             # the gate must also be able to say NO
+python3 -u appliance/tests/ab-update/h3bc_probe.py esp            # T9: real three-UKI ESP peak
+python3 -u appliance/tests/ab-update/h3bc_probe.py inject         # stage an unbootable "update"
+python3 -u appliance/tests/ab-update/h3bc_probe.py t3             # T3: it must roll back on its own
+```
+
+(`-u` matters: the probe drives a serial console for minutes at a time and
+block-buffered stdout hides all of it until the run ends.)
+
+Run `t0` **before** anything else: if boot counting silently no-ops (an
+unwritable ESP does exactly that, with no error anywhere), a rollback test
+still "passes" without ever having counted anything — the most misleading
+result this area can produce.
 
 ## Flatpak app layer
 
@@ -494,14 +542,15 @@ real Linux build environment is available:
   wildcards in the target `MatchPattern=` plus `TriesLeft=3`/`TriesDone=0`, a
   transfer installs the UKI as `duduclaw-os_<ver>+3-0.efi`, and a partition
   transfer writes into the `_empty` slot, relabels it with the new version
-  and clears the no-auto attribute. **The other half — sd-boot decrementing
-  the counter and `systemd-bless-boot` clearing it after a healthy boot —
-  is still unverified on this image, and is H3b's job.** The binaries for it
-  only entered the image in H3a (the `systemd-boot` package); until H3b
-  confirms them working, the factory UKI deliberately ships with **no**
-  counting suffix. Arming it early (`APPLIANCE_BOOT_COUNTING=`, default off)
-  is strictly worse than leaving it off: nothing would ever clear the
-  counter and a healthy machine would roll itself back on the 3rd reboot.
+  and clears the no-auto attribute. The other half — sd-boot decrementing the
+  counter and `systemd-bless-boot` clearing it after a healthy boot — was
+  armed in H3b (`APPLIANCE_BOOT_COUNTING`, now default 3) once the binaries
+  were in the image (H3a's `systemd-boot` package) and once something decided
+  what "healthy" means (H3c's `duduclaw-health-check.service`). Arming it
+  without both of those is strictly worse than leaving it off: nothing would
+  ever clear the counter and a healthy machine would roll itself back on the
+  3rd reboot. See the "A/B updates" section above for the verification
+  commands.
 - **OVMF/edk2 firmware paths in `smoke-qemu.sh`.** The macOS/Homebrew
   candidates (both x86-64 and arm64) were confirmed by actually running
   `brew install qemu` and listing `$(brew --prefix qemu)/share/qemu/`

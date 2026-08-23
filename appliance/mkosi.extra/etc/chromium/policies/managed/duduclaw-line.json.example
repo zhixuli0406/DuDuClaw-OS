@@ -1,0 +1,50 @@
+// ⚠️ 這個檔案「不會」被 Chromium 讀到——副檔名是 .json.example，而
+//    Chromium 只載入 /etc/chromium/policies/managed/ 底下的 *.json。
+//    這是刻意的：E1a 實測完成、但 E1a-1（comp seat）與 E1a-2（通知
+//    daemon）兩個前置未修之前，LINE 開得起來卻點不動、也不會通知，
+//    現在啟用只會做出一個看起來會動的假象。啟用＝去掉 .example 副檔名。
+//
+// ⚠️ JSON 不支援註解。啟用時**必須把這整個 // 區塊刪掉**，只留最底下
+//    那個 { ... } 物件，否則 Chromium 會整份檔案解析失敗、政策靜默不生效
+//    （不會有任何錯誤跳出來，只有 chrome://policy 上看得到）。
+//
+// ── 這份政策做什麼 ────────────────────────────────────────────────
+// ExtensionInstallForcelist 讓 Chromium 在啟動時自動從 Chrome Web Store
+// 下載並安裝指定的擴充功能，不需要使用者互動、不需要開 Web Store 頁面、
+// 不需要重啟瀏覽器。裝好的擴充**使用者無法停用或移除**，權限也是隱含
+// 授予（不跳同意框）。
+//
+// 值的格式（Chromium 原始碼 policy 定義，components/policy/resources/
+// templates/policy_definitions/Extensions/ExtensionInstallForcelist.yaml）：
+//   "<32 碼擴充 ID>[;<update URL>]"
+// update URL 可省略，省略時預設就是 Chrome Web Store。這裡寫全是為了讓
+// 一個不熟 Chromium 政策的人一眼看出檔案是從哪裡抓的。
+//
+// ── 這裡裝的是什麼 ────────────────────────────────────────────────
+//   ophjlpahpchlmihnnnihgmmeilfjmjjc = LINE（LY Corporation 官方發行）
+//   實測版本 3.7.2（2026-02-25 更新）、Manifest V3、展開後約 17 MB。
+//   manifest 權限：downloads / storage / notifications / system.display /
+//   cookies，host_permissions 是 *://*/*（全網域）。
+//
+// ── 為什麼一定要烤進 image，不能開機時寫 ──────────────────────────
+// /etc 位在 A/B root slot 上（不是 /data）。執行期寫進 /etc 的政策檔會
+// 隨著下一次 A/B 更新或槽位回退一起消失——2026-08-23 的 E1a 實測就親眼
+// 撞過一次。政策檔只能走 mkosi.extra，跟 image 一起換。
+//
+// ── 已知風險（啟用前請先讀）──────────────────────────────────────
+// 1. LINE 官方已宣告終止 Chrome 版：原定 2025-09-22，因視障使用者反彈
+//    延至「2026 上半年」，該期限已逾期而官方靜默。擴充隨時可能下架。
+// 2. 離線首次開機不會安裝，此時開 chrome-extension:// URL 會得到
+//    ERR_BLOCKED_BY_CLIENT 加一串裸露的 32 碼 ID。復網後 Chromium 會自己
+//    補裝（不必重啟），但那段空窗期的畫面必須由殼擋掉。
+// 3. 通知走 chrome.notifications，而本 image 的 session bus 上沒有
+//    org.freedesktop.Notifications——實測 onshow 會觸發、畫面零顯示。
+//
+// 完整實測記錄：research/native-os-2026-08/line-chrome-extension-2026-08.md
+//
+// ── ↓↓↓ 啟用時只保留下面這一個物件 ↓↓↓ ──────────────────────────
+{
+  "ExtensionInstallForcelist": [
+    "ophjlpahpchlmihnnnihgmmeilfjmjjc;https://clients2.google.com/service/update2/crx"
+  ]
+}

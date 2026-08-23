@@ -36,3 +36,9 @@ IPv6AcceptRA=yes
 # with systemd-timesyncd's fallback list, they do not replace it.
 UseNTP=yes
 UseDNS=yes
+# D4b (2026-08-23) -- deliberately HIGHER (worse) than the wired file's 100,
+# so a plugged-in cable wins while Wi-Fi stays associated and takes over the
+# moment the cable goes away. See 20-wired-dhcp.network for the full note.
+# Not 1024 (networkd's default): an explicit number on both sides is what
+# makes the ordering a stated decision rather than a coincidence.
+RouteMetric=600

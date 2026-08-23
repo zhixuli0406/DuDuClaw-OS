@@ -120,7 +120,18 @@ systemctl enable \
     duduclaw-gateway.service \
     duduclaw-usb-install.service \
     duduclaw-kiosk.service \
-    duduclaw-flatpak-setup.service
+    duduclaw-flatpak-setup.service \
+    duduclaw-health-check.service
+
+# H3c (2026-08-23): duduclaw-health-check.service is in the list above, but
+# its [Install] section is RequiredBy=boot-complete.target, NOT
+# WantedBy=multi-user.target like everything else there — so `enable` puts it
+# under /etc/systemd/system/boot-complete.target.requires/ and it runs only
+# on boots where boot-complete.target is pulled in at all (i.e. boots that
+# sd-boot is counting). That indirection is the whole point: the gate decides
+# whether this boot gets blessed, and blessing is only ever in question while
+# a boot counter is in flight. Enabling it is what makes a failed health probe
+# actually withhold the blessing instead of merely logging.
 
 # D4a-1/D4a-2 (2026-08-23): Wi-Fi units, enabled separately from the block
 # above only so this comment can explain the two non-obvious parts.

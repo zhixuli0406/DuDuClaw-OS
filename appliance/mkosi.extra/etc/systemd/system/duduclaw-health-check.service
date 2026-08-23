@@ -1,0 +1,64 @@
+# DuDuClaw OS boot health gate (H3c, 2026-08-23).
+#
+# THE ONE THING THIS UNIT DOES: stand between a finished boot and
+# boot-complete.target, so that sd-boot's Automatic Boot Assessment blesses a
+# boot only when the appliance is genuinely serving. Without it the upstream
+# path treats "reached sysinit" as success — a box whose gateway never came up
+# would happily mark a broken update as good and destroy its own last chance
+# to roll back.
+#
+# HOW THE WIRING WORKS (systemd.special(7) + systemd-bless-boot.service(8)):
+#   * boot-complete.target is NOT part of a normal boot transaction. It gets
+#     pulled in only when something requires it — here that is
+#     systemd-bless-boot.service, which systemd-bless-boot-generator installs
+#     into the transaction *only* when this boot is actually being counted
+#     (its preconditions include the LoaderBootCountPath EFI variable that
+#     sd-boot sets when it renames a `+N-M` entry).
+#   * Consequence, and it is a feature: on a boot with no counter in flight
+#     (every boot after the entry has been blessed) boot-complete.target is
+#     never pulled in and this gate never runs. It costs nothing on the boots
+#     where it could not matter, and runs on exactly the boots where it can.
+#   * RequiredBy= (not WantedBy=) in [Install] is what makes a failure here
+#     actually stop boot-complete.target: a Wants= dependency would let the
+#     target succeed anyway and the broken version would be blessed.
+#   * Before= is stated separately because [Install] RequiredBy= creates a
+#     requirement dependency, never an ordering one.
+#
+# Requires= on both services rather than Wants=: if the gateway or the
+# privileged helper could not even start, there is nothing to probe and the
+# answer is already "do not bless" — the gate must fail with them, not run
+# and time out slowly.
+#
+# Full argument (including what is deliberately NOT gated on — network,
+# display, systemd-boot-check-no-failures):
+# commercial/docs/DESIGN-ab-update-rollback-2026-08.md §3. The design doc
+# calls this unit `duduclaw-boot-health.service`; the shipped name is
+# `duduclaw-health-check.service`.
+[Unit]
+Description=DuDuClaw OS boot health gate
+Documentation=man:systemd.special(7) man:systemd-bless-boot.service(8)
+Documentation=file:///usr/local/sbin/duduclaw-health-check.sh
+Before=boot-complete.target
+After=duduclaw-gateway.service duduclaw-sysd.service
+Requires=duduclaw-gateway.service duduclaw-sysd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The script's own budget. Kept as an Environment= knob rather than baked
+# into the script so the value can be calibrated from real boot data (design
+# §3.3 / decision #5) by editing one line. 180s is the starting point: the
+# gateway's own StartLimitIntervalSec=300 / StartLimitBurst=5 means it may
+# legitimately restart several times during a cold boot, and a gate that
+# gives up before the service is allowed to is a gate that retires good
+# versions.
+Environment=DUDUCLAW_HEALTH_TIMEOUT=180
+Environment=DUDUCLAW_HOME=/data/duduclaw
+ExecStart=/usr/local/sbin/duduclaw-health-check.sh
+# Strictly larger than the script budget, so a timeout is reported by the
+# script (with its diagnosis in the journal) rather than by systemd killing
+# it mid-probe with no explanation.
+TimeoutStartSec=240
+
+[Install]
+RequiredBy=boot-complete.target

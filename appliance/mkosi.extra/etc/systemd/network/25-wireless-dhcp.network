@@ -1,0 +1,38 @@
+# Wireless DHCP -- D4a-1 (2026-08-23). Companion to 20-wired-dhcp.network.
+#
+# Division of labour: iwd owns the 802.11 association (scanning, WPA
+# handshake, credentials); systemd-networkd owns the IP layer. Debian ships
+# iwd with EnableNetworkConfiguration=false, so iwd does no DHCP at all --
+# without this file a joined network associates and then sits there with no
+# address, which reads to a user as "connected but nothing works".
+#
+# Matched by link TYPE, not a name glob: the iwd package installs
+# /usr/lib/systemd/network/80-iwd.link, which applies its own naming policy to
+# wireless interfaces. A Name=wl* glob here would be racing a policy this file
+# does not own.
+#
+# [Match] also offers WLANInterfaceType=station, which would narrow this to
+# client-mode interfaces only. Deliberately NOT used: it makes the match depend
+# on the interface's mode at evaluation time, and the cost of the two outcomes
+# is wildly asymmetric. If the extra condition ever fails to match, the box has
+# no DHCP on Wi-Fi and is unreachable -- the exact failure class this file
+# exists to prevent. If it is absent and some future AP-mode interface appears,
+# the worst case is a DHCP client that finds no server. This appliance is a
+# client, never an access point.
+#
+# Kept strictly ASCII: a non-ASCII byte anywhere in a .network file (even in a
+# comment) has been seen to make systemd-networkd skip the WHOLE file, leaving
+# the interface unmanaged with no DHCP -- the same failure that made the
+# dashboard unreachable once already. See 20-wired-dhcp.network's own note.
+[Match]
+Type=wlan
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCP]
+# Same rationale as the wired file: router-supplied NTP servers are merged
+# with systemd-timesyncd's fallback list, they do not replace it.
+UseNTP=yes
+UseDNS=yes

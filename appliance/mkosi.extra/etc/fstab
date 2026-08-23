@@ -1,11 +1,30 @@
 # DuDuClaw OS static mounts.
 #
-# Root and the ESP are NOT listed here — both are auto-discovered and
-# auto-mounted by systemd-gpt-auto-generator per the Discoverable
-# Partitions Specification (root via the kernel cmdline's root=PARTUUID=
-# that mkosi wires into the UKI at build time; the ESP at /efi because its
-# GPT partition type is the well-known "esp" type). Adding explicit fstab
-# entries for either would just duplicate what the generator already does.
+# Root and the ESP are NOT listed here.
+#
+# Root comes from the kernel cmdline's root=PARTUUID=, baked into the UKI at
+# build time — that is what systemd's fstab-generator turns into the sysroot
+# mount in the initrd. Note this is NOT automatic: mkosi only substitutes the
+# real UUID when the literal token `root=PARTUUID` appears in
+# KernelCommandLine=, which it now does (mkosi.conf, H3a 2026-08-23). Before
+# that the cmdline had no root= at all and root was really being chosen by
+# systemd-gpt-auto-generator comparing partition labels — the wording here
+# used to describe the intended design rather than the shipped one.
+#
+# The ESP is still auto-discovered and mounted by
+# systemd-gpt-auto-generator, because its GPT partition type is the
+# well-known "esp" type; setting root= disables only that generator's ROOT
+# discovery, not the rest of it (its own debug output says exactly that:
+# "Disabling root partition auto-detection, root= is defined", and then
+# "Adding /boot: ... fstype=vfat"). An explicit fstab entry for either would
+# just duplicate what already happens.
+#
+# It lands on **/boot, not /efi** — measured in the booted image, correcting
+# what several comments in this tree used to claim. /efi exists as an empty
+# directory and is NOT a mount point, which makes it a trap: a script that
+# writes to /efi/... succeeds and silently puts the file on the root
+# filesystem. Ask `bootctl -p` for the real path instead of hardcoding either
+# name; that is also what systemd-sysupdate's PathRelativeTo=esp resolves.
 #
 # /data has no defined auto-mount role in the spec (Type=linux-generic,
 # see mkosi.repart/30-data.conf), so it needs this explicit entry.

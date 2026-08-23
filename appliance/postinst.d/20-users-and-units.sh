@@ -34,14 +34,42 @@
 #     every unit this image actually needs is listed here explicitly —
 #     one source of truth, no per-package guessing.
 #
+# (0) Creates the `netdev` group before anything else, because step (1)'s
+#     useradd puts `duduclaw` in it. See that block's own comment for why
+#     nothing in this image creates the group on its own.
+#
 set -euo pipefail
 
 mkosi-chroot bash -s <<'CHROOT_SETUP'
 set -euo pipefail
 
+# (0) D4a-1 (2026-08-23): the `netdev` group. iwd's D-Bus policy
+#     (/usr/share/dbus-1/system.d/iwd-dbus.conf, read out of the trixie .deb)
+#     is deny-by-default with exactly three holes — root, `sudo`, `netdev` —
+#     and iwd's Debian packaging creates NONE of them: it has no postinst and
+#     no adduser dependency (Debian bug #1098212, open). The groups that
+#     normally exist come from wpasupplicant/network-manager postinsts, and
+#     this image installs neither. Without this line dbus-daemon logs
+#     "Unknown group 'netdev' in message bus configuration file" at every
+#     boot and the gateway can never reach iwd.
+#     `getent` guard: this script runs under `set -e`, and a groupadd of an
+#     already-existing group exits non-zero, which would abort the whole
+#     post-install if a future Debian release starts shipping the group.
+echo "[postinst] ensuring netdev group exists (iwd D-Bus policy references it)"
+getent group netdev >/dev/null || groupadd -r netdev
+
 echo "[postinst] creating duduclaw system user"
 groupadd -r duduclaw
-useradd -r -g duduclaw -u 1000 -d /data/duduclaw -s /usr/sbin/nologin duduclaw
+# -G netdev: this is the WHOLE authorization story for the gateway's Wi-Fi
+# control (design decision B-①, commercial/docs/
+# DESIGN-network-settings-2026-08.md §3) — iwd uses no polkit, so group
+# membership is what the bus checks. Deliberately NOT granted to
+# `duduclaw-kiosk` below: the shell is the largest attack surface on this box
+# (GPU drivers, third-party apps) and reaches Wi-Fi only through the
+# gateway's own authenticated RPC, exactly as it already does for account
+# claim. Per-call authorization (admin role, appliance mode, first-run
+# loopback+unclaimed) lives at the gateway RPC entry, not here.
+useradd -r -g duduclaw -G netdev -u 1000 -d /data/duduclaw -s /usr/sbin/nologin duduclaw
 
 # (2) Creates the `duduclaw-kiosk` system user the detection-gated kiosk
 #     display session runs as (see mkosi.extra/etc/systemd/system/
@@ -94,6 +122,31 @@ systemctl enable \
     duduclaw-kiosk.service \
     duduclaw-flatpak-setup.service
 
+# D4a-1/D4a-2 (2026-08-23): Wi-Fi units, enabled separately from the block
+# above only so this comment can explain the two non-obvious parts.
+#
+#   iwd.service      — iwd's Debian packaging leaves it D-Bus-ACTIVATED
+#                      (net.connman.iwd.service), meaning it starts on the
+#                      first bus call and not before. That is fine for
+#                      `iwctl` on a laptop and wrong for an appliance: with
+#                      only activation, a box that was joined to a network
+#                      before a reboot does NOT rejoin it until something
+#                      happens to talk to iwd. Enabling the unit is what
+#                      makes "plug it in and it comes back on Wi-Fi" true.
+#   var-lib-iwd.mount — bind-mounts /var/lib/iwd onto /data/network/iwd so
+#                      saved credentials live on the DATA partition. Without
+#                      it they sit on the active A/B root slot, and the first
+#                      systemd-sysupdate run boots the OTHER slot where they
+#                      do not exist — a Wi-Fi-only box would come back from
+#                      an update permanently offline and unreachable except
+#                      in person (design doc §4.2). Its [Install] section is
+#                      RequiredBy=iwd.service, so enabling it here is what
+#                      makes iwd depend on the mount: if the bind ever fails,
+#                      iwd refuses to start rather than silently writing
+#                      credentials to the doomed location.
+echo "[postinst] enabling Wi-Fi units (iwd + persistent credential mount)"
+systemctl enable iwd.service var-lib-iwd.mount
+
 # Mask systemd-networkd-wait-online.service outright (2026-08-19). Removing it
 # from the enable list above is not enough: the Debian networkd package ships
 # a preset that re-pulls wait-online into network-online.target, and under
@@ -103,4 +156,42 @@ systemctl enable \
 # needs to wait for "fully online" — masking it is the verified fast-boot path.
 echo "[postinst] masking systemd-networkd-wait-online.service (fast boot)"
 systemctl mask systemd-networkd-wait-online.service
+
+# H3a (2026-08-23): disarm systemd's OWN automatic update machinery.
+#
+# Adding `systemd-container` and `systemd-boot` to Packages= (for
+# systemd-sysupdate and systemd-bless-boot) drags in three units that
+# mkosi's `systemctl preset-all` pass then ENABLES, because the upstream
+# preset says to. This was not a guess — measured on the first image built
+# with those packages: all three came out `enabled`, and
+# `systemd-sysupdate.timer` was live in the booted VM, described as
+# "Automatic System Update" and armed to fire ~30 minutes after boot.
+#
+#   systemd-sysupdate.timer         runs `systemd-sysupdate update` on a
+#                                   schedule. On this appliance that means the
+#                                   box would install whatever happens to be
+#                                   sitting in /var/lib/duduclaw/updates/,
+#                                   without the gateway ever deciding to.
+#   systemd-sysupdate-reboot.timer  and then REBOOT itself.
+#   systemd-boot-update.service     runs `bootctl update` at boot, rewriting
+#                                   the bootloader in the ESP. An unannounced
+#                                   ESP write is especially unwelcome during
+#                                   the boot-assessment window that H3b adds —
+#                                   boot counting's whole state lives in ESP
+#                                   filenames.
+#
+# Updating is the gateway's decision (duduclaw-sysd's SysupdateApply verb,
+# behind the dashboard), so these are masked rather than merely disabled:
+# masking survives any later `preset-all` re-run, exactly like the
+# wait-online case above.
+#
+# TRADE-OFF, recorded deliberately: with systemd-boot-update.service masked,
+# the sd-boot binary in the ESP is never refreshed after the factory image, so
+# the bootloader ages in place — an A/B update replaces the UKI and the root
+# slot, never the ESP's bootloader. Giving bootloader updates a deliberate,
+# verified path belongs with the signed payload pipeline (H3d); an unattended
+# rewrite of the one thing that makes the machine bootable is not the way to
+# get one.
+echo "[postinst] masking systemd's own auto-update units (updates are the gateway's decision)"
+systemctl mask systemd-sysupdate.timer systemd-sysupdate-reboot.timer systemd-boot-update.service
 CHROOT_SETUP

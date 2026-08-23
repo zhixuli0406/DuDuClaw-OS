@@ -51,7 +51,25 @@
 #                                 (num-cpus) job count. Raise it if your
 #                                 Docker Desktop VM has more memory
 #                                 allocated (see README.md).
+#   APPLIANCE_BOOT_COUNTING=<n>   Ship the factory UKI with sd-boot's boot
+#                                 counting armed: names it
+#                                 duduclaw-os_<ver>+<n>.efi and stages
+#                                 /etc/kernel/tries. DEFAULT OFF (H3a ships
+#                                 no counting suffix). n must be 1..9 — sd-boot
+#                                 v257 does not zero-pad the counter, so a
+#                                 two-digit value shortens the filename on
+#                                 each rename, which is the non-atomic-rename
+#                                 hazard the Boot Loader Specification warns
+#                                 about on FAT32.
+#                                 DO NOT TURN THIS ON until systemd-bless-boot
+#                                 is confirmed working inside the image
+#                                 (H3b's job). Counting without anything to
+#                                 clear the counter is strictly worse than no
+#                                 counting: every boot decrements, nothing
+#                                 ever resets, and a perfectly healthy machine
+#                                 rolls itself back on the 3rd reboot.
 #
+
 # Not yet run end-to-end as of this writing (needs a Linux environment +
 # long package downloads) — reviewed for syntax (`bash -n`) and
 # cross-checked against mkosi's documented CLI/config surface, not
@@ -80,6 +98,37 @@ esac
 
 echo "[build] repo root: $REPO_ROOT"
 echo "[build] target architecture: $APPLIANCE_ARCH (docker platform: $DOCKER_PLATFORM, cargo jobs: $CARGO_JOBS)"
+
+# --- A/B update layout knobs (H3a) ----------------------------------------
+# The image version is the identity everything in the A/B chain agrees on:
+# the UKI filename (mkosi.conf UnifiedKernelImageFormat=&e_%v), slot A's
+# partition label (mkosi.repart/20-root-a.conf), and systemd-sysupdate's @v
+# token. mkosi.version is the single source; read it here so the post-build
+# assertions can check the other two against it.
+IMAGE_VERSION="$(tr -d '[:space:]' < "$APPLIANCE_DIR/mkosi.version")"
+if [[ -z "$IMAGE_VERSION" ]]; then
+    echo "[build] appliance/mkosi.version is empty — cannot determine the image version" >&2
+    exit 1
+fi
+echo "[build] image version: $IMAGE_VERSION"
+
+# Boot counting is opt-in and default OFF — see the APPLIANCE_BOOT_COUNTING
+# note in the usage block above for why turning it on before H3b is dangerous.
+UKI_FORMAT_ARGS=()
+BOOT_COUNTING="${APPLIANCE_BOOT_COUNTING:-}"
+if [[ -n "$BOOT_COUNTING" ]]; then
+    if [[ ! "$BOOT_COUNTING" =~ ^[1-9]$ ]]; then
+        echo "[build] APPLIANCE_BOOT_COUNTING must be a single digit 1-9 (got '$BOOT_COUNTING')" >&2
+        exit 1
+    fi
+    # %v is expanded only when mkosi parses it out of a config FILE; on the
+    # command line it stays literal (verified against `mkosi summary`, mkosi
+    # 25.3), so the version is substituted here instead. `&c` expands to the
+    # contents of /etc/kernel/tries, staged just below.
+    UKI_FORMAT_ARGS=("--unified-kernel-image-format=&e_${IMAGE_VERSION}+&c")
+    echo "[build] boot counting ARMED: factory UKI will be duduclaw-os_${IMAGE_VERSION}+${BOOT_COUNTING}.efi"
+    echo "[build]   (requires systemd-bless-boot in the image to ever clear the counter)"
+fi
 
 # --- Step 1: Linux duduclaw binary (arch = $APPLIANCE_ARCH) ---------------
 if [[ -n "${DUDUCLAW_BIN_PATH:-}" ]]; then
@@ -325,6 +374,21 @@ else
     echo "[build] (1e) WARNING: $CURSOR_THEME_SRC not found — image will lack the brand cursor theme" >&2
 fi
 
+# --- Step 1f: boot-counting tries file (H3a, opt-in) ----------------------
+# mkosi's `&c` UKI-filename specifier expands to the contents of
+# /etc/kernel/tries inside the image, so arming boot counting means shipping
+# that file. Staged (not committed under mkosi.extra/) precisely so the image
+# cannot acquire boot counting by accident — it exists only for a build that
+# explicitly asked for it.
+STAGED_TRIES_TREE=""
+if [[ -n "$BOOT_COUNTING" ]]; then
+    STAGED_TRIES_TREE="$APPLIANCE_DIR/.build/staged/boot-counting"
+    rm -rf "$STAGED_TRIES_TREE"
+    mkdir -p "$STAGED_TRIES_TREE/etc/kernel"
+    printf '%s\n' "$BOOT_COUNTING" > "$STAGED_TRIES_TREE/etc/kernel/tries"
+    echo "[build] (1f) staged /etc/kernel/tries = $BOOT_COUNTING"
+fi
+
 # --- Step 2: mkosi build ---------------------------------------------------
 mkdir -p "$OUTPUT_DIR"
 
@@ -364,6 +428,10 @@ if [[ "$HOST_OS" == "Linux" ]]; then
     if [[ -n "$STAGED_CURSOR_THEME" ]]; then
         NATIVE_CURSOR_TREE_ARG=("--extra-tree=${STAGED_CURSOR_THEME}/DuDuClaw:/usr/share/icons/DuDuClaw")
     fi
+    NATIVE_TRIES_TREE_ARG=()
+    if [[ -n "$STAGED_TRIES_TREE" ]]; then
+        NATIVE_TRIES_TREE_ARG=("--extra-tree=${STAGED_TRIES_TREE}:/")
+    fi
     # APPLIANCE_DEBUG=1 sets a root password so you can log in on the serial
     # console (`root` / the value of APPLIANCE_DEBUG_PASSWORD, default
     # "duduclaw") to inspect the running VM — journalctl, systemctl status,
@@ -383,6 +451,8 @@ if [[ "$HOST_OS" == "Linux" ]]; then
         "${NATIVE_SHELL_TREE_ARG[@]}" \
         "${NATIVE_COMP_TREE_ARG[@]}" \
         "${NATIVE_CURSOR_TREE_ARG[@]}" \
+        "${NATIVE_TRIES_TREE_ARG[@]}" \
+        "${UKI_FORMAT_ARGS[@]}" \
         "${DEBUG_ARGS[@]}" \
         build)
 else
@@ -418,6 +488,7 @@ else
         --force \
         "--architecture=${APPLIANCE_ARCH}" \
         "--extra-tree=/workspace/bin-tree:/" \
+        "${UKI_FORMAT_ARGS[@]}" \
         "${DEBUG_ARGS[@]}" \
         build)"
     trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
@@ -477,6 +548,12 @@ else
         mkdir -p "$BIN_TREE/usr/share/icons"
         cp -a "$STAGED_CURSOR_THEME/DuDuClaw" "$BIN_TREE/usr/share/icons/DuDuClaw"
     fi
+    # Step 1f: /etc/kernel/tries rides the same single extra-tree (the docker
+    # branch passes exactly one --extra-tree, unlike the native branch).
+    if [[ -n "$STAGED_TRIES_TREE" ]]; then
+        mkdir -p "$BIN_TREE/etc/kernel"
+        cp "$STAGED_TRIES_TREE/etc/kernel/tries" "$BIN_TREE/etc/kernel/tries"
+    fi
     docker cp "$BIN_TREE" "$CID:/workspace/bin-tree"      # → /workspace/bin-tree/usr/local/bin/duduclaw
     rm -rf "$BIN_TREE"
     docker start -a "$CID" || { docker rm -f "$CID" >/dev/null 2>&1; trap - EXIT; echo "[build] mkosi failed" >&2; exit 1; }
@@ -484,6 +561,38 @@ else
     docker cp "$CID:/workspace/appliance/mkosi.output/." "$OUTPUT_DIR/"
     docker rm -f "$CID" >/dev/null 2>&1 || true
     trap - EXIT
+fi
+
+# --- Step 3: A/B layout assertions + per-slot UKI derivation (H3a) --------
+# Everything the A/B update chain depends on is checked here against the
+# artifact that was actually produced, not against the config that was meant
+# to produce it. Each assertion covers a failure that is invisible until an
+# update is attempted on a real box:
+#   * slot A's partition label must equal duduclaw-os_<version> and slot B's
+#     must be `_empty`, or systemd-sysupdate sees no installed version and no
+#     free slot;
+#   * the ESP's UKI must be named duduclaw-os_<version>.efi, or the UKI
+#     transfer's MatchPattern never matches it;
+#   * the UKI's baked root=PARTUUID= must be slot A's, or a rollback boots a
+#     kernel against the wrong root.
+# Then the slot-B twin of the UKI is derived (identical bytes, slot B's
+# PARTUUID) — that pair is what the future signed payload pipeline (H3d) will
+# sign and ship. See appliance/tools/uki-slots.py.
+UKI_OUT="$OUTPUT_DIR/duduclaw-os.efi"
+RAW_OUT="$OUTPUT_DIR/duduclaw-os.raw"
+if [[ -f "$RAW_OUT" && -f "$UKI_OUT" ]]; then
+    echo "[build] (3/3) verifying A/B layout and deriving per-slot UKIs"
+    python3 "$APPLIANCE_DIR/tools/uki-slots.py" \
+        --raw "$RAW_OUT" \
+        --uki "$UKI_OUT" \
+        --version "$IMAGE_VERSION" \
+        --outdir "$OUTPUT_DIR"
+else
+    # Not a soft warning: without these two artifacts nothing above was
+    # actually produced, and silently "succeeding" here is how a broken build
+    # reaches a flash drive.
+    echo "[build] expected $RAW_OUT and $UKI_OUT after the mkosi build; one or both are missing" >&2
+    exit 1
 fi
 
 echo "[build] done. Output in: $OUTPUT_DIR"

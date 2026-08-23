@@ -1,21 +1,24 @@
-# Unified Kernel Image update transfer (systemd-sysupdate) — the paired
-# half of 10-duduclaw-root.conf. Each released version ships both a root
+# Unified Kernel Image update transfer (systemd-sysupdate) — the paired half
+# of 10-duduclaw-root.transfer. Each released version ships both a root
 # partition payload and a matching UKI; sysupdate installs them together
-# (same @v version token) so a UKI is never left pointing at a root
-# partition from a different version.
+# (same @v version token) so a UKI is never left pointing at a root partition
+# from a different version.
 #
-# PathRelativeTo=esp anchors Path=/EFI/Linux to wherever the ESP is
-# actually mounted (systemd-gpt-auto-generator picks /efi — see
-# appliance/mkosi.extra/etc/fstab's comment on why root/ESP have no
-# explicit fstab entries) instead of hardcoding a mount path here.
+# ORDER IS THE SAFETY PROPERTY: sysupdate runs transfers in filename order,
+# and the entry point must be last. `10-` root before `20-` UKI means the new
+# root is fully written before anything in the ESP references it — an
+# interrupted update leaves a half-written root that nothing can boot into,
+# rather than a boot entry pointing at a half-written root.
 #
-# KNOWN OPEN POINT (see appliance/README.md): the exact mechanics of how
-# systemd-boot's boot-counting filename suffix (`+tries_left-tries_done`)
-# gets applied to a UKI sysupdate just wrote, and how that interacts with
-# systemd-bless-boot.service marking a boot successful, were not
-# independently re-verified this round beyond confirming both pieces exist
-# upstream — needs a real A/B update + forced-failure rollback test on the
-# QEMU/hardware round.
+# FILE EXTENSION: `.transfer` — see the note in 10-duduclaw-root.transfer.
+#
+# PER-SLOT UKIs (H3a, 2026-08-23): each release builds TWO UKIs that differ
+# only in the `root=PARTUUID=` baked into their cmdline, one per slot (see
+# build.sh's per-slot UKI step). Choosing which of the two to stage into
+# /var/lib/duduclaw/updates/ is our job, not sysupdate's — sysupdate has no
+# conditional logic and cannot pick a payload by destination slot. By the
+# time it runs, the staged `duduclaw-os_<version>.efi` is already the right
+# one for the slot the root transfer above just wrote.
 [Transfer]
 ProtectVersion=%A
 
@@ -26,8 +29,52 @@ MatchPattern=duduclaw-os_@v.efi
 
 [Target]
 Type=regular-file
+# PathRelativeTo=esp anchors this to wherever the ESP is actually mounted
+# instead of hardcoding a mount path — which matters more than it looks:
+# systemd-gpt-auto-generator mounts the ESP at **/boot** on this image, not
+# /efi. /efi exists as an empty, NON-mounted directory, so anything that
+# hardcodes it succeeds while writing to the root filesystem (see
+# mkosi.extra/etc/fstab's comment). Verified in the booted image: this
+# transfer resolves the ESP on its own and reports
+# /boot/EFI/Linux/duduclaw-os_0.1.0.efi as the installed 0.1.0 instance.
+# `esp` is a legal value; the man page's `directory` is a typo for
+# `explicit`, and `explicit` is source-only — both checked against the real
+# 257.13 binary, which rejects `directory` outright.
 Path=/EFI/Linux
 PathRelativeTo=esp
+# Three patterns, because a UKI's name changes shape over its life under
+# sd-boot's Automatic Boot Assessment and sysupdate has to recognise it in
+# every shape to keep an accurate instance count:
+#   duduclaw-os_1.2.3+2-1.efi  mid-assessment (2 tries left, 1 done)
+#   duduclaw-os_1.2.3+3.efi    freshly installed, nothing tried yet
+#   duduclaw-os_1.2.3.efi      blessed good — systemd-bless-boot strips the
+#                              suffix after a successful boot, and this is
+#                              also the shape the factory image ships
+# Before this, the single `duduclaw-os_@v.efi` pattern combined with the old
+# mkosi-default filename (`duduclaw-os-6.12.101+deb13-arm64.efi`) matched
+# nothing at all, so the UKI already in the ESP was invisible to
+# InstancesMax accounting.
+MatchPattern=duduclaw-os_@v+@l-@d.efi
+MatchPattern=duduclaw-os_@v+@l.efi
 MatchPattern=duduclaw-os_@v.efi
 Mode=0444
+# THE `@l`/`@d` WILDCARDS ABOVE ARE WHAT MAKE THESE TWO LINES DO ANYTHING:
+# TriesLeft=/TriesDone= are only honoured when the target pattern actually
+# has somewhere to put the numbers. With them, sysupdate installs a new UKI
+# as `duduclaw-os_<ver>+3-0.efi` and sd-boot's boot counting takes over from
+# there. Verified end to end with a real `systemd-sysupdate update` against a
+# scratch directory: the payload landed as `duduclaw-os_0.2.0+3-0.efi`.
+#
+# 3, and never more than 9: sd-boot v257 formats the counter with a plain
+# xasprintf and no zero padding, so a two-digit TriesLeft SHRINKS the
+# filename on each rename — the exact non-atomic-rename-on-FAT32 hazard the
+# Boot Loader Specification warns about. Three attempts at ~180s of health
+# gate each also bounds a full automatic rollback to roughly 10 minutes.
+#
+# These apply to UPDATES ONLY. The factory image's own UKI ships with no
+# counting suffix in H3a — turning that on is H3b, and must not happen before
+# systemd-bless-boot is confirmed working in the image (it is installed as of
+# H3a; see mkosi.conf's Packages= note).
+TriesLeft=3
+TriesDone=0
 InstancesMax=2

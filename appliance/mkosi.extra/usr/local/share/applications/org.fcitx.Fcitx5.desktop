@@ -1,0 +1,31 @@
+[Desktop Entry]
+# D3-f (2026-08-23): a HIDING OVERRIDE, not a new application.
+#
+# `/usr/local/share` precedes `/usr/share` in the default `XDG_DATA_DIRS`
+# (`/usr/local/share:/usr/share`), and a desktop entry is resolved by its
+# desktop-file ID with the first directory winning — so this file replaces
+# Debian's `/usr/share/applications/org.fcitx.Fcitx5.desktop` wholesale for
+# every consumer on the appliance, this shell's own app scan
+# (`duduclaw-shell`'s `apps::desktop_entry::applications_dirs`) included.
+#
+# Why hide it: fcitx5 is session INFRASTRUCTURE here — started by
+# `duduclaw-kiosk-launch.sh` right after the compositor's socket appears,
+# before the shell. It is never something an operator launches from the
+# Launcher, and a second `fcitx5` process started by hand would fight the
+# running one for the input-method global. `NoDisplay=true` is the
+# freedesktop spec's own "this is plumbing, not an application" signal
+# (Desktop Entry Specification §"NoDisplay"), which the shell already
+# honours — so this needs no shell-side deny list, and nothing here is a
+# DuDuClaw-specific display policy.
+#
+# The rest of the fields are copied verbatim from Debian's entry so that a
+# consumer resolving the ID still gets a correct, launchable record.
+Type=Application
+Name=Fcitx 5
+GenericName=Input Method
+Comment=Start Input Method
+Exec=/usr/bin/fcitx5
+Icon=fcitx
+Terminal=false
+Categories=System;Utility;
+NoDisplay=true

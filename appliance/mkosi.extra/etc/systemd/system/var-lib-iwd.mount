@@ -1,0 +1,44 @@
+# D4a-2 (2026-08-23): keep Wi-Fi credentials on the DATA partition.
+#
+# Why this exists at all: /var lives on the active A/B root slot. iwd stores
+# every joined network as /var/lib/iwd/<ssid>.psk. systemd-sysupdate writes an
+# update into the OTHER slot and reboots into it, so without this mount the
+# first OS update lands on a root that has never seen those files -- a
+# Wi-Fi-only box comes back from a routine update with no way to reach the
+# network, and no way to be fixed except physically. The new slot is also
+# ReadOnly=1 (etc/sysupdate.d/10-duduclaw-root.conf), so iwd could not even
+# re-save them. Full reasoning + the VM verification run:
+# commercial/docs/DESIGN-network-settings-2026-08.md section 4.
+#
+# The unit name is derived from the mount point and must stay in sync with it
+# (/var/lib/iwd -> var-lib-iwd.mount); renaming one without the other silently
+# produces a unit systemd will never start.
+#
+# iwd's own unit declares StateDirectory=iwd under ProtectSystem=strict. That
+# combination was verified against this bind mount in the VM spike: iwd starts
+# normally, the .psk file lands on /dev/vda4 (the data partition), and
+# `systemctl restart iwd` reconnects with no re-typed password.
+#
+# The bind SOURCE is created by tmpfiles (usr/lib/tmpfiles.d/
+# duduclaw-network.conf), not by this unit -- .mount units cannot create their
+# own source directory, and tmpfiles runs before sysinit.target, i.e. well
+# before anything here.
+[Unit]
+Description=Persist Wi-Fi credentials on the data partition (survives A/B root swap)
+Documentation=file:///usr/share/doc/duduclaw/network.md
+After=data.mount systemd-tmpfiles-setup.service
+Requires=data.mount
+Before=iwd.service
+
+[Mount]
+What=/data/network/iwd
+Where=/var/lib/iwd
+Type=none
+Options=bind
+
+[Install]
+# RequiredBy, not WantedBy: a failed bind must stop iwd, not let it fall
+# through to writing credentials onto the root slot that the next update
+# discards. "Wi-Fi visibly does not start" is a diagnosable state; "Wi-Fi
+# works until the day you update, then never again" is not.
+RequiredBy=iwd.service

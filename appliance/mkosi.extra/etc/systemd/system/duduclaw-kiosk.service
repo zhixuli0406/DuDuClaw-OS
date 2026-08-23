@@ -127,6 +127,19 @@ Group=duduclaw-kiosk
 RuntimeDirectory=duduclaw-kiosk
 RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/duduclaw-kiosk
+# D4a-5 (2026-08-23): the shell's OOBE Wi-Fi step needs to know it is running
+# on a real appliance, because that is what forbids it from falling back to
+# demo Wi-Fi data. Before D4a the OOBE probed NetworkManager, which this image
+# has never installed, so the probe always failed and the step quietly served
+# four invented SSIDs that an operator could "connect" to with any 8-character
+# string — and then advance. On an appliance the shell must now fail loudly
+# instead. It reads the same DUDUCLAW_APPLIANCE variable the gateway does
+# (duduclaw-gateway.service sets its own copy; crates/duduclaw-core/src/
+# appliance.rs is the naming authority), and this variable was simply never
+# passed to the kiosk session before. duduclaw-kiosk-launch.sh's `env
+# DUDUCLAW_HOME=... <shell>` invocations inherit it, since `env` without -i
+# keeps the surrounding environment.
+Environment=DUDUCLAW_APPLIANCE=1
 # $HOME is NOT set here — it comes from the duduclaw-kiosk user's own
 # passwd entry (-d /data/duduclaw-kiosk), which systemd applies
 # automatically for a User=-configured service. One source of truth,

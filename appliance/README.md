@@ -28,10 +28,13 @@ appliance/
 ├── mkosi.extra/               files copied into the OS tree AFTER packages install
 │   ├── etc/chromium/policies/managed/   kiosk Chromium enterprise policy (JSON)
 │   ├── etc/flatpak/installations.d/     app repository redirected onto /data
-│   ├── etc/systemd/system/     first-boot + gateway + kiosk systemd units
+│   ├── etc/systemd/network/    wired + wireless DHCP (.network, ASCII-only!)
+│   ├── etc/systemd/system/     first-boot + gateway + kiosk + Wi-Fi units
 │   ├── etc/sysupdate.d/        A/B update transfer definitions
+│   ├── usr/lib/tmpfiles.d/     dirs created on every boot (Wi-Fi cred store)
 │   └── usr/local/sbin/         the scripts those units run
 ├── postinst.d/           scripts run once, inside the build chroot
+├── tests/wifi-hwsim/     Wi-Fi walkthrough on simulated radios (never shipped)
 ├── Dockerfile.mkosi-runner   mkosi build environment for non-Linux hosts
 ├── build.sh                  build entry point
 └── smoke-qemu.sh             UEFI boot smoke test under QEMU
@@ -48,12 +51,18 @@ versus what's a documented-but-not-live-tested assumption.
 
 One GPT disk image (`mkosi.output/duduclaw-os.raw`):
 
-| Partition | Contents | Notes |
-|---|---|---|
-| ESP | systemd-boot + Unified Kernel Images | shared by both root slots |
-| root A | the actual OS (Debian 13 + duduclaw + Node/Python/Docker/…) | read-only, populated at build time |
-| root B | empty, same size as A | filled by the first `systemd-sysupdate` run |
-| /data | empty ext4, grows to fill the disk | `~/.duduclaw`, Docker storage, model files — the only writable partition |
+| Partition | GPT label | Contents | Notes |
+|---|---|---|---|
+| ESP | `esp` | systemd-boot + Unified Kernel Images | shared by both root slots; mounted at **`/boot`** at runtime (not `/efi` — ask `bootctl -p`), so the factory UKI is `/boot/EFI/Linux/duduclaw-os_<version>.efi` |
+| root A | `duduclaw-os_<version>` | the actual OS (Debian 13 + duduclaw + Node/Python/Docker/…) | populated at build time; the UKI's `root=PARTUUID=` points here |
+| root B | `_empty` | empty, same size as A | `_empty` is `systemd-sysupdate`'s reserved "free slot" marker; the first update writes here and relabels it with its version |
+| /data | `duduclaw-data` | empty ext4, grows to fill the disk | `~/.duduclaw`, Docker storage, model files — survives every A/B switch and rollback |
+
+The two root labels are not decoration: `systemd-sysupdate` uses the GPT
+partition label as its version ledger, matching installed instances against
+`duduclaw-os_@v` and looking for `_empty` to find somewhere to write. Slot A's
+label therefore tracks `mkosi.version`, and `build.sh` fails the build if the
+two ever drift (`tools/uki-slots.py`).
 
 The **same image** is both the installer and the shipped product: dd it to
 a USB stick and boot a machine with an internal NVMe from it, and the
@@ -130,7 +139,33 @@ This does two things:
    kernel package (`linux-image-amd64` vs `linux-image-arm64`) is selected
    automatically via `mkosi.conf.d/10-arch-{x86-64,arm64}.conf`.
 
-Output lands in `appliance/mkosi.output/`.
+3. Verifies the A/B layout of the artifact it just produced and derives the
+   per-slot UKI pair (`appliance/tools/uki-slots.py`). This step **fails the
+   build** rather than warning: it checks that slot A's partition label
+   matches `mkosi.version`, that slot B is labelled `_empty`, that the ESP's
+   UKI is named `duduclaw-os_<version>.efi`, and that the UKI's baked
+   `root=PARTUUID=` really is slot A's. Every one of those is invisible until
+   someone tries to update a real machine.
+
+Output lands in `appliance/mkosi.output/`:
+
+| File | What it is |
+|---|---|
+| `duduclaw-os.raw` | the whole-disk image — the shippable artifact |
+| `duduclaw-os.efi` | the UKI, byte-identical to the one inside the ESP |
+| `duduclaw-os_<ver>.slot-a.efi` | per-slot UKI, boots root slot A (same bytes as above) |
+| `duduclaw-os_<ver>.slot-b.efi` | per-slot UKI, boots root slot B — differs only in the 36 characters of `root=PARTUUID=` |
+| `duduclaw-os.vmlinuz` / `.initrd` | the UKI's ingredients, kept for debugging |
+
+The two `.slot-*.efi` files are the A/B update payload's UKI half. They are
+built every time but nothing consumes them yet — the signed payload pipeline
+is H3d.
+
+One extra build knob exists for the A/B work and **defaults to off**:
+`APPLIANCE_BOOT_COUNTING=<1-9>` arms sd-boot's boot counting on the factory
+UKI. Do not set it until H3b has confirmed `systemd-bless-boot` works inside
+the image; see "A/B updates" below for why arming it early is worse than
+leaving it off.
 
 ## QEMU smoke test
 
@@ -179,6 +214,14 @@ onboarding flow all need a real machine.
 4. `duduclaw-firstboot-provision.service`: seeds a persisted machine-id
    copy, a placeholder device key, and a minimal `config.toml` (LAN-bound
    dashboard) onto `/data` — then disables itself.
+4b. `var-lib-iwd.mount` → `iwd.service`: the mount binds `/var/lib/iwd`
+   onto `/data/network/iwd` (source directory guaranteed by
+   `usr/lib/tmpfiles.d/duduclaw-network.conf`, which runs before
+   `sysinit.target`), then iwd starts and re-joins whatever Wi-Fi network
+   was saved. `iwd.service` *requires* the mount, so a failed bind stops
+   Wi-Fi loudly instead of quietly writing credentials to a root slot the
+   next A/B update discards. IP addressing is systemd-networkd's job
+   (`etc/systemd/network/25-wireless-dhcp.network`), not iwd's.
 5. `duduclaw-gateway.service` starts, Avahi advertises `duduclaw.local`,
    nftables allows only the dashboard port + mDNS in from the LAN. It now
    also `sd_notify`s systemd (`Type=notify` + `WatchdogSec=60`) once its
@@ -316,6 +359,42 @@ an estimate per the task, not a benchmark result):
   the unit actually starts; headless boxes pay nothing beyond the
   binaries already sitting unused on disk.
 
+## A/B updates — what is wired as of H3a
+
+Full design and rollout order:
+`commercial/docs/DESIGN-ab-update-rollback-2026-08.md`. What is actually in
+the image today:
+
+| Piece | Where | State |
+|---|---|---|
+| Two equal-sized root slots + separate `/data` | `mkosi.repart/` | ✅ since the first image |
+| `systemd-sysupdate` (writes a payload into the free slot, keeps the version ledger) | `Packages=systemd-container` | ✅ H3a — **was missing from every earlier image** |
+| `systemd-bless-boot` (marks a boot successful) | `Packages=systemd-boot` | ✅ H3a — **was missing from every earlier image** |
+| Transfer definitions (`.transfer`, arch-generic, boot-counting-aware) | `mkosi.extra/etc/sysupdate.d/` | ✅ H3a |
+| Per-slot UKI: each UKI boots its own root slot | `mkosi.conf` `root=PARTUUID` + `tools/uki-slots.py` | ✅ H3a |
+| Boot counting armed on the factory UKI | `APPLIANCE_BOOT_COUNTING=` | ⬜ H3b — deliberately off |
+| Health gate deciding what "a successful boot" means | — | ⬜ H3c |
+| Signed payload pipeline (independent OS key) | — | ⬜ H3d |
+| `device.update_rollback` doing something | `duduclaw-sysd` | ⬜ H3f — still returns `Unsupported` |
+
+Two things are worth understanding before touching this area.
+
+**The ESP holds one UKI at a time, not two.** Each release builds a *pair* of
+UKIs (`duduclaw-os_<ver>.slot-a.efi` / `.slot-b.efi` in `mkosi.output/`)
+differing only in the `root=PARTUUID=` baked into the cmdline, but only the
+one matching the destination slot is ever installed. A second entry appears in
+`/EFI/Linux` only while an update is pending — the new version's entry
+alongside the old one, which is exactly what gives sd-boot something to fall
+back to. Shipping a second entry at the factory would mean shipping a boot
+entry pointing at an empty partition.
+
+**The ordering between H3a and H3b is not interchangeable.** Boot counting
+without `systemd-bless-boot` is worse than no boot counting: sd-boot
+decrements the counter on every boot and nothing ever resets it, so a
+perfectly healthy machine marks its own only boot entry bad on the third
+reboot. That is why the binaries land first (H3a) and the counter is armed
+second (H3b), and why `APPLIANCE_BOOT_COUNTING` defaults to off.
+
 ## Flatpak app layer
 
 Third-party desktop apps run as Flatpaks. Three packages are installed
@@ -386,11 +465,18 @@ build or boot this round (per the current task scope: recipe + scripts
 only, no live image build) and are the first things worth checking once a
 real Linux build environment is available:
 
-- **Non-verity root=PARTUUID auto-wiring.** mkosi's docs confirm it
-  auto-embeds the root partition's roothash into UKI cmdlines for the
-  dm-verity case; the same behavior for a plain (non-verity) root
-  partition built via `mkosi.repart/` is a reasonable reading of the same
-  general mechanism, not a verbatim-quoted confirmation.
+- ~~**Non-verity root=PARTUUID auto-wiring.**~~ **RESOLVED 2026-08-23 (H3a),
+  and the assumption was WRONG.** mkosi does not auto-embed `root=PARTUUID=`
+  for a plain non-verity root: it only substitutes the bare literal token
+  `root=PARTUUID` when that token appears as a standalone word in
+  `KernelCommandLine=` (mkosi 25.3, `finalize_cmdline()`). It was not there,
+  so every image built before this date shipped a UKI whose `.cmdline` had no
+  `root=` at all — read directly out of the `.cmdline` PE section of
+  `mkosi.output/duduclaw-os.efi`. Those images booted because
+  `systemd-gpt-auto-generator` picked the root by comparing partition labels,
+  which is also why slot B's `NoAuto=yes` attribute was load-bearing. The
+  token is now in `mkosi.conf` and `build.sh` asserts after every build that
+  the UKI's baked PARTUUID really is slot A's.
 - **`systemd-repart` re-run against a live, already-populated root-A
   partition.** Reasoned to be a safe no-op (repart resizes/creates,
   doesn't recreate an already-matching partition — see the comment in
@@ -402,11 +488,20 @@ real Linux build environment is available:
   to intercept and override it on *subsequent* boots (making every boot
   get a fresh transient ID instead of the persisted one) is flagged
   in-line as a real open question, not assumed solved.
-- **A/B boot-counting ↔ `systemd-sysupdate` interaction.** Both pieces
-  (boot-loader-spec tries-counter, `systemd-bless-boot.service`) exist
-  upstream and are referenced in `mkosi.extra/etc/sysupdate.d/`, but the
-  exact mechanics of a sysupdate-written UKI picking up the counting
-  suffix weren't traced end-to-end.
+- **A/B boot-counting ↔ `systemd-sysupdate` interaction.** Half resolved
+  2026-08-23 (H3a). The sysupdate half is now traced end-to-end and
+  live-fire verified against real `systemd-sysupdate` 257.13: with `@l`/`@d`
+  wildcards in the target `MatchPattern=` plus `TriesLeft=3`/`TriesDone=0`, a
+  transfer installs the UKI as `duduclaw-os_<ver>+3-0.efi`, and a partition
+  transfer writes into the `_empty` slot, relabels it with the new version
+  and clears the no-auto attribute. **The other half — sd-boot decrementing
+  the counter and `systemd-bless-boot` clearing it after a healthy boot —
+  is still unverified on this image, and is H3b's job.** The binaries for it
+  only entered the image in H3a (the `systemd-boot` package); until H3b
+  confirms them working, the factory UKI deliberately ships with **no**
+  counting suffix. Arming it early (`APPLIANCE_BOOT_COUNTING=`, default off)
+  is strictly worse than leaving it off: nothing would ever clear the
+  counter and a healthy machine would roll itself back on the 3rd reboot.
 - **OVMF/edk2 firmware paths in `smoke-qemu.sh`.** The macOS/Homebrew
   candidates (both x86-64 and arm64) were confirmed by actually running
   `brew install qemu` and listing `$(brew --prefix qemu)/share/qemu/`
@@ -416,19 +511,17 @@ real Linux build environment is available:
   several candidate paths are tried since exact filenames vary by
   distro/package version, and the Linux ones specifically weren't
   independently confirmed this round.
-- **`mkosi.repart/` partition types are x86-64-only** (`Type=root-x86-64`
-  in `20-root-a.conf`/`21-root-b.conf`; `mkosi.extra/etc/sysupdate.d/
-  10-duduclaw-root.conf` matches the same literal string). Booting under
-  QEMU still works for `APPLIANCE_ARCH=arm64` because mkosi wires
-  `root=PARTUUID=<uuid>` directly into the UKI cmdline (root mounting
-  doesn't depend on the partition *type* GUID matching the running
-  architecture) — but the type label itself is cosmetically wrong for an
-  arm64-built image, and `systemd-sysupdate`/discoverable-partition
-  tooling that keys off the Discoverable Partitions Spec's per-arch type
-  GUIDs would not treat an arm64 image's root partition as
-  architecture-correct. Not fixed this round because `APPLIANCE_ARCH=arm64`
-  is explicitly a local QEMU-smoke-test path, not a second shipping
-  target with its own A/B update story — revisit if that ever changes.
+- ~~**`mkosi.repart/` partition types are x86-64-only.**~~ **RESOLVED.** The
+  repart drop-ins already used the generic `Type=root` (which systemd
+  resolves to the running architecture's native root type), and H3a
+  finished the job on the update side: `10-duduclaw-root.transfer` now uses
+  the same generic `MatchPartitionType=root` and the architecture-templated
+  source pattern `duduclaw-os_@v.root-%a.raw`, instead of the hardcoded
+  `root-x86-64` that matched nothing on an arm64 build. Note the trap that
+  makes this worth stating: `MatchPartitionType=` does **not** expand
+  specifiers, and a value it cannot parse is ignored with a warning and
+  falls back to `linux-generic` — so `root-%a` there would silently target
+  the `/data` partition. Only `MatchPattern=` takes `%a`.
 - **`SSH disabled by default` via system-preset.** The skeleton-tree
   ordering this depends on (preset file must exist before
   `openssh-server`'s postinst runs) is documented mkosi behavior, but the
@@ -520,7 +613,23 @@ surprise if you go read the recipe itself.
   only — see the task notes above).
 - Secure Boot signing / dm-verity root integrity (read-only mount + GPT
   read-only attribute is the current integrity story).
-- Wi-Fi provisioning (wired DHCP only).
+- ~~Wi-Fi provisioning (wired DHCP only).~~ **No longer out of scope as of
+  2026-08-23 (D4a).** The image now ships `iwd` (802.11 association) +
+  `systemd-networkd` (IP layer, `etc/systemd/network/25-wireless-dhcp.network`),
+  with credentials bind-mounted onto the data partition
+  (`etc/systemd/system/var-lib-iwd.mount` + `usr/lib/tmpfiles.d/
+  duduclaw-network.conf`) so an A/B update cannot orphan them. The gateway
+  drives iwd over D-Bus as a member of the `netdev` group; the shell reaches it
+  through the gateway's RPC and is deliberately NOT in that group. Selection
+  reasoning, measurements and the permission topology:
+  `commercial/docs/DESIGN-network-settings-2026-08.md`.
+  **Still incomplete:** no `firmware-*` package is installed yet (decision
+  D-③ — waiting on the real N305 / 8845HS boxes to know which one), so a real
+  machine's Wi-Fi NIC has drivers but no firmware and will not initialize. The
+  `non-free-firmware` component is already enabled in `mkosi.conf`, so adding
+  the right package is a one-line change. Until then Wi-Fi works under
+  `mac80211_hwsim` (see `tests/wifi-hwsim/`) and reports `driver_missing` on
+  real hardware rather than failing silently.
 - Kiosk hot-plug re-detection (a display attached after boot needs a
   restart of `duduclaw-kiosk.service` to be picked up — see "Kiosk display
   session" above; the detection itself, gated on boot, is implemented).

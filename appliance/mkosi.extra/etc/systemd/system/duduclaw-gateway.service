@@ -60,6 +60,17 @@ Type=notify
 NotifyAccess=main
 User=duduclaw
 Group=duduclaw
+# D4a-1 (2026-08-23): Wi-Fi control. iwd uses no polkit at all — its D-Bus
+# policy is deny-by-default with holes for root, `sudo` and `netdev`, so
+# membership in `netdev` IS the authorization (design decision B-①,
+# commercial/docs/DESIGN-network-settings-2026-08.md §3). The `duduclaw`
+# account is already a member (postinst.d/20-users-and-units.sh), and systemd
+# does apply a User='s database groups on its own — this line is stated
+# EXPLICITLY anyway because the whole Wi-Fi surface silently dies with
+# "Access denied" if that ever stops being true, and a silent loss of network
+# control on a headless box is the most expensive failure this image has.
+# Adding it costs nothing and makes the dependency greppable from the unit.
+SupplementaryGroups=netdev
 Environment=DUDUCLAW_APPLIANCE=1
 Environment=DUDUCLAW_HOME=/data/duduclaw
 ExecStart=/usr/local/bin/duduclaw run --yes

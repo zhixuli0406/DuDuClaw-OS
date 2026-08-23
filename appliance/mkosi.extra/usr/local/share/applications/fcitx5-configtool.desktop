@@ -1,0 +1,28 @@
+[Desktop Entry]
+# D3-f (2026-08-23): a HIDING OVERRIDE. See the sibling
+# `org.fcitx.Fcitx5.desktop` for the precedence mechanism this relies on.
+#
+# Why hide this one specifically — it is a REPRODUCED kiosk defect, not a
+# tidiness preference. `/usr/bin/fcitx5-configtool` is a shell script whose
+# GUI (`fcitx5-config-qt` / `kcmshell5`) is deliberately NOT installed on
+# this image (no Qt/KDE stack). Its documented fallback is to hand the
+# fcitx5 config DIRECTORY to `xdg-open`, which on this image resolves to
+# Chromium — so launching "Fcitx 5 設定" from the Launcher pops a Chromium
+# window ("Chromium Additional Terms of Service") over the shell on a
+# machine whose whole premise is that it shows one thing. Verified in the
+# D3-f VM round: journal line "fcitx5-config-qt couldn't be found... will
+# open the configuration directory", screenshot of the resulting window.
+#
+# Input-method settings on this appliance are owned by
+# `duduclaw-kiosk-launch.sh`'s seeded fcitx5 config (engine order, the
+# Chinese/English toggle, the vertical candidate list), not by a per-user
+# GUI — so there is nothing behind this entry an operator should reach.
+Type=Application
+Name=Fcitx 5 Configuration
+GenericName=Input Method Configuration
+Comment=Configure Input Method
+Exec=/usr/bin/fcitx5-configtool
+Icon=fcitx
+Terminal=false
+Categories=Settings;
+NoDisplay=true

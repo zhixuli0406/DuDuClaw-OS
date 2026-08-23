@@ -197,6 +197,128 @@ comp_socket_name() {
     return 0
 }
 
+# ── fcitx5 configuration seed (D3-d, reworked in D3-f) ───────────────────
+# Bump this whenever the seeded content below changes. The marker file it
+# writes is what lets a fix reach an ALREADY-PROVISIONED machine: the
+# original D3-d seed ran only `if [[ ! -f profile ]]`, so a unit that had
+# booted once could never receive a corrected profile — and D3-f's whole
+# reason to exist is that the first profile was wrong. Re-seeding is
+# deliberately version-gated rather than every-boot: fcitx5 rewrites
+# `profile` itself whenever the operator switches engine, and stomping that
+# on every boot would make their choice un-keepable.
+FCITX5_SEED_VERSION=2
+
+# Writes the fcitx5 config this appliance depends on, at most once per
+# FCITX5_SEED_VERSION. MUST run while fcitx5 is NOT running: fcitx5 saves
+# its in-memory profile on shutdown, so seeding first and starting after is
+# the only order in which the seed survives (measured in the D3-f VM round —
+# a seed written next to a live fcitx5 was silently overwritten within
+# seconds, which is what made the first attempt at this fix look like it had
+# no effect at all).
+seed_fcitx5_config() {
+    local conf_dir marker
+    conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5"
+    marker="$conf_dir/.duduclaw-seed"
+
+    if [[ -r "$marker" ]] && [[ "$(cat "$marker" 2>/dev/null)" == "$FCITX5_SEED_VERSION" ]]; then
+        return 0
+    fi
+    mkdir -p "$conf_dir/conf" || { log "note: could not create $conf_dir — 中文輸入設定維持 fcitx5 預設"; return 0; }
+
+    # ── profile: which engines exist, and in what order ──────────────────
+    # Item ORDER is load-bearing, and getting it wrong is what D3-f is
+    # fixing. fcitx5's `AltTriggerKeys` (default `Shift_L`) is documented as
+    # "Temporally switch between FIRST and current Input Method" — so with
+    # chewing as item 0 (the D3-d seed) a bare Shift had nothing to switch
+    # to and did nothing at all. The only English left to a chewing user was
+    # then `Shift`+letter, which libchewing commits as an UPPERCASE letter:
+    # exactly the reported "英文不管怎麼打都是大寫，沒辦法切換成小寫".
+    #
+    # With `keyboard-us` first, Shift toggles Chinese ⇄ English in both
+    # directions and English types in lower case. Chinese stays the state an
+    # operator lands in, via `ActiveByDefault` below — NOT via item order.
+    cat > "$conf_dir/profile" <<'FCITX5_PROFILE'
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=chewing
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=chewing
+Layout=
+
+[GroupOrder]
+0=Default
+FCITX5_PROFILE
+
+    # ── global behaviour ─────────────────────────────────────────────────
+    # ActiveByDefault: a fresh input context starts ACTIVATED, i.e. in the
+    #   group's DefaultIM (chewing) rather than in item 0 (keyboard-us).
+    #   This is what keeps 開機即中文 after the item reorder above; without
+    #   it every field would open in English, which is a worse default for
+    #   this appliance than the bug being fixed.
+    # ShareInputState=All: the Chinese/English choice follows the operator
+    #   across surfaces instead of resetting per text field. On a kiosk with
+    #   one shell and a handful of fields, per-field state reads as the
+    #   toggle randomly forgetting itself.
+    # This file replaces D3-d's `SetCurrentIM` D-Bus call, which was a
+    # cold-start workaround for the old item order and is now unnecessary
+    # (and was racy: a fixed 3-second sleep against daemon startup).
+    #
+    # [Hotkey] TogglePreedit (fcitx5 default Ctrl+Alt+P) is turned OFF. It is
+    # the one fcitx5 default that produces a broken-LOOKING appliance from a
+    # single stray keypress: with preedit-in-application disabled the text
+    # field keeps showing its placeholder while the composition floats in a
+    # small detached box below it, which reads as "typing stopped going into
+    # the box". Measured in the D3-f VM round — screenshot on file. There is
+    # no operator on a kiosk who wants this toggle, and no visible affordance
+    # to discover it was pressed.
+    #
+    # The other fcitx5 defaults are deliberately LEFT ALONE: Ctrl+Space
+    # (trigger) and Shift_L (alt-trigger) are the two toggles this whole fix
+    # is about; Ctrl+Shift enumerate is redundant with two engines but
+    # harmless; Super+space (group switch) is a no-op with a single group
+    # and was verified not to disturb typing; Tab / Shift+Tab select
+    # candidates only while a composition is in flight, which correctly wins
+    # over the Launcher's own Tab.
+    #
+    # An option key present with no indexed sub-entries is fcitx5's own
+    # encoding for "empty key list" — the value has to be written, because an
+    # ABSENT key means "use the default" instead.
+    cat > "$conf_dir/config" <<'FCITX5_CONFIG'
+[Behavior]
+ActiveByDefault=True
+ShareInputState=All
+
+[Hotkey]
+TogglePreedit=
+FCITX5_CONFIG
+
+    # ── candidate window: vertical (D3-f P1-1) ───────────────────────────
+    # BOTH files are needed and they are not redundant. classicui draws the
+    # candidate window, but its `Vertical Candidate List` is only consulted
+    # when the input method expresses no preference — fcitx5-chewing does
+    # express one, so chewing's own `CandidateLayout` is what actually
+    # decides for the Chinese engine (measured: classicui alone left the
+    # list horizontal even though the same file's `Font=` took effect on the
+    # very next frame, which is how the two were told apart). classicui's
+    # setting still matters for every other engine.
+    #
+    # No section header on purpose: fcitx5 addon config files are flat
+    # `Key=Value` (confirmed against `conf/notifications.conf`, written by
+    # fcitx5 itself). An earlier attempt wrapped these in a
+    # `[Classic User Interface]` section and was silently ignored.
+    printf 'Vertical Candidate List=True\n' > "$conf_dir/conf/classicui.conf"
+    printf 'CandidateLayout=Vertical\n' > "$conf_dir/conf/chewing.conf"
+
+    printf '%s' "$FCITX5_SEED_VERSION" > "$marker"
+    log "seeded fcitx5 config (v$FCITX5_SEED_VERSION): keyboard-us/chewing order, 開機即中文, Shift 切中英, 直式候選字"
+}
+
 # ── Kiosk app selection ──────────────────────────────────────────────────
 # Shell-S2 wave (2026-08-20) introduced the gpui shell under cage; the A4
 # wave (2026-08-22) adds duduclaw-comp — DuDuClaw OS's own compositor —
@@ -332,6 +454,21 @@ run_comp_session() {
         && command -v dbus-update-activation-environment >/dev/null 2>&1; then
         dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_SESSION_TYPE \
             || log "note: dbus-update-activation-environment failed (portal dialogs may not find the display)"
+    fi
+
+    # D3-d: fcitx5 must come up after comp's socket exists and before the
+    # shell, so the shell's text-input has an input method to talk to on
+    # first focus. Fail-open like every other external dependency here.
+    if command -v fcitx5 >/dev/null 2>&1; then
+        seed_fcitx5_config
+        # XMODIFIERS is the one variable fcitx5's wiki says to always set.
+        # GTK_IM_MODULE / QT_IM_MODULE are deliberately NOT set: on Wayland
+        # they route around text-input-v3 instead of through it.
+        export XMODIFIERS=@im=fcitx
+        fcitx5 -d --replace >/dev/null 2>&1 \
+            || log "WARNING: fcitx5 failed to start — 中文輸入不可用"
+    else
+        log "note: fcitx5 not installed — 中文輸入不可用"
     fi
 
     log "starting duduclaw-shell as duduclaw-comp's client"

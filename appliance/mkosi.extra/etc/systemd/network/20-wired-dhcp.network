@@ -1,4 +1,6 @@
-# Wired DHCP only. Wi-Fi provisioning is out of scope (see README.md).
+# Wired DHCP. Wi-Fi is handled by its sibling 25-wireless-dhcp.network as of
+# 2026-08-23 (D4a) -- this file is no longer the only networking story, so
+# nothing here should be read as "wireless is out of scope" any more.
 # Match any wired NIC by both name-glob and link type so this works across
 # different mini-PC hardware without per-board tuning. Kept strictly ASCII:
 # a non-ASCII byte anywhere in this file (even in a comment) has been seen to

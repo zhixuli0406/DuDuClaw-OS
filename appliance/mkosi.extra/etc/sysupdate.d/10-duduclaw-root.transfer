@@ -1,13 +1,25 @@
 # A/B root partition update transfer (systemd-sysupdate).
 #
 # Source is a local staging directory, not a remote URL: fetching and
-# verifying the payload is our own job (H3d), because sysupdate does NO
+# verifying the payload is our own job, because sysupdate does NO
 # integrity or authenticity checking at all for `Type=regular-file` sources —
 # sysupdate.d(5) v257 says so in as many words ("When updating no integrity
 # or authentication verification is done for resources of this type"), and
-# there is no switch to turn it on. Whatever puts bytes into
-# /var/lib/duduclaw/updates/ must therefore have verified them already
-# (SHA-256 + minisign, pinned pubkey, fail-closed) before they land there.
+# there is no switch to turn it on. That job now exists: as of H3d
+# (2026-08-24) `crates/duduclaw-gateway/src/os_update.rs` downloads a signed
+# SHA256SUMS manifest, verifies it against a pinned OS-image minisign key
+# (a DIFFERENT key from the app-binary channel — different blast radius),
+# checks every payload's digest as it lands, and only then publishes the
+# files into the directory below. Nothing else writes here.
+#
+# STAGING PATH (H3d): /data/duduclaw/updates, NOT /var/lib/duduclaw/updates
+# as the design doc originally specified. /var lives on the 5 GiB root slot,
+# which cannot possibly hold a 5 GiB root payload; /data is the partition
+# that grows to fill the disk and is already owned by the unprivileged
+# gateway user, so staging needs no new directory, no tmpfiles rule and no
+# extra write permission. The gateway resolves the same path from
+# `config.toml [os_update] staging_dir` (default <DUDUCLAW_HOME>/updates) —
+# change one and change the other.
 #
 # FILE EXTENSION (H3a, 2026-08-23): `.transfer`, not `.conf`. v257's search
 # path is `<dir>/*.transfer`; a `.conf` file is still loaded but prints
@@ -38,7 +50,7 @@ ProtectVersion=%A
 
 [Source]
 Type=regular-file
-Path=/var/lib/duduclaw/updates
+Path=/data/duduclaw/updates
 # %a is the systemd architecture specifier and expands to the same names the
 # GPT type table uses (`arm64`, `x86-64`), so one file serves both build
 # targets and the payload name states which architecture it is for. Verified

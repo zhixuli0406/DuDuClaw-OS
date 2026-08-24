@@ -613,5 +613,98 @@ else
     exit 1
 fi
 
+# --- Step 3.5: shipping root-lock assertion (Q1, 2026-08-24) --------------
+# Static analysis established this invariant but it was never checked
+# against a real built artifact until now (see the Q1 row in
+# commercial/docs/TODO-agent-first-os-2026-08.md and the precedent recorded
+# at crates/duduclaw-shell/BUILD-LINUX.md:483): `--root-password` is set
+# ONLY in the two APPLIANCE_DEBUG branches above (this file); nothing in
+# mkosi.conf/mkosi.conf.d/postinst.d/mkosi.extra ever touches /etc/shadow.
+# A shipping build (no APPLIANCE_DEBUG) must therefore always produce a
+# locked root account — asserted here against slot A's actual filesystem
+# so a future accidental `chpasswd`/`passwd` call anywhere in the tree
+# fails the build instead of shipping a silent backdoor. Reuses the same
+# losetup+manual-mknod idiom as appliance/tests/ab-update/inject-binaries.sh
+# (no udev inside the container, so partition device nodes must be created
+# by hand from sysfs).
+if [[ -z "${APPLIANCE_DEBUG:-}" ]]; then
+    echo "[build] (3.5) asserting shipping root is locked (no APPLIANCE_DEBUG)"
+    ROOT_SHADOW_LINE="$(docker run --rm --privileged --platform "$DOCKER_PLATFORM" \
+        -v "$RAW_OUT:/image.raw:ro" \
+        debian:trixie-slim bash -euo pipefail -c '
+            apt-get update -qq >/dev/null
+            apt-get install -y -qq --no-install-recommends util-linux e2fsprogs >/dev/null
+            mkdir -p /mnt/root
+            LOOP="$(losetup -fP --show /image.raw)"
+            sleep 1
+            partprobe "$LOOP" >/dev/null 2>&1 || true
+            for i in 1 2 3 4; do
+                SYSP="/sys/class/block/$(basename "$LOOP")/$(basename "$LOOP")p$i"
+                if [ -d "$SYSP" ]; then
+                    DEVNUM=$(cat "$SYSP/dev"); MAJ=${DEVNUM%:*}; MIN=${DEVNUM#*:}
+                    [ -e "${LOOP}p$i" ] || mknod "${LOOP}p$i" b "$MAJ" "$MIN"
+                fi
+            done
+            # p2 = slot A (p1 = ESP, per mkosi.repart/10-esp.conf sorting
+            # before 20-root-a.conf) — same slot inject-binaries.sh targets.
+            mount -o ro "${LOOP}p2" /mnt/root
+            grep "^root:" /mnt/root/etc/shadow
+            umount /mnt/root
+            losetup -d "$LOOP"
+        ' 2>/dev/null)"
+    if [[ -z "$ROOT_SHADOW_LINE" ]]; then
+        echo "[build] shipping root-lock check FAILED: could not read /etc/shadow from the built image (see above for the container's stderr)" >&2
+        exit 1
+    fi
+    echo "[build]       /etc/shadow root line: $ROOT_SHADOW_LINE"
+    # shadow(5): a locked/disabled account's password field is `*` or a
+    # leading `!` (optionally `!` + an old hash, from `passwd -l`). Anything
+    # else — a bare `$id$...` hash, or an empty field (no password at all,
+    # which is worse) — means the shipping image has a usable root login.
+    ROOT_PW_FIELD="$(echo "$ROOT_SHADOW_LINE" | cut -d: -f2)"
+    case "$ROOT_PW_FIELD" in
+        '*'|'!'*) echo "[build]       root is locked (password field: $ROOT_PW_FIELD) — OK" ;;
+        *)
+            echo "[build] SHIPPING SAFETY VIOLATION: root password field is '$ROOT_PW_FIELD' (not locked) in a non-APPLIANCE_DEBUG build — refusing to ship" >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "[build] (3.5) APPLIANCE_DEBUG set — skipping root-lock assertion (root is expected to have a password in this build)"
+fi
+
+# --- Step 4: signed A/B update payload (H3d) -----------------------------
+# Opt-in, because it is a RELEASE step, not a build step: it costs a full
+# 5 GiB pass over the image and it touches the OS signing key, neither of
+# which belongs in every local smoke build.
+#
+#   APPLIANCE_MAKE_PAYLOAD=1 appliance/build.sh
+#
+# What it produces (appliance/tools/make-payload.py writes the layout; the
+# names are the ones mkosi.extra/etc/sysupdate.d/*.transfer match on, so a
+# payload this step emits is a payload sysupdate can find):
+#
+#   mkosi.output/payload/duduclaw-os_<ver>/
+#       duduclaw-os_<ver>.root-<arch>.raw   slot A's bytes, written sparsely
+#       duduclaw-os_<ver>.efi               the UKI template
+#       SHA256SUMS                          both files
+#       SHA256SUMS.minisig                  the ONLY signature, OS key
+#       manifest.json                       provenance, deliberately unsigned
+#
+# The UKI is a *template*: its baked root=PARTUUID= belongs to this build's
+# own slot A, and mkosi seeds repart with a fresh random UUID per build, so
+# that value is meaningless on any other machine. The appliance rewrites
+# those 36 characters to its own destination slot at staging time
+# (crates/duduclaw-gateway/src/uki_patch.rs). See the H3d note in
+# 20-duduclaw-uki.transfer.
+if [[ "${APPLIANCE_MAKE_PAYLOAD:-0}" == "1" ]]; then
+    echo "[build] (4/4) building the signed A/B update payload"
+    python3 "$APPLIANCE_DIR/tools/make-payload.py" \
+        --raw "$RAW_OUT" \
+        --uki "$UKI_OUT" \
+        --version "$IMAGE_VERSION" \
+        --force
+fi
+
 echo "[build] done. Output in: $OUTPUT_DIR"
 ls -la "$OUTPUT_DIR" 2>/dev/null || true

@@ -157,9 +157,96 @@ Output lands in `appliance/mkosi.output/`:
 | `duduclaw-os_<ver>.slot-b.efi` | per-slot UKI, boots root slot B — differs only in the 36 characters of `root=PARTUUID=` |
 | `duduclaw-os.vmlinuz` / `.initrd` | the UKI's ingredients, kept for debugging |
 
-The two `.slot-*.efi` files are the A/B update payload's UKI half. They are
-built every time but nothing consumes them yet — the signed payload pipeline
-is H3d.
+The two `.slot-*.efi` files are a **build-time A/B invariant check**, not a
+shipped payload — a point H3d had to correct. Partition UUIDs are not
+reproducible across builds (mkosi seeds `systemd-repart` with a fresh random
+UUID each time; verified by diffing the GPTs of two of our own artifacts), so
+a UKI carrying the release host's `root=PARTUUID=` would send a *device* into
+an initrd waiting forever for a partition that does not exist on it. A release
+therefore ships **one** UKI template and the appliance rewrites those 36
+characters to its own destination slot while staging
+(`crates/duduclaw-gateway/src/uki_patch.rs`). Deriving the pair here still
+earns its keep: it proves the rewrite is structurally sound on every build.
+
+### Building an update payload
+
+```sh
+APPLIANCE_MAKE_PAYLOAD=1 appliance/build.sh    # or run tools/make-payload.py directly
+```
+
+Output is `mkosi.output/payload/duduclaw-os_<ver>/` holding the root payload,
+the UKI template, `SHA256SUMS`, and `SHA256SUMS.minisig`. Serve that directory
+over HTTPS and point an appliance at it:
+
+```toml
+# <DUDUCLAW_HOME>/config.toml   (the appliance's /data/duduclaw/config.toml)
+[os_update]
+source_url = "https://updates.example.com/duduclaw-os/0.2.0/"
+```
+
+Empty (the default) means **no update source configured** — `update_apply`
+then refuses honestly instead of installing whatever happens to be sitting in
+the staging directory. Plain `http://` is accepted only for a
+loopback/private/link-local mirror (the pinned signature is what makes a
+payload installable, so plain HTTP costs confidentiality, not integrity);
+`file:///mnt/usb/...` works for offline installs and goes through the identical
+verification.
+
+**The signing key is the OS key, not the app key**
+(`~/.minisign/duduclaw-os-release.key`, public half
+`RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n`, pinned in the
+binary as `os_update::OS_IMAGE_UPDATE_PUBKEY`). Different blast radius: an app
+binary written wrong is a service to reinstall, an OS image written wrong is a
+box that does not come back. The `sig` probe proves the separation by signing
+a manifest correctly *with the app key* and requiring the appliance to refuse
+it. **The private key is not in the repo and not recoverable — back it up, or
+this update channel is permanently dead.**
+
+### What `device.update_apply` actually does now
+
+`systemd-sysupdate` performs **no** integrity or authenticity checking for
+`Type=regular-file` sources (`sysupdate.d(5)`, v257 — there is no switch), so
+the gateway is the gate: fetch `SHA256SUMS` + `SHA256SUMS.minisig`, verify the
+signature against the pinned OS key, refuse unless exactly one root payload
+for this architecture and one UKI of the *same* version are listed, skip
+entirely if that version is already running, stream each file while hashing it,
+delete anything whose digest does not match, rewrite the UKI's
+`root=PARTUUID=` to the destination slot, and only then publish into the
+staging directory and run sysupdate.
+
+Staging lives at **`/data/duduclaw/updates`**, not `/var/lib/duduclaw/updates`
+as the design doc first said: `/var` is on the 5 GiB root slot and cannot hold
+a 5 GiB root payload, while `/data` grows to fill the disk and is already
+owned by the unprivileged gateway user. The payload is written **sparsely**
+(all-zero 4 MiB chunks become holes), which is what lets a 5 GiB payload land
+on a small `/data`; hashing still covers every byte, holes included.
+
+### Rolling back
+
+`device.update_rollback` is a *relative* operation — "do not boot the entry I
+am running" — never "switch to slot N", so there is no slot arithmetic to get
+wrong. `duduclaw-sysd`'s `UpdateRollback` verb has two tiers:
+
+- a boot counter is in flight (`bless-boot status` = `indeterminate`) ⇒
+  `systemd-bless-boot bad`, exactly as the design specifies;
+- no counter is in flight (`clean`) ⇒ rename the entry named by the
+  `LoaderEntrySelected` EFI variable to the exhausted `+0-1` shape, which is
+  the same state `bless-boot bad` would have produced.
+
+**Known gap (P1, measured 2026-08-24):** once a version has been rolled back,
+installing that same version again reports success but does nothing — the
+partition label still says it is installed and the exhausted `+0-1` ESP entry
+still matches the UKI transfer's pattern, so sysupdate writes nothing and
+sd-boot never picks it. See the design doc §11.7 for the mechanism and the
+proposed fix.
+
+Tier 2 exists because tier 1 alone would refuse in the only situation an
+operator ever presses the button: the update installed, booted, passed the
+health gate, got blessed — and only *then* turned out to be wrong. A blessed
+entry carries no counter, so `status` reads `clean` (the H3b `t1` probe
+asserts exactly that steady state) and `bless-boot bad` has nothing to act on.
+Both tiers refuse — and do **not** reboot — when there is no other healthy
+entry to fall back to.
 
 One extra build knob exists for the A/B work: `APPLIANCE_BOOT_COUNTING=<1-9>`
 sets how many attempts sd-boot gives the factory UKI. It **defaults to 3**
@@ -369,7 +456,7 @@ an estimate per the task, not a benchmark result):
   the unit actually starts; headless boxes pay nothing beyond the
   binaries already sitting unused on disk.
 
-## A/B updates — what is wired as of H3c
+## A/B updates — what is wired as of H3f
 
 Full design and rollout order:
 `commercial/docs/DESIGN-ab-update-rollback-2026-08.md`. What is actually in
@@ -384,8 +471,10 @@ the image today:
 | Per-slot UKI: each UKI boots its own root slot | `mkosi.conf` `root=PARTUUID` + `tools/uki-slots.py` | ✅ H3a |
 | Boot counting armed on the factory UKI | `APPLIANCE_BOOT_COUNTING=` (default **3**) | ✅ H3b — on by default since 2026-08-23 |
 | Health gate deciding what "a successful boot" means | `duduclaw-health-check.service` + `usr/local/sbin/duduclaw-health-check.sh` | ✅ H3c |
-| Signed payload pipeline (independent OS key) | — | ⬜ H3d |
-| `device.update_rollback` doing something | `duduclaw-sysd` | ⬜ H3f — still returns `Unsupported` |
+| Signed payload pipeline (independent OS key) | `tools/make-payload.py` + `duduclaw-gateway/src/os_update.rs` | ✅ H3d — QEMU verified 2026-08-24 |
+| Per-slot UKI binding at **install** time (not build time) | `duduclaw-gateway/src/uki_patch.rs` | ✅ H3d |
+| `device.update_rollback` doing something | `duduclaw-sysd` `UpdateRollback` verb | ✅ H3f — QEMU verified (T6/T7) |
+| `device.boot_assessment` (read-only probation state) | `duduclaw-sysd` `BootAssessmentStatus` verb | ✅ H3f |
 
 Two things are worth understanding before touching this area.
 
@@ -434,6 +523,52 @@ python3 -u appliance/tests/ab-update/h3bc_probe.py esp            # T9: real thr
 python3 -u appliance/tests/ab-update/h3bc_probe.py inject         # stage an unbootable "update"
 python3 -u appliance/tests/ab-update/h3bc_probe.py t3             # T3: it must roll back on its own
 ```
+
+For the H3d/H3f matrix (real updates), the VM needs two things the earlier
+rounds did not: a bigger `/data` (a root payload is 5 GiB apparent / ~3.8 GiB
+real, and the factory `/data` is 4 GiB) and the binaries under test:
+
+```sh
+# 1. host-only: a signed test release, carrying today's binaries and honestly
+#    calling itself 0.2.0
+python3 -u appliance/tests/ab-update/h3df_probe.py fixture --inject-binaries --set-image-version
+
+# 2. Linux binaries for the code under test (no mkosi rebuild needed)
+appliance/tests/ab-update/build-linux-bins.sh
+
+# 3. a fresh disk, grown so /data can hold a payload, with today's binaries in slot A
+AB_PREPARE_ONLY=1 appliance/tests/ab-update/boot-ab.sh   # copy + grow (AB_DISK_GROW, default +10GiB)
+AB_ROOT_PASSWORD=duduclaw appliance/tests/ab-update/inject-binaries.sh
+AB_FRESH=0 AB_DASH_PORT=18796 appliance/tests/ab-update/boot-ab.sh &   # boot it
+
+# 4. the matrix
+python3 -u appliance/tests/ab-update/h3df_probe.py sig   # wrong key / no signature / tampered payload / swapped manifest
+python3 -u appliance/tests/ab-update/h3df_probe.py t2    # T2: download -> verify -> install -> reboot -> bless
+python3 -u appliance/tests/ab-update/h3df_probe.py t6    # T6: manual rollback (immediately after t2, same disk)
+python3 -u appliance/tests/ab-update/h3df_probe.py t7    # T7: two bad updates must not exhaust both entries
+
+# T5 wants a disk that has never been updated — repeat step 2 first
+python3 -u appliance/tests/ab-update/h3df_probe.py t5    # T5: power cut mid-install
+```
+
+Order matters for `t2 -> t6 -> t7`: they run on the **same** disk on purpose.
+`t6` needs the machine to be on the new slot with the new version already
+blessed (the `clean` state tier 2 exists for), and `t7` needs *two* installed
+versions before it can prove that exhausting both still boots. `t5` is the odd
+one out and starts from a fresh disk.
+
+`AB_ROOT_PASSWORD` is required for any probe to work: **the shipping image sets
+no root password at all**, so a freshly copied disk has no way to log in over
+the serial console. It is applied only to the test disk (and, via
+`--inject-binaries`, to the test payload), never to anything shipped —
+omitting it leaves `/etc/shadow` untouched.
+
+`--inject-binaries` is not optional for a meaningful run: the payload is
+carved out of the image already in `mkosi.output/`, so without it the new slot
+boots the *old* gateway and `t6` has no rollback verb to call. `/data` growth
+happens on the first boot through `duduclaw-firstboot-repart.service` — the
+same path a real box takes when the golden image is written to a larger disk,
+which until now had never been exercised on a bigger disk.
 
 (`-u` matters: the probe drives a serial console for minutes at a time and
 block-buffered stdout hides all of it until the run ends.)
@@ -679,6 +814,20 @@ surprise if you go read the recipe itself.
   the right package is a one-line change. Until then Wi-Fi works under
   `mac80211_hwsim` (see `tests/wifi-hwsim/`) and reports `driver_missing` on
   real hardware rather than failing silently.
+- ~~Audio.~~ **No longer out of scope as of 2026-08-24 (D5).** The image
+  ships `pipewire` + `wireplumber` (14 packages, 19.3MiB arm64 / 16.3MiB
+  amd64 — measured, see the package note in `mkosi.conf` for what is
+  deliberately left out and why). They are NOT enabled as system units:
+  Debian ships them as `systemd --user` units and this kiosk has no user
+  manager, so `duduclaw-kiosk-launch.sh` starts them by hand next to the
+  D-Bus session bus and fcitx5, fail-open. The `duduclaw-kiosk` user is in
+  the `audio` group because, with no logind session, no ACL is ever granted
+  on `/dev/snd/*`. The shell drives volume / mute / output-device switching
+  through WirePlumber's `wpctl`, and reports 「音訊服務未啟動」 rather than
+  simulating when it cannot reach it.
+  **Still incomplete:** input (microphone) capture is not surfaced anywhere,
+  Bluetooth audio is not installed (no BT stack in this image at all), and
+  per-application volume is not exposed.
 - Kiosk hot-plug re-detection (a display attached after boot needs a
   restart of `duduclaw-kiosk.service` to be picked up — see "Kiosk display
   session" above; the detection itself, gated on boot, is implemented).

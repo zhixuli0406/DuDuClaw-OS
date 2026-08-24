@@ -15,7 +15,7 @@ Scope is deliberately tiny and matched to this test harness:
   * no fragmentation on send (every payload here is a few hundred bytes)
 
 Usage:
-    ws_rpc.py --url ws://127.0.0.1:18789/ws --jwt <token> <method> [json-params]
+    ws_rpc.py --url ws://127.0.0.1:18789/ws --jwt <token> [--read-timeout S] <method> [json-params]
 
 Prints the response frame's JSON payload to stdout and exits 0 when the frame
 reports ok; prints the error object and exits 1 otherwise. Any transport or
@@ -155,6 +155,13 @@ def main():
     parser.add_argument("--jwt", required=True)
     parser.add_argument("method")
     parser.add_argument("params", nargs="?", default="{}")
+    # Default stays 30s (every network.* call answers in milliseconds). The
+    # override exists for RPCs that legitimately hold the socket for minutes:
+    # `device.update_apply` downloads a multi-gigabyte OS payload before it
+    # answers, and a 30s read timeout would report a transport failure for a
+    # call that is working perfectly.
+    parser.add_argument("--read-timeout", type=float, default=READ_TIMEOUT_SECS,
+                        help="seconds to wait for each server frame (default: 30)")
     args = parser.parse_args()
 
     parsed = urllib.parse.urlparse(args.url)
@@ -172,7 +179,7 @@ def main():
         return 2
 
     sock = socket.create_connection((host, port), timeout=READ_TIMEOUT_SECS)
-    sock.settimeout(READ_TIMEOUT_SECS)
+    sock.settimeout(args.read_timeout)
     try:
         _handshake(sock, host, port, path)
 

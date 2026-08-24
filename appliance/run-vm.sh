@@ -25,6 +25,8 @@
 #   VM_ACCEL=tcg appliance/run-vm.sh    # force software emulation (slower, most compatible)
 #   VM_MEM=6144 VM_SMP=6 appliance/run-vm.sh   # give it more RAM/CPUs for a snappier backend
 #   VM_FRESH=1 appliance/run-vm.sh      # discard the persistent working copy and start clean
+#   VM_AUDIO=0 appliance/run-vm.sh      # no sound card at all (reproduce a box with no audio hardware)
+#   VM_AUDIODEV=coreaudio appliance/run-vm.sh   # route the guest's audio to your Mac's speakers
 #
 # Stop it: Ctrl-A then X (headless serial) / close the window (gui), or
 # `pkill -f duduclaw-os-vm`.
@@ -115,7 +117,36 @@ if [[ "${VM_DISPLAY:-}" == "gui" ]]; then
     )
 fi
 
-echo "[run-vm] $APPLIANCE_ARCH  accel=$VM_ACCEL  mem=${MEM}M  cpus=$SMP  display=${VM_DISPLAY:-headless}"
+# Audio (D5, 2026-08-24): the appliance's own audio stack (PipeWire +
+# WirePlumber, see mkosi.conf) needs a sound CARD to enumerate, or there is
+# no default sink and every volume control correctly reports "no audio
+# device". QEMU's `virt`/`q35` machines ship none by default, so one is
+# added here — a TEST-ENVIRONMENT concern only: nothing in the shipped image
+# depends on this device existing, and a real box has its own.
+#
+# intel-hda (ich6) + hda-duplex, not virtio-sound: the Debian kernel builds
+# snd-hda-intel on both target architectures, and HDA is what a real x86
+# mini-PC exposes too, so the guest exercises the same driver path the M1
+# hardware will. (`-device help` on QEMU 11.1 confirms both intel-hda and
+# virtio-sound-pci exist; HDA is picked for driver parity, not availability.)
+#
+# `-audiodev none` by default: the guest gets a fully functional card whose
+# samples go nowhere on the host. That is deliberate — the point of the
+# device is that the guest's PipeWire finds a sink to control, and a host
+# backend (coreaudio) would additionally ask for microphone/output
+# permissions and make noise during automated runs. Set VM_AUDIODEV=coreaudio
+# (macOS) / pa (Linux) if you actually want to HEAR the guest; VM_AUDIO=0
+# drops the card entirely to reproduce a no-audio-hardware box.
+AUDIO_ARGS=()
+if [[ "${VM_AUDIO:-1}" != "0" ]]; then
+    AUDIO_ARGS=(
+        -audiodev "${VM_AUDIODEV:-none}",id=snd0
+        -device intel-hda
+        -device hda-duplex,audiodev=snd0
+    )
+fi
+
+echo "[run-vm] $APPLIANCE_ARCH  accel=$VM_ACCEL  mem=${MEM}M  cpus=$SMP  display=${VM_DISPLAY:-headless}  audio=${VM_AUDIO:-1}(${VM_AUDIODEV:-none})"
 echo "[run-vm] dashboard → http://localhost:${DASH_PORT}   (open in a browser; first-run setup happens there)"
 [[ "${VM_DISPLAY:-}" == "gui" ]] && echo "[run-vm] a graphical window will open for the on-box kiosk / console"
 echo "[run-vm] first boot takes a minute or two; the dashboard port answers once it's up"
@@ -128,4 +159,5 @@ exec "$QEMU_BIN" \
   -drive if=virtio,format=raw,file="$DISK" \
   -netdev user,id=net0,hostfwd=tcp::"${DASH_PORT}"-:18789 \
   -device virtio-net-pci,netdev=net0 \
+  "${AUDIO_ARGS[@]}" \
   "${DISPLAY_ARGS[@]}"

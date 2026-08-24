@@ -108,12 +108,19 @@ StartLimitBurst=5
 Type=simple
 User=duduclaw-kiosk
 Group=duduclaw-kiosk
-# video/render supplementary groups come from the user's own passwd/group
-# database entry (useradd -G video,render, postinst.d/
-# 20-users-and-units.sh) — one source of truth, not duplicated here via
-# SupplementaryGroups=; systemd applies a User='s full system group
-# membership by default, same as duduclaw-gateway.service does for the
-# `duduclaw` user.
+# video/render/audio supplementary groups come from the user's own
+# passwd/group database entry (useradd -G video,render,audio, postinst.d/
+# 20-users-and-units.sh — that script's own comment has the per-group
+# justification, including why `audio` is load-bearing HERE specifically:
+# this unit has no logind session, so nothing ever grants the seat ACL on
+# /dev/snd/* that a desktop would rely on) — one source of truth, not
+# duplicated here via SupplementaryGroups=; systemd applies a User='s full
+# system group membership by default, same as duduclaw-gateway.service does
+# for the `duduclaw` user.
+#
+# Nothing here restricts device access (no PrivateDevices=, no DeviceAllow=),
+# which is what lets PipeWire reach the sound cards at all — see the
+# "moderate hardening" note further up.
 
 # RuntimeDirectory=/RuntimeDirectoryMode= create+own /run/duduclaw-kiosk
 # for this service (systemd.exec(5): "the innermost specified directories

@@ -34,17 +34,48 @@ CODE=/opt/homebrew/share/qemu/edk2-aarch64-code.fd
 VARS_TMPL=/opt/homebrew/share/qemu/edk2-arm-vars.fd
 VARS="$WORK/vars-ab.fd"
 
-[[ -f "$SRC" ]] || { echo "[ab] 找不到 image：$SRC（先跑 appliance/build.sh）" >&2; exit 1; }
+[[ -f "$SRC" ]] || { echo "[ab] 找不到 image：${SRC}（先跑 appliance/build.sh）" >&2; exit 1; }
 
 if [[ "${AB_FRESH:-1}" != "0" || ! -f "$DISK" ]]; then
     echo "[ab] 從 pristine image 複製乾淨磁碟（APFS clone，瞬間完成、仍為 sparse）..."
     rm -f "$DISK"
     cp -c "$SRC" "$DISK" 2>/dev/null || cp "$SRC" "$DISK"
+    # H3d：/data 在原尺寸 image 裡只有 4GiB，但一份 root payload 的表面大小就是
+    # 5GiB（sparse 落地後仍約 3.7GiB）——放不下。把磁碟檔撐大，開機時
+    # duduclaw-firstboot-repart.service 會照 /usr/lib/repart.d 把 /data 長到
+    # 剩餘空間，這正是真硬體（USB→NVMe）走的同一條路，順便也把那條從沒在
+    # 大磁碟上實測過的路徑一起測掉。
+    # AB_DISK_GROW=0 可關掉（例如只跑 h3bc 的 T0-T4，不需要空間）。
+    GROW_GIB="${AB_DISK_GROW:-10}"
+    if [[ "$GROW_GIB" != "0" ]]; then
+        CUR=$(stat -f %z "$DISK" 2>/dev/null || stat -c %s "$DISK")
+        NEW=$(( CUR + GROW_GIB * 1024 * 1024 * 1024 ))
+        # truncate 只改檔案長度，不寫任何位元組——sparse 檔案不會因此佔空間。
+        # GPT 備份表頭因此不再位於磁碟末端；systemd-repart 開機時會把它搬到
+        # 正確位置（這也是它成長分割區的必經步驟）。
+        if command -v truncate >/dev/null 2>&1; then
+            truncate -s "$NEW" "$DISK"
+        else
+            python3 -c "import sys; f=open(sys.argv[1],'r+b'); f.truncate(int(sys.argv[2]))" "$DISK" "$NEW"
+        fi
+        echo "[ab] 磁碟由 $CUR 撐到 $NEW bytes（+${GROW_GIB}GiB，/data 開機時自動成長）"
+    fi
 fi
+# AB_PREPARE_ONLY=1：只準備磁碟就結束，不開機。給「開機前還要離線動磁碟」的
+# 流程用（H3d 的 inject-binaries.sh 要在 VM 沒開的時候 mount slot A）。
+if [[ "${AB_PREPARE_ONLY:-0}" == "1" ]]; then
+    echo "[ab] AB_PREPARE_ONLY=1——磁碟已就緒（${DISK}），不開機。"
+    exit 0
+fi
+
 cp "$VARS_TMPL" "$VARS"
 
+# 儀表板轉發埠可覆寫：其他線的 VM 也在跑時 18795 會被佔住，而 QEMU 對
+# hostfwd 佔用是硬失敗（整台開不起來）。序列/QMP 埠不動——探針靠的是那兩個。
+DASH_PORT="${AB_DASH_PORT:-18795}"
+
 echo "[ab] 序列 → 127.0.0.1:47031   QMP → 127.0.0.1:47032"
-echo "[ab] 畫面 → VNC localhost:5902   儀表板 → http://localhost:18795"
+echo "[ab] 畫面 → VNC localhost:5902   儀表板 → http://localhost:${DASH_PORT}"
 
 exec qemu-system-aarch64 \
   -name duduclaw-os-vm-ab \
@@ -52,7 +83,7 @@ exec qemu-system-aarch64 \
   -drive if=pflash,format=raw,readonly=on,file="$CODE" \
   -drive if=pflash,format=raw,file="$VARS" \
   -drive if=virtio,format=raw,file="$DISK" \
-  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:18795-:18789 \
+  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${DASH_PORT}-:18789 \
   -device virtio-net-pci,netdev=net0 \
   -display none \
   -device virtio-gpu-pci -device qemu-xhci,id=usb -device usb-tablet -device usb-kbd \

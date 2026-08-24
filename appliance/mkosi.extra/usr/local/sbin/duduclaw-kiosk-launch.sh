@@ -94,6 +94,9 @@ log() { echo "duduclaw-kiosk-launch: $*" >&2; }
 #                                          session (default 20)
 #   DUDUCLAW_COMP_BACKEND=<name>           passed straight through to
 #                                          duduclaw-comp (default "udev")
+#   DUDUCLAW_KIOSK_AUDIO=0                 skip starting PipeWire/WirePlumber
+#   DUDUCLAW_KIOSK_AUDIO_WAIT_SECS         how long to wait for PipeWire's
+#                                          client socket (default 5)
 KIOSK_ENV_FILE=/etc/duduclaw/kiosk.env
 if [[ -r "$KIOSK_ENV_FILE" ]]; then
     log "sourcing operator env file $KIOSK_ENV_FILE"
@@ -149,6 +152,7 @@ COMP_FAIL_FILE="$KIOSK_HOME/.kiosk-comp-failures"
 COMP_MAX_FAILURES="${DUDUCLAW_KIOSK_COMP_MAX_FAILURES:-3}"
 COMP_SOCKET_WAIT_SECS="${DUDUCLAW_KIOSK_COMP_SOCKET_WAIT_SECS:-10}"
 COMP_SHELL_PROBE_SECS="${DUDUCLAW_KIOSK_COMP_SHELL_PROBE_SECS:-20}"
+AUDIO_WAIT_SECS="${DUDUCLAW_KIOSK_AUDIO_WAIT_SECS:-5}"
 
 # ── Persistent compositor-failure breadcrumb ─────────────────────────────
 # Lives in $HOME (/data/duduclaw-kiosk — the only writable partition;
@@ -195,6 +199,71 @@ comp_socket_name() {
         return 0
     done
     return 0
+}
+
+# ── Audio: PipeWire + WirePlumber (D5, 2026-08-24) ───────────────────────
+# Debian ships both as `systemd --user` units (pipewire.service /
+# wireplumber.service under /usr/lib/systemd/user). This kiosk is a plain
+# systemd SYSTEM service with User=duduclaw-kiosk and no logind session, so
+# there is NO user manager to activate them — exactly the same reason the
+# D-Bus session bus above has to be started by hand. So they are started
+# here, as ordinary background children of this script, which also means
+# systemd's default KillMode=control-group tears them down with the session.
+#
+# Started for EVERY session shape (comp / cage / chromium), before any
+# compositor, because none of them depends on audio and audio depends on
+# none of them: PipeWire only needs $XDG_RUNTIME_DIR (already created at
+# 0700 by the unit's RuntimeDirectory=) and, for WirePlumber, the session
+# bus (started by the dbus-run-session re-exec at the top of this file).
+#
+# Fail-open on every branch, same contract as the fcitx5 block below: a box
+# with no audio hardware, or an image built without these packages, must
+# still reach a working screen. The shell reports the resulting state
+# honestly rather than pretending — `crates/duduclaw-shell/src/audio/` fails
+# to an explicit "audio unavailable" backend on Linux (NOT to its demo
+# backend), and 系統設定 › 聲音 runs its own probe, so a missing daemon
+# surfaces as 「音訊服務未啟動」 instead of a slider that moves and changes
+# nothing.
+#
+# WirePlumber is started AFTER PipeWire's client socket exists rather than
+# in parallel: it is a PipeWire client, and starting it against a socket
+# that is not there yet just makes it retry-or-exit for no reason. The wait
+# is bounded and non-fatal — past the budget we start it anyway and let it
+# report its own failure to the journal, because a stuck wait here would
+# delay the whole screen coming up.
+start_audio_session() {
+    local i
+
+    if [[ "${DUDUCLAW_KIOSK_AUDIO:-1}" == "0" ]]; then
+        log "audio disabled via DUDUCLAW_KIOSK_AUDIO=0 — 音量控制不可用"
+        return 0
+    fi
+    if ! command -v pipewire >/dev/null 2>&1; then
+        log "note: pipewire not installed — 音量控制不可用"
+        return 0
+    fi
+    if [[ -S "$RUNTIME_DIR/pipewire-0" ]]; then
+        log "note: PipeWire socket already present at $RUNTIME_DIR/pipewire-0 — not starting a second daemon"
+        return 0
+    fi
+
+    log "starting PipeWire"
+    pipewire >/dev/null 2>&1 &
+
+    for (( i = 0; i < AUDIO_WAIT_SECS * 10; i++ )); do
+        [[ -S "$RUNTIME_DIR/pipewire-0" ]] && break
+        sleep 0.1
+    done
+    if [[ ! -S "$RUNTIME_DIR/pipewire-0" ]]; then
+        log "WARNING: PipeWire produced no socket within ${AUDIO_WAIT_SECS}s — starting WirePlumber anyway"
+    fi
+
+    if command -v wireplumber >/dev/null 2>&1; then
+        log "starting WirePlumber (PipeWire session manager; ships wpctl, which the shell drives)"
+        wireplumber >/dev/null 2>&1 &
+    else
+        log "note: wireplumber not installed — PipeWire is running but has no session manager, so there will be no default sink"
+    fi
 }
 
 # ── fcitx5 configuration seed (D3-d, reworked in D3-f) ───────────────────
@@ -390,6 +459,10 @@ if [[ "$KIOSK_APP" == "cage" && ! -x "$SHELL_BIN" ]]; then
     log "WARNING: $SHELL_BIN not present/executable — falling back to the Chromium dashboard kiosk"
     KIOSK_APP=chromium
 fi
+
+# Audio comes up before the compositor, once, for whichever session shape
+# was selected above — see start_audio_session's own comment block.
+start_audio_session
 
 # ── comp session ─────────────────────────────────────────────────────────
 # Returns 1 when the session failed EARLY (caller falls back to cage);

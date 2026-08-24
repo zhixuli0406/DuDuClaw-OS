@@ -12,19 +12,31 @@
 #
 # FILE EXTENSION: `.transfer` — see the note in 10-duduclaw-root.transfer.
 #
-# PER-SLOT UKIs (H3a, 2026-08-23): each release builds TWO UKIs that differ
-# only in the `root=PARTUUID=` baked into their cmdline, one per slot (see
-# build.sh's per-slot UKI step). Choosing which of the two to stage into
-# /var/lib/duduclaw/updates/ is our job, not sysupdate's — sysupdate has no
-# conditional logic and cannot pick a payload by destination slot. By the
-# time it runs, the staged `duduclaw-os_<version>.efi` is already the right
-# one for the slot the root transfer above just wrote.
+# PER-SLOT UKIs: the staged `duduclaw-os_<version>.efi` is already bound to
+# the slot the root transfer above writes into — sysupdate has no
+# conditional logic and cannot pick a payload by destination, so that
+# binding is our job, done before it ever runs.
+#
+# HOW the binding happens changed in H3d (2026-08-24), for a measured
+# reason: mkosi seeds systemd-repart with a fresh random UUID per build, so
+# two builds of the same image have completely different partition UUIDs
+# (verified by comparing the GPTs of two of our own artifacts). A UKI
+# carrying the RELEASE HOST's PARTUUID would therefore boot a device into an
+# initrd waiting forever for a partition that does not exist on it — which
+# is exactly the deliberate fault the T3 rollback test injects. So a release
+# ships ONE UKI template and the appliance rewrites its 36-character
+# `root=PARTUUID=` to the real destination slot at staging time
+# (crates/duduclaw-gateway/src/uki_patch.rs). The build-host
+# `.slot-a.efi`/`.slot-b.efi` pair from appliance/tools/uki-slots.py remains
+# a build-time A/B invariant check, not a shipped payload.
+#
+# Staging path: /data/duduclaw/updates — see 10-duduclaw-root.transfer.
 [Transfer]
 ProtectVersion=%A
 
 [Source]
 Type=regular-file
-Path=/var/lib/duduclaw/updates
+Path=/data/duduclaw/updates
 MatchPattern=duduclaw-os_@v.efi
 
 [Target]

@@ -98,11 +98,22 @@ useradd -r -g duduclaw -G netdev -u 1000 -d /data/duduclaw -s /usr/sbin/nologin 
 #                 /dev/dri/renderD* directly (that device is opened by the
 #                 client itself, unlike the DRM "card" device which seatd
 #                 brokers over its socket).
-#     Both groups are standard Debian base-system groups (created by
+#       - audio:  (D5, 2026-08-24) /dev/snd/* is root:audio 0660 on Debian.
+#                 On a normal desktop nobody needs this group, because
+#                 systemd-logind grants the seat's active session an ACL on
+#                 those nodes — but THIS kiosk is a plain system service with
+#                 no logind session at all (that is the same fact that makes
+#                 duduclaw-kiosk-launch.sh start the D-Bus session bus and
+#                 the PipeWire daemons by hand), so no ACL is ever granted
+#                 and the group is the only path to the devices. Without it
+#                 WirePlumber comes up, finds every ALSA card unopenable, and
+#                 the box reports "no output devices" on hardware that has
+#                 them.
+#     All three groups are standard Debian base-system groups (created by
 #     base-passwd / udev respectively), not something this image invents.
 echo "[postinst] creating duduclaw-kiosk system user"
 groupadd -r duduclaw-kiosk
-useradd -r -g duduclaw-kiosk -G video,render -d /data/duduclaw-kiosk \
+useradd -r -g duduclaw-kiosk -G video,render,audio -d /data/duduclaw-kiosk \
     -s /usr/sbin/nologin -c "DuDuClaw kiosk display session" duduclaw-kiosk
 
 echo "[postinst] enabling core units"
@@ -181,8 +192,11 @@ systemctl mask systemd-networkd-wait-online.service
 #   systemd-sysupdate.timer         runs `systemd-sysupdate update` on a
 #                                   schedule. On this appliance that means the
 #                                   box would install whatever happens to be
-#                                   sitting in /var/lib/duduclaw/updates/,
-#                                   without the gateway ever deciding to.
+#                                   sitting in the staging directory
+#                                   (/data/duduclaw/updates), without the
+#                                   gateway ever deciding to — and therefore
+#                                   without H3d's signature check ever
+#                                   having run over it.
 #   systemd-sysupdate-reboot.timer  and then REBOOT itself.
 #   systemd-boot-update.service     runs `bootctl update` at boot, rewriting
 #                                   the bootloader in the ESP. An unannounced

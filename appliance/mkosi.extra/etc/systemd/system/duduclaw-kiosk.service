@@ -101,8 +101,21 @@ Conflicts=getty@tty1.service
 # stuck "start request repeated too quickly", this is the knob — but note
 # that a failing compositor no longer causes a restart at all: the launch
 # script falls back to cage inside the same invocation.
+#
+# Burst raised 5 -> 8 alongside D9-bug8's `Restart=always` change below
+# (see that directive's own comment for the exit-code gap it closes): with
+# `on-failure` a wedged-but-cleanly-exiting session never even attempted a
+# restart, so 5 was never actually exercised in practice. Now that every
+# exit retries, a DIFFERENT still-unknown wedge that free-runs through
+# several fast restarts before self-clearing (e.g. a slow-to-settle GPU/DRM
+# handoff on real hardware) gets a bit more headroom before systemd gives
+# up and marks the unit "start-limit-hit" — which is the other way this
+# same field symptom (no self-heal short of a hard reset) can happen,
+# independently of the exit-code gap. Still bounded: 8 restarts inside the
+# unchanged 300s interval is a genuinely wedged machine, not something this
+# unit should paper over by retrying forever.
 StartLimitIntervalSec=300
-StartLimitBurst=5
+StartLimitBurst=8
 
 [Service]
 Type=simple
@@ -154,7 +167,36 @@ Environment=DUDUCLAW_APPLIANCE=1
 
 ExecCondition=/usr/local/sbin/duduclaw-kiosk-detect-display.sh
 ExecStart=/usr/local/sbin/duduclaw-kiosk-launch.sh
-Restart=on-failure
+# D9-bug8 (2026-08-24, root-caused on the W5-1 VM round): this was
+# `Restart=on-failure` until now, and that is exactly why a wedged kiosk
+# session did not come back on its own. `duduclaw-kiosk-launch.sh`'s
+# `run_comp_session` waits on the SHELL's exit status alone
+# (`wait "$shell_pid" || rc=$?`) and re-`exit`s with it — so whenever the
+# shell's Wayland connection is torn down from underneath it (comp
+# forcibly drops a client it judges misbehaving, or comp itself dies) the
+# shell's own client library treats that as an ordinary "the display is
+# gone" shutdown and exits with status 0, NOT a crash. Measured directly:
+# an unbounded key-repeat flood (see `duduclaw-comp::session_lock`'s own
+# D9-bug7 fix — the same round closed comp's side of this) drove
+# `duduclaw_comp::state`'s `xdg client disconnected … reason=
+# ConnectionClosed`, the shell logged "Error trying to flush the wayland
+# display: Broken pipe" and exited 0, and `duduclaw-kiosk-launch.sh` then
+# `exit`ed 0 too — a *successful* exit, by systemd's own accounting, which
+# `Restart=on-failure` explicitly does not restart (systemd.service(5):
+# on-failure fires on a non-zero exit code, a signal, a watchdog timeout,
+# or a failed start — not on a clean 0 exit). The service just sat
+# `inactive (dead)` — confirmed on the VM round to still be dead 4+
+# minutes later with zero restart attempts logged, matching the wave-4
+# field report's "15 分不自癒" verbatim; only a full VM reset (or here, a
+# manual `systemctl start`) brought it back.
+#
+# A kiosk session has no legitimate reason to exit ever, successfully or
+# not — there is no interactive "quit" affordance and nothing else is
+# supposed to be watching this display. `Restart=always` is therefore the
+# correct policy, not an attempt to force a particular exit code out of
+# the launch script: whatever caused this exit, the right response is
+# "bring the desktop back."
+Restart=always
 RestartSec=5
 
 NoNewPrivileges=yes

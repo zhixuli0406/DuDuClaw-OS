@@ -275,7 +275,7 @@ start_audio_session() {
 # deliberately version-gated rather than every-boot: fcitx5 rewrites
 # `profile` itself whenever the operator switches engine, and stomping that
 # on every boot would make their choice un-keepable.
-FCITX5_SEED_VERSION=2
+FCITX5_SEED_VERSION=3
 
 # Writes the fcitx5 config this appliance depends on, at most once per
 # FCITX5_SEED_VERSION. MUST run while fcitx5 is NOT running: fcitx5 saves
@@ -347,13 +347,46 @@ FCITX5_PROFILE
     # no operator on a kiosk who wants this toggle, and no visible affordance
     # to discover it was pressed.
     #
-    # The other fcitx5 defaults are deliberately LEFT ALONE: Ctrl+Space
-    # (trigger) and Shift_L (alt-trigger) are the two toggles this whole fix
-    # is about; Ctrl+Shift enumerate is redundant with two engines but
-    # harmless; Super+space (group switch) is a no-op with a single group
-    # and was verified not to disturb typing; Tab / Shift+Tab select
-    # candidates only while a composition is in flight, which correctly wins
-    # over the Launcher's own Tab.
+    # AltTriggerKeys (W7-3, 2026-08-24, SEED_VERSION 3): turned OFF — was
+    # `Shift_L` (fcitx5's own default), now empty. This is NOT the D3-f
+    # comment above being wrong; it is a second, DIFFERENT hazard the D3-f
+    # round did not test for. `AltTriggerKeys` fires on a bare Shift
+    # press-and-release with no other key in between, "switch between FIRST
+    # and current Input Method" — and a bare Shift press-and-release is also
+    # the FIRST HALF of every `Shift+letter` chord an operator types for a
+    # capital letter. Two operator reports converged on the same root cause
+    # on a real OOBE run: "打不出小寫英文" (a field lands in `chewing`, per
+    # `ActiveByDefault` below, before the operator has typed anything, so
+    # every plain letter is captured into zhuyin composition instead of
+    # committing — D3-f's own fix only covers a field the operator has
+    # ALREADY tapped Shift in once) and "密碼欄打英文打一打突然變中文" (mid
+    # -password, a Shift held for one capital letter gets misread as the
+    # solitary alt-trigger tap and flips the whole field back to `chewing`
+    # — VM-reproduced: `AltTriggerKeys=Shift_L` toggled the active IM on a
+    # bare Shift with ZERO other key involved, `AltTriggerKeys=` empty left
+    # it on `chewing` across two repeated bare-Shift taps, both confirmed
+    # live via `fcitx5-remote -n` against a real fcitx5 process, not
+    # inferred from the profile alone). `crates/duduclaw-shell`'s
+    # `oobe/ime_focus.rs` (same round) closes the first report by proactively
+    # switching an ASCII-only field's IM to `keyboard-us` on focus via
+    # `fcitx5-remote -s`; this config change closes the second by removing
+    # the only single-key gesture that could ever misfire mid-password. Any
+    # field this appliance does NOT proactively switch (the Launcher search
+    # box, chat) is unaffected by removing `AltTriggerKeys` — those fields
+    # were never relying on a bare-Shift toggle to begin with; they already
+    # start in `chewing` via `ActiveByDefault` and stay there.
+    #
+    # Ctrl+Space (`TriggerKeys`, fcitx5's own default, left unmodified) is
+    # what remains as the operator's manual toggle everywhere `ime_focus.rs`
+    # does not reach — VM-confirmed live (`fcitx5-remote` state query
+    # 2→1 across a QMP-injected Ctrl+Space) that it still works with
+    # `AltTriggerKeys` empty; it is a two-key chord, so it cannot be
+    # produced by accident the way a solitary Shift tap can. Ctrl+Shift
+    # enumerate is redundant with two engines but harmless; Super+space
+    # (group switch) is a no-op with a single group and was verified not to
+    # disturb typing; Tab / Shift+Tab select candidates only while a
+    # composition is in flight, which correctly wins over the Launcher's
+    # own Tab.
     #
     # An option key present with no indexed sub-entries is fcitx5's own
     # encoding for "empty key list" — the value has to be written, because an
@@ -365,6 +398,7 @@ ShareInputState=All
 
 [Hotkey]
 TogglePreedit=
+AltTriggerKeys=
 FCITX5_CONFIG
 
     # ── candidate window: vertical (D3-f P1-1) ───────────────────────────
@@ -385,7 +419,7 @@ FCITX5_CONFIG
     printf 'CandidateLayout=Vertical\n' > "$conf_dir/conf/chewing.conf"
 
     printf '%s' "$FCITX5_SEED_VERSION" > "$marker"
-    log "seeded fcitx5 config (v$FCITX5_SEED_VERSION): keyboard-us/chewing order, 開機即中文, Shift 切中英, 直式候選字"
+    log "seeded fcitx5 config (v$FCITX5_SEED_VERSION): keyboard-us/chewing order, 開機即中文, Ctrl+Space 切中英（Shift 已停用防誤觸）, 直式候選字"
 }
 
 # ── Kiosk app selection ──────────────────────────────────────────────────

@@ -38,6 +38,7 @@ interpreter: `appliance/tests/lib/.venv/bin/python3 <script>`.
 | `screen_check.py` | `screen_contains`, `layer_on_screen`, `wait_for_screen_contains`, `query_window_geometry` | The four-piece work order's screen-content + geometry assertions. |
 | `test_run.py` | `TestRun` | `success(step)` / `fail(step, reason)` artifact convention + `assert_no_failed_units`. |
 | `vm_budget.py` | `ensure_vm_budget`, `wait_for_vm_budget` | Host VM-count guard (the "≤2 concurrent VMs" convention, made scriptable). |
+| `inject-root-password.sh` | shell script, not Python | Injects a known root password into an already-cloned test disk (Docker + losetup + `chroot chpasswd`, no binaries required) so `assert_no_failed_units` can actually log in — see below. |
 
 Minimal example:
 
@@ -144,20 +145,33 @@ including a run that correctly recognized real OOBE text
 ("選擇語言"/"繁體中文"/"已選擇"/"English"/"日本語", bbox-consistent with
 the fixture-tuned parameters) on an independently-booted clone.
 
-**What did NOT run live**: the `assert_no_failed_units` step. A stock
-(non-`APPLIANCE_DEBUG`) clone of `duduclaw-os-vm.raw` ships with **no root
-password at all** — confirmed live via PAM's own `res=failed` audit line
-over serial, matching `commercial/docs/DESIGN-ab-update-rollback-2026-08.md`
-§11.6's same-day, independent finding ("出貨 image 沒有設任何 root 密碼").
-The script detects this and reports a clearly labeled SKIP (exit code `2`,
-distinct from pass `0` and fail `1`) rather than a false pass or a
-misleading fail — `assert_no_failed_units` ITSELF is fully covered by
-`test_pure.py`'s `TestAssertNoFailedUnits` (including the real `●`-column
-parsing bug found there), just not exercised against a live `systemctl` on
-this particular disk. Pass `--root-password` if testing a disk that had one
-injected (e.g. via `ab-update/inject-binaries.sh`'s `AB_ROOT_PASSWORD` —
-that path needs Docker + built `duduclaw`/`duduclaw-sysd` binaries and is
-out of this library's own scope to duplicate).
+**What did NOT run live (as of the original 2026-08-24 run)**: the
+`assert_no_failed_units` step. A stock (non-`APPLIANCE_DEBUG`) clone of
+`duduclaw-os-vm.raw` ships with **no root password at all** — confirmed live
+via PAM's own `res=failed` audit line over serial, matching `commercial/
+docs/DESIGN-ab-update-rollback-2026-08.md` §11.6's same-day, independent
+finding ("出貨 image 沒有設任何 root 密碼"). The script detects this and
+reports a clearly labeled SKIP (exit code `2`, distinct from pass `0` and
+fail `1`) rather than a false pass or a misleading fail — `assert_no_failed_
+units` ITSELF is fully covered by `test_pure.py`'s `TestAssertNoFailedUnits`
+(including the real `●`-column parsing bug found there), just not exercised
+against a live `systemctl` on this particular disk. Pass `--root-password`
+if testing a disk that had one injected — e.g. via `ab-update/inject-
+binaries.sh`'s `AB_ROOT_PASSWORD` (needs Docker + built `duduclaw`/
+`duduclaw-sysd` binaries; that script's real job is swapping binaries, the
+password is a side effect), or via this library's own
+**`inject-root-password.sh`** (M1, 2026-08-24 — closes the gap this
+paragraph used to describe as "out of this library's own scope to
+duplicate"): the same Docker + losetup + `chroot chpasswd` convention,
+extracted into a standalone script that needs no built binaries at all —
+password injection only, on an already-cloned test disk, never the master
+disk (hard-refuses a target literally named `duduclaw-os-vm.raw`).
+
+```bash
+# Stop the clone's VM first (mount races a running QEMU), then:
+appliance/tests/lib/inject-root-password.sh appliance/.vm/duduclaw-os-w53.raw duduclaw
+# then boot it and pass --root-password duduclaw (or whatever you chose)
+```
 
 ### Tests
 

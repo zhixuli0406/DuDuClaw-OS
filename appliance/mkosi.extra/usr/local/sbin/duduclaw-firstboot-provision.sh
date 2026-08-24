@@ -7,6 +7,17 @@ set -euo pipefail
 DUDUCLAW_HOME=/data/duduclaw
 SYSTEM_DIR=/data/duduclaw/system
 mkdir -p "$DUDUCLAW_HOME" "$SYSTEM_DIR"
+# $SYSTEM_DIR holds device.key (a device secret, already chmod 600 below)
+# and machine-id — `mkdir -p` alone leaves the directory itself at the
+# process umask's default (typically 0755, group/other-readable), which
+# would let another local account enumerate its contents even though it
+# can't read device.key's bytes. Tightened here for every install from this
+# point forward; a device provisioned before this line existed is brought
+# in line retroactively by the H3g migration
+# (usr/share/duduclaw/migrations/1787540626.sh) instead of being silently
+# left behind — see duduclaw_core::data_migrations for why /data changes
+# need a forward-only migrator at all (A/B only rolls back root).
+chmod 700 "$SYSTEM_DIR"
 
 # --- machine-id persistence -------------------------------------------
 # machine-id(5) recommends shipping /etc/machine-id empty in an image
@@ -86,5 +97,31 @@ EOF
     mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     chown duduclaw:duduclaw "$CONFIG_PATH"
 fi
+
+# --- H3g /data migrations baseline (fresh-machine detection) -------------
+# This is the ONE moment a device can be told, unambiguously, "this /data
+# was never migrated forward from an older release" versus "this /data has
+# been running for a while and genuinely needs whatever is pending" — this
+# script only ever runs once, on the actual first boot (guarded by the
+# unit's `ConditionPathExists=!.../system/.provisioned` and its own
+# self-disabling ExecStartPost). A brand-new device's baked-in
+# config/db/directory state already matches whatever shape this image's
+# migrations would produce (they were written against THIS image), so
+# replaying them would be redundant at best and, for a script written to
+# transform an old shape, actively wrong at worst. Every migration script
+# that ships in this image is therefore marked already-applied here, never
+# executed. See crates/duduclaw-core/src/data_migrations.rs for the full
+# mechanism and crates/duduclaw-cli/src/data_migrate.rs for the CLI/systemd
+# front door that reads these markers on every later boot.
+MIGRATIONS_SRC_DIR="${DUDUCLAW_MIGRATIONS_DIR:-/usr/share/duduclaw/migrations}"
+MIGRATIONS_MARKER_DIR="$SYSTEM_DIR/migrations"
+mkdir -p "$MIGRATIONS_MARKER_DIR"
+if [[ -d "$MIGRATIONS_SRC_DIR" ]]; then
+    for script in "$MIGRATIONS_SRC_DIR"/*.sh; do
+        [[ -e "$script" ]] || continue   # glob didn't match anything: no migrations shipped yet
+        touch "$MIGRATIONS_MARKER_DIR/$(basename "$script")"
+    done
+fi
+chown -R duduclaw:duduclaw "$MIGRATIONS_MARKER_DIR"
 
 touch "$SYSTEM_DIR/.provisioned"

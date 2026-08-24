@@ -1,0 +1,70 @@
+# DuDuClaw OS /data forward-only settings migrator (H3g, 2026-08-24).
+#
+# THE PROBLEM THIS CLOSES: the appliance's A/B update scheme only ever rolls
+# back root (see commercial/docs/DESIGN-ab-update-rollback-2026-08.md).
+# /data (this unit's DUDUCLAW_HOME) is never part of a slot and never rolls
+# back — so any on-disk shape change under /data across a release (a
+# renamed key, a relocated file, a directory that now needs stricter
+# permissions, …) has no A/B safety net at all. This unit replays baked-in
+# `/usr/share/duduclaw/migrations/*.sh` scripts (read-only, rolls back WITH
+# the root slot) against /data, tracking completion via marker files ON
+# /data (which never roll back — see crates/duduclaw-core/src/
+# data_migrations.rs for the full mechanism). Design borrowed from
+# basecamp/omarchy's migrations/ (research/native-os-2026-08/
+# omarchy-borrowings-2026-08.md §2.3), which hits the identical structural
+# gap for its own non-A/B update model.
+#
+# WHY Before= duduclaw-gateway.service BUT NOT Requires= (in that
+# direction): the appliance is unattended. A migration bug that blocked
+# gateway startup would turn one bad script into a fleet of boxes nobody can
+# reach to fix — worse than the format-drift problem this unit exists to
+# solve. So this unit orders itself strictly BEFORE the gateway (Before=,
+# ordering only) without gaining the power to stop it (no Wants=/Requires=
+# added on the gateway side) — see duduclaw-gateway.service's own After=
+# line, which lists this unit for ordering and nothing stronger. A failed
+# run is never silent: crates/duduclaw-core/src/data_migrations.rs durably
+# records it (readable via `read_failure`), and this unit itself ends in
+# `failed` state (visible in `systemctl --failed` / journalctl), which the
+# gateway is expected to surface to the dashboard Activity Feed / audit log
+# once it is up.
+#
+# WHY After=/Requires= duduclaw-firstboot-provision.service: that unit is
+# what creates DUDUCLAW_HOME and $DUDUCLAW_HOME/system in the first place,
+# AND is the one place that seeds the migrations marker directory with
+# every currently-shipped script pre-marked applied on an actual first boot
+# (see the "H3g /data migrations baseline" block near the end of
+# duduclaw-firstboot-provision.sh) — this unit must never run before that
+# seeding has had the chance to happen, or a brand-new device would see its
+# own baked-in migrations as "pending" and replay them for nothing.
+#
+# WHY User=duduclaw (not root): every migration script's target is
+# $DUDUCLAW_HOME content, already owned end-to-end by the unprivileged
+# `duduclaw` account (the same one the gateway itself runs as) — matching
+# omarchy's own per-user (never root) migration convention. A migration
+# needing root-only OS-image changes is out of scope for this mechanism; it
+# belongs in the mkosi image / postinst.d instead.
+[Unit]
+Description=DuDuClaw OS /data forward-only settings migrations (H3g)
+Documentation=file:///usr/local/bin/duduclaw (data-migrate subcommand)
+Documentation=file:///usr/share/duduclaw/migrations
+After=duduclaw-firstboot-provision.service
+Requires=duduclaw-firstboot-provision.service
+Before=duduclaw-gateway.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=duduclaw
+Group=duduclaw
+Environment=DUDUCLAW_HOME=/data/duduclaw
+ExecStart=/usr/local/bin/duduclaw data-migrate --run
+# No Restart= — a failing migration should not retry-loop on its own; the
+# unit ending in `failed` state, with the script's own echo + stderr in the
+# journal, is itself the audit signal. Bounded budget: migrations are meant
+# to be quick, deterministic filesystem/config edits, not long-running
+# operations — a script that hangs this long is itself a bug to fix, not a
+# timing case to accommodate.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

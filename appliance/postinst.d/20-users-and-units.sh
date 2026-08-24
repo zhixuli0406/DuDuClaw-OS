@@ -127,6 +127,7 @@ systemctl enable \
     seatd.service \
     duduclaw-firstboot-repart.service \
     duduclaw-firstboot-provision.service \
+    duduclaw-data-migrate.service \
     duduclaw-sysd.service \
     duduclaw-gateway.service \
     duduclaw-usb-install.service \

@@ -46,7 +46,12 @@ Description=DuDuClaw gateway (appliance profile)
 # "fully online" only stalls the dashboard. systemd-networkd-wait-online was
 # observed blocking ~120s before failing under QEMU's virtio-net, delaying
 # the whole boot; the gateway must not inherit that wait.
-After=duduclaw-firstboot-provision.service docker.service duduclaw-sysd.service
+#
+# duduclaw-data-migrate.service (H3g) is ordering-only here — After=, never
+# Wants=/Requires= — so a failed /data migration never blocks the gateway
+# from starting on an unattended box; see that unit's own file for the full
+# argument. Requires=duduclaw-firstboot-provision.service is unaffected.
+After=duduclaw-firstboot-provision.service docker.service duduclaw-sysd.service duduclaw-data-migrate.service
 Wants=duduclaw-sysd.service
 Requires=duduclaw-firstboot-provision.service
 # StartLimitIntervalSec=/StartLimitBurst= belong in [Unit], not [Service]

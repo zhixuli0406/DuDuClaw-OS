@@ -32,7 +32,8 @@ appliance/
 │   ├── etc/systemd/system/     first-boot + gateway + kiosk + Wi-Fi units
 │   ├── etc/sysupdate.d/        A/B update transfer definitions
 │   ├── usr/lib/tmpfiles.d/     dirs created on every boot (Wi-Fi cred store)
-│   └── usr/local/sbin/         the scripts those units run
+│   ├── usr/local/sbin/         the scripts those units run
+│   └── usr/share/duduclaw/migrations/   /data forward-only settings migrations (H3g)
 ├── postinst.d/           scripts run once, inside the build chroot
 ├── tests/wifi-hwsim/     Wi-Fi walkthrough on simulated radios (never shipped)
 ├── Dockerfile.mkosi-runner   mkosi build environment for non-Linux hosts
@@ -312,6 +313,19 @@ onboarding flow all need a real machine.
    Wi-Fi loudly instead of quietly writing credentials to a root slot the
    next A/B update discards. IP addressing is systemd-networkd's job
    (`etc/systemd/network/25-wireless-dhcp.network`), not iwd's.
+4c. `duduclaw-data-migrate.service` (H3g): replays whatever
+   `/usr/share/duduclaw/migrations/*.sh` scripts have not yet been marked
+   applied under `/data/duduclaw/system/migrations/`, oldest first — the
+   forward-only complement to A/B rollback, which only ever restores root
+   and never touches `/data`. On a device's actual first boot,
+   `duduclaw-firstboot-provision.service` (step 4) has already marked every
+   migration shipped in the current image as applied, so this is a fast
+   no-op there. A failed migration does **not** stop the boot (`Before=` the
+   gateway, not `Requires=`) — it is recorded to
+   `/data/duduclaw/system/migrations.failed.json` and left in `systemctl
+   --failed` / the journal for an operator or the gateway to surface. See
+   `crates/duduclaw-core/src/data_migrations.rs` and `duduclaw data-migrate
+   --pending|--check|--run`.
 5. `duduclaw-gateway.service` starts, Avahi advertises `duduclaw.local`,
    nftables allows only the dashboard port + mDNS in from the LAN. It now
    also `sd_notify`s systemd (`Type=notify` + `WatchdogSec=60`) once its

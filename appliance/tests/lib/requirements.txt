@@ -1,0 +1,13 @@
+# Only third-party dependency this library needs: Pillow, for screenshot
+# preprocessing (crop / grayscale / invert / threshold / upscale) before
+# handing images to the `tesseract` CLI. OCR itself shells out to
+# `tesseract` directly (no pytesseract) — see ocr.py's module doc.
+#
+# Setup (one-time):
+#   python3 -m venv appliance/tests/lib/.venv
+#   appliance/tests/lib/.venv/bin/pip install -r appliance/tests/lib/requirements.txt
+#
+# Host also needs the `tesseract` CLI itself + the chi_tra (Traditional
+# Chinese) + eng language data, installed separately (not a pip package):
+#   brew install tesseract tesseract-lang
+Pillow>=10.0

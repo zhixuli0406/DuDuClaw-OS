@@ -1,0 +1,7 @@
+# Local venv (see requirements.txt for setup) — never committed, same
+# reasoning as any other project-local Python venv.
+.venv/
+
+# Python bytecode caches.
+__pycache__/
+*.pyc

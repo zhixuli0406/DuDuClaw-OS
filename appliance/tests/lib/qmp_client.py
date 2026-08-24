@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Minimal QMP client for appliance VM acceptance testing.
+
+Adapted from the ad-hoc, host-local (gitignored, per `appliance/.gitignore`'s
+`.vm/` rule) `appliance/.vm/inject/qmp.py` and `screendump.py` scripts that
+earlier wave sessions wrote and re-wrote per probe. Those two scripts proved
+the pattern (raw newline-delimited JSON over the `-qmp tcp:...` socket,
+`screendump`'s `filename` argument is resolved by QEMU on the HOST
+filesystem, not inside the guest) but never existed anywhere git tracks, so
+every fresh checkout had to reinvent them. This module is that pattern,
+promoted to a committed, reusable library — see `screendump()`'s own doc
+comment for a real-PNG-vs-PPM format gotcha found live 2026-08-24 that the
+scripts this was adapted from did not handle either.
+
+Usage as a library:
+    from qmp_client import QmpClient
+    with QmpClient("127.0.0.1", 47046) as qmp:
+        qmp.screendump("/path/to/out.png")
+        status = qmp.query_status()
+
+Usage as a CLI (kept for parity with the old qmp.py, e.g. quick manual
+probing from a shell):
+    qmp_client.py <host> <port> screendump <out.png>
+    qmp_client.py <host> <port> query-status
+    qmp_client.py <host> <port> system_reset
+"""
+from __future__ import annotations
+
+import json
+import socket
+import sys
+import time
+from dataclasses import dataclass
+
+
+class QmpError(RuntimeError):
+    """A QMP command returned an `"error"` object instead of `"return"`."""
+
+
+@dataclass(frozen=True)
+class QmpGreeting:
+    raw: dict
+
+
+class QmpClient:
+    """One QMP connection: connect, negotiate capabilities, issue commands.
+
+    Deliberately synchronous/blocking (same as the scripts this replaces) —
+    acceptance tests issue one command, wait for the reply, move on. No
+    event-stream handling; if a future helper needs QMP events it should
+    extend this class rather than grow a second parallel client.
+    """
+
+    def __init__(self, host: str, port: int, connect_timeout: float = 10.0):
+        self.host = host
+        self.port = port
+        self.connect_timeout = connect_timeout
+        self.sock: socket.socket | None = None
+        self.greeting: QmpGreeting | None = None
+
+    def __enter__(self) -> "QmpClient":
+        self.connect()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
+        self.greeting = QmpGreeting(self._recv_one(timeout=5.0))
+        self._send_raw({"execute": "qmp_capabilities"})
+        ack = self._recv_one(timeout=5.0)
+        if "error" in ack:
+            raise QmpError(f"qmp_capabilities negotiation failed: {ack['error']}")
+
+    def close(self) -> None:
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            finally:
+                self.sock = None
+
+    def _send_raw(self, obj: dict) -> None:
+        assert self.sock is not None, "QmpClient used before connect()"
+        self.sock.sendall((json.dumps(obj) + "\n").encode())
+
+    def _recv_one(self, timeout: float = 8.0) -> dict:
+        """Read exactly one newline-terminated JSON object. QMP is one
+        object per line, so this is simpler than the old qmp.py's
+        MSG_PEEK-based "keep reading until quiet" heuristic — that
+        heuristic existed only because that script read many replies in a
+        loop without knowing how many to expect. Here every call site
+        knows exactly one object is coming next."""
+        assert self.sock is not None, "QmpClient used before connect()"
+        self.sock.settimeout(timeout)
+        buf = b""
+        while b"\n" not in buf:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        line, _, _rest = buf.partition(b"\n")
+        if not line.strip():
+            raise QmpError("QMP connection closed before a reply arrived")
+        return json.loads(line)
+
+    def command(self, execute: str, arguments: dict | None = None, timeout: float = 8.0) -> dict:
+        """Issue one QMP command, return its `"return"` payload. Raises
+        QmpError if QEMU answered with `"error"` instead."""
+        cmd: dict = {"execute": execute}
+        if arguments:
+            cmd["arguments"] = arguments
+        self._send_raw(cmd)
+        # QMP may interleave an unrelated event before the command's own
+        # reply; skip any object that isn't return/error (mirrors the old
+        # qmp.py's loop-until-return-or-error, but for a single command).
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            obj = self._recv_one(timeout=max(0.1, deadline - time.time()))
+            if "return" in obj:
+                return obj["return"]
+            if "error" in obj:
+                raise QmpError(f"{execute} failed: {obj['error']}")
+        raise QmpError(f"{execute}: no return/error within {timeout}s")
+
+    def screendump(self, out_path: str, settle: float = 0.3) -> None:
+        """Dump the current framebuffer straight to a PNG on THIS host.
+        `settle` gives QEMU a moment after issuing the command before the
+        caller starts reading the file — matches the old screendump.py's
+        `time.sleep(0.5)` (found necessary in practice: the QMP reply can
+        race the file actually being flushed to disk on a busy host).
+
+        Explicitly passes `format: "png"` — found live (2026-08-24, this
+        library's first real VM boot) that `screendump` does NOT infer the
+        format from `out_path`'s extension: with no `format` argument this
+        exact QEMU build (11.1.0, homebrew, libpng linked and everything)
+        silently wrote a raw PPM (`P6` magic) to a path ending in `.png`.
+        `query-qmp-schema` confirms `screendump`'s `format` field is a real
+        enum (`ppm` | `png`), default null == ppm. Omitting it doesn't
+        break THIS library (`ocr.py`'s Pillow preprocessing sniffs actual
+        file content, not the extension, so OCR was unaffected) but it
+        does produce artifact files that lie about their own format to any
+        other tool/human that trusts the `.png` extension — see
+        `test_run.py`'s `fail()`/`success()` artifacts, which is exactly
+        where this was first noticed."""
+        self.command("screendump", {"filename": out_path, "format": "png"})
+        time.sleep(settle)
+
+    def query_status(self) -> dict:
+        return self.command("query-status")
+
+    def system_reset(self) -> None:
+        self.command("system_reset")
+
+
+def _main() -> None:
+    if len(sys.argv) < 4:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    host, port, op = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    with QmpClient(host, port) as qmp:
+        print("GREETING:", qmp.greeting.raw)
+        if op == "screendump":
+            out = sys.argv[4]
+            qmp.screendump(out)
+            print("screendump ->", out)
+        elif op == "query-status":
+            print(qmp.query_status())
+        elif op == "system_reset":
+            qmp.system_reset()
+            print("reset issued")
+        else:
+            print(f"unknown op {op}", file=sys.stderr)
+            sys.exit(2)
+
+
+if __name__ == "__main__":
+    _main()

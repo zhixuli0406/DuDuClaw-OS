@@ -31,6 +31,14 @@ Design matrix (commercial/docs/DESIGN-ab-update-rollback-2026-08.md §6.2):
            the machine to the previous one.
   t7       Two consecutive bad updates must not exhaust both entries — the
            rollback target has to survive.
+  t8r      H3d §11.7: a version rolled back via t6 must be re-installable.
+           Run straight after t2 then t6 on the same disk (the guest is now
+           back on the OLD slot with the NEW version's ESP entry exhausted
+           and its partition label untouched — exactly the state a manual
+           rollback leaves behind). Re-applies the SAME release and checks
+           the ESP/partition state directly, not just the RPC's own claim
+           of success — the bug this closes is `update_apply` reporting
+           success while changing nothing at all.
   esp      ESP peak measurement during a real update (T9 follow-up).
 
 Usage:
@@ -40,6 +48,7 @@ Usage:
   h3df_probe.py t5   [...]
   h3df_probe.py t6   [...]
   h3df_probe.py t7   [...]
+  h3df_probe.py t8r  [...]   # run right after t2 then t6 on the same disk
 
 The VM is expected to be running already (appliance/tests/ab-update/boot-ab.sh),
 same as h3bc_probe.py.
@@ -990,10 +999,127 @@ def cmd_t7(args) -> int:
     return 0
 
 
+def cmd_t8r(args) -> int:
+    """H3d §11.7: a version rolled back via t6 must be re-installable.
+
+    Preconditions asserted before doing anything: the destination
+    partition is still labelled with `--version` (rollback never touches
+    partition labels) AND the ESP still holds an EXHAUSTED entry for it
+    (`+0-N`, what t6 leaves behind). Without both, this is not being run in
+    the state it needs — fail loudly rather than silently testing nothing.
+
+    The decisive checks are on the machine's OWN state, not on
+    `device.update_apply`'s response: a fresh, non-exhausted ESP entry
+    (`+N-0`, N>=1) must appear and the stale exhausted one must be gone,
+    AND the machine must actually boot into the target version after a
+    reboot. Reporting `_rc == 0` alone would have passed under the bug this
+    closes — that is precisely what "reports success but changes nothing"
+    means.
+    """
+    release = release_dir(args.version)
+    if not (release / "SHA256SUMS.minisig").exists():
+        print(f"[h3df] no signed release at {release} — run `fixture` first", file=sys.stderr)
+        return 2
+
+    console = connect(args)
+    ensure_rpc_client(console, args.http_port + 1)
+    if "NEED-LOGIN" in console.run("test -s /tmp/jwt && echo HAVE || echo NEED-LOGIN", timeout=30):
+        guest_login(console)
+
+    before = collect(console, SLOT_CHECKS)
+    start_dev = before["root-source"].strip()
+    esp_before = before["esp-ukis"]
+    target_stem = f"duduclaw-os_{args.version}"
+
+    if target_stem not in before["partlabels"]:
+        print(f"[h3df] FATAL: no partition labelled {target_stem} — run `t2` then `t6` "
+              f"on this disk first", file=sys.stderr)
+        return 2
+    if not re.search(rf"{re.escape(target_stem)}\+0-\d+\.efi", esp_before):
+        print(f"[h3df] FATAL: no EXHAUSTED ESP entry for {args.version} — this probe must "
+              f"run right after `t6` rolled that version back, got:\n{esp_before}",
+              file=sys.stderr)
+        return 2
+    print(f"[h3df] precondition confirmed: {target_stem} partition present, "
+          f"its ESP entry is exhausted — this is exactly the state §11.7 describes")
+
+    httpd = serve(release.parent, args.http_port)
+    try:
+        set_source_url(
+            console,
+            f"http://{HOST_FROM_GUEST}:{args.http_port}/duduclaw-os_{args.version}")
+        t0 = time.time()
+        res = rpc(console, "device.update_apply", timeout=args.apply_timeout)
+        print(f"[h3df] device.update_apply (re-apply after rollback) took "
+              f"{time.time() - t0:.0f}s")
+        print(json.dumps(res, ensure_ascii=False, indent=2)[:2000])
+    finally:
+        httpd.shutdown()
+    reported_ok = res.get("_rc") == 0
+
+    after_apply = collect(console, [
+        ("esp-ukis", 'ls -la "$(bootctl -p)"/EFI/Linux/'),
+        ("partlabels", "ls -l /dev/disk/by-partlabel/ | tail -n +2"),
+    ])
+    esp_after_apply = after_apply["esp-ukis"]
+
+    # `+[1-9]\d*-` = a NON-zero tries-left counter: a freshly installed
+    # instance sd-boot can still try. `+0-` = the exhausted shape t6 left.
+    has_fresh_entry = re.search(
+        rf"{re.escape(target_stem)}\+[1-9]\d*-\d+\.efi", esp_after_apply) is not None
+    still_exhausted_only = re.search(
+        rf"{re.escape(target_stem)}\+0-\d+\.efi", esp_after_apply) is not None
+
+    failures: list[str] = []
+    if not has_fresh_entry or still_exhausted_only:
+        stale_state = "present" if still_exhausted_only else "gone but no fresh entry replaced it"
+        failures.append(
+            "the ESP does not show a fresh, evaluable entry after re-applying — the stale "
+            f"exhausted entry is still {stale_state}. This is the §11.7 bug: sysupdate saw "
+            f"the version as already installed and wrote nothing.\n"
+            f"    esp before:      {esp_before}\n"
+            f"    esp after apply: {esp_after_apply}")
+
+    print("\n### rebooting to confirm the reinstalled version actually boots")
+    outcome = reboot_and_wait(console, args, how="guest")
+    final_dev, final_version = start_dev, "?"
+    if outcome == "login":
+        final = collect(console, SLOT_CHECKS)
+        final_dev = final["root-source"].strip()
+        m = re.search(r'IMAGE_VERSION="?([^"\s]+)', final["image-version"])
+        final_version = m.group(1) if m else "?"
+    else:
+        failures.append(f"the machine did not come back after the re-apply+reboot ({outcome})")
+
+    reinstalled_and_booted = outcome == "login" and final_dev != start_dev
+    if not reinstalled_and_booted:
+        failures.append(
+            f"after re-applying {args.version} following a rollback, the machine is STILL on "
+            f"{final_dev} (IMAGE_VERSION={final_version}) instead of the reinstalled version "
+            f"— the exact §11.7 symptom: update_apply reported "
+            f"{'success' if reported_ok else 'rc=' + str(res.get('_rc'))} but the box never "
+            f"actually reinstalled anything")
+
+    print("=" * 70)
+    print(f"before:  {start_dev}   target: {target_stem}")
+    print(f"esp before:      {esp_before}")
+    print(f"esp after apply: {esp_after_apply}")
+    print(f"after reboot:    {final_dev} (IMAGE_VERSION={final_version})")
+    if failures:
+        print(f"T8r (reinstall after rollback, H3d §11.7): FAIL ({len(failures)})")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print(f"T8r (reinstall after rollback, H3d §11.7): PASS — {start_dev} -> {final_dev}, "
+          f"{args.version} genuinely reinstalled (fresh ESP entry, stale one cleared) and "
+          f"booted after having been manually rolled back once")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["fixture", "sig", "t2", "t5", "t6", "t7"])
+    ap.add_argument("mode", choices=["fixture", "sig", "t2", "t5", "t6", "t7", "t8r"])
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--serial", type=int, default=47031)
     ap.add_argument("--qmp", type=int, default=47032)
@@ -1020,7 +1146,7 @@ def main() -> int:
     args = ap.parse_args()
 
     return {"fixture": cmd_fixture, "sig": cmd_sig, "t2": cmd_t2,
-            "t5": cmd_t5, "t6": cmd_t6, "t7": cmd_t7}[args.mode](args)
+            "t5": cmd_t5, "t6": cmd_t6, "t7": cmd_t7, "t8r": cmd_t8r}[args.mode](args)
 
 
 if __name__ == "__main__":

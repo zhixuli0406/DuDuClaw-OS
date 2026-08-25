@@ -1,0 +1,43 @@
+# Yocto/kas build container for meta-duduclaw. macOS has no native bitbake
+# support (bitbake requires a real Linux host — pseudo/fakeroot, inotify,
+# and various build steps assume Linux syscalls), so this is the Linux
+# build environment, analogous to appliance/Dockerfile.mkosi-runner's role
+# for the (frozen) Debian appliance line.
+#
+# Debian trixie-slim to match this repo's existing Docker convention
+# (appliance/Dockerfile.*). Package list is the Yocto Project "Quick Build"
+# reference host-dependency list (docs.yoctoproject.org/brief-yoctoprojectqs)
+# minus gcc-multilib: that package assumes an x86 host adding 32-bit
+# support, which is meaningless on this arm64 (Apple Silicon) Docker Desktop
+# host — Yocto cross-compiles its own target toolchain regardless of host
+# arch, so it is not needed for building an x86-64 target from an arm64
+# build machine.
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gawk wget git diffstat unzip texinfo build-essential chrpath \
+        socat cpio python3 python3-pip python3-pexpect python3-git \
+        python3-jinja2 python3-subunit zstd file locales \
+        libacl1 lz4 xz-utils debianutils iputils-ping ca-certificates \
+        sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# bitbake hard-refuses to run without a real UTF-8 locale.
+RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
+ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+# kas isn't packaged for Debian; pip is the upstream-recommended install
+# path. --break-system-packages: this is a disposable single-purpose build
+# container, not a host system whose Python needs protecting (PEP 668).
+RUN pip3 install --no-cache-dir --break-system-packages kas==5.5
+
+# bitbake HARD-refuses to run as root (OE-core's sanity checker: "Do not
+# use Bitbake as root") — discovered running `bitbake -e` as the container's
+# default root user during Y1-1 bring-up. uid 1000 to line up with the
+# typical first non-root uid on the bind-mounted macOS host side.
+RUN useradd -m -s /bin/bash -u 1000 yocto \
+    && echo 'yocto ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/yocto
+
+WORKDIR /workspace
+USER yocto
+ENTRYPOINT ["/bin/bash"]

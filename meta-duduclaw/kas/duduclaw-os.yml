@@ -1,0 +1,144 @@
+# kas build config — DuDuClaw OS Y1-1 bring-up.
+#
+# Chosen over manual `bitbake-layers add-layer` + hand-edited local.conf
+# because it is the "選最簡" option the task called for: one declarative
+# file pins every upstream repo's exact commit and declares the layer set —
+# see meta-duduclaw/README.md "為什麼選 kas" for the fuller rationale.
+#
+# Usage (from the Docker builder container, cwd = /workspace = repo root):
+#   kas build meta-duduclaw/kas/duduclaw-os.yml
+#   kas shell meta-duduclaw/kas/duduclaw-os.yml   # interactive bitbake shell
+#
+# --- Pin rationale (2026-08-25, all verified one-hand against
+# git.openembedded.org / git.yoctoproject.org / downloads.yoctoproject.org,
+# NOT guessed from training data) -----------------------------------------
+#
+# Target release: Yocto Project 6.0 "wrynose", the current LTS as of
+# 2026-08-25 (supported to 2028-04 per the LTS grilling ticket decision).
+# Its own default kernel is already Linux 6.18 — the exact LTS the kernel
+# research ticket independently recommended, so this bring-up needs no
+# separate kernel-version fight (see kernel-self-maintain-2026-08.md).
+#
+# THREE separate repos, not a single "poky" combo-repo checkout. This was
+# a real dead end hit during bring-up: git.yoctoproject.org/poky DOES have
+# tags shaped like "edison-6.0.2", but "edison" is poky's OWN internal
+# release-counter codename from a completely different (~2012-era) release
+# — its HEAD commit log reads "documentation: Updated Manual Revision
+# Tables for 1.1.2". Checked out and grepped before catching this: zero
+# uki.bbclass, zero wic tooling, wrong meta-yocto layout — all because the
+# checkout was 14 years stale, not because "wrynose" lacks these features.
+# No "wrynose-*" tag exists on that repo at all (verified against both
+# git.yoctoproject.org and the github.com/yoctoproject mirror).
+#
+# The actual release artifacts, confirmed from
+# https://downloads.yoctoproject.org/releases/yocto/yocto-6.0.2/ (which
+# lists exact per-component commit hashes, not a poky tag), are three
+# separate repos + exact commits:
+#   bitbake            acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd
+#   openembedded-core  5d1aa5c806c061a2994f4decb59016610f093213
+#   meta-yocto         24c24cef5d1523fefe43a3e3d34667b37ae551f3
+# Each verified reachable via its cgit /commit/?id=<hash> page (HTTP 200)
+# before being pinned here. meta-yocto's own tree at that commit still
+# contains meta-poky/ and meta-yocto-bsp/ as subdirectories (verified via
+# cgit tree listing) — same two layers Yocto has shipped for years, just
+# no longer bundled into a "poky" super-repo for this release.
+#
+# uki.bbclass (meta/classes-recipe/uki.bbclass) and image_types_wic.bbclass
+# both confirmed present at the pinned oe-core commit — see
+# meta-duduclaw/README.md "UKI 接通紀錄" for the exact config this class
+# needs (lifted directly from oe-core's own CI selftest,
+# meta/lib/oeqa/selftest/cases/uki.py, not guessed).
+
+header:
+  version: 14
+
+machine: duduclaw-qemux86-64
+distro: duduclaw-os
+
+target:
+  - duduclaw-image-minimal
+
+repos:
+  bitbake:
+    url: https://git.openembedded.org/bitbake
+    commit: acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd
+    # bitbake itself is not a bitbake LAYER (no conf/layer.conf) — it's the
+    # tool. `layers: {}` tells kas not to add its checkout path to
+    # bblayers.conf; kas still special-cases a repo dir literally named
+    # "bitbake" as BITBAKEDIR regardless of this key.
+    layers: {}
+
+  openembedded-core:
+    url: https://git.openembedded.org/openembedded-core
+    commit: 5d1aa5c806c061a2994f4decb59016610f093213
+    layers:
+      meta:
+
+  meta-yocto:
+    url: https://git.yoctoproject.org/meta-yocto
+    commit: 24c24cef5d1523fefe43a3e3d34667b37ae551f3
+    layers:
+      meta-poky:
+      meta-yocto-bsp:
+
+  # This layer. No url — kas treats a repo with no `url` as already checked
+  # out at `path` relative to $KAS_WORK_DIR (repo root when kas is invoked
+  # from /workspace).
+  meta-duduclaw:
+    path: meta-duduclaw
+
+# bitbake conf lines appended to build/conf/local.conf. Build-time concerns
+# (cache locations, parallelism) live here rather than in the distro conf,
+# which should stay build-machine-agnostic.
+local_conf_header:
+  duduclaw-bringup: |
+    # Big directories bind-mounted to HOST disk (not the Docker Desktop VM's
+    # own ~58G virtual disk, which only had ~17G free at bring-up time) —
+    # see meta-duduclaw/README.md "磁碟策略" for the full reasoning.
+    DL_DIR ?= "/yocto-cache/downloads"
+    SSTATE_DIR ?= "/yocto-cache/sstate-cache"
+
+    # TMPDIR moved OFF the host-bind-mounted case-sensitive APFS volume and
+    # onto a Docker named volume (backed by the Docker Desktop VM's own
+    # native ext4/overlay filesystem, no virtiofs translation layer)
+    # 2026-08-25 after two real failures on the bind-mounted path: two
+    # DIFFERENT native recipes (texinfo-dummy-native, then quilt-native →
+    # gnu-config-native) each failed with a downstream consumer getting
+    # "No such file or directory" reading a file an EARLIER task had
+    # already reported as successfully populated into TMPDIR/sysroots-
+    # components — a write-then-immediate-read visibility gap consistent
+    # with virtiofs metadata caching under a build tool that assumes POSIX-
+    # consistent same-host semantics. Retrying the exact failed task in
+    # isolation (no concurrency) passed immediately, and lowering
+    # parallelism to -j2 did NOT stop a second, different recipe from
+    # hitting the same class of failure — ruling out "just a parallelism
+    # race" as the full explanation. DL_DIR/SSTATE_DIR stay on the host
+    # bind mount (fetch-once / populate-then-read-much-later access
+    # patterns, not the tight write-then-immediate-read pattern that
+    # failed) — only TMPDIR's WORK/sysroots-components churn hit this.
+    # Trade-off accepted: the Docker Desktop VM's own disk only had ~17GB
+    # free at the time of this change (vs 87GB free on the host bind
+    # mount) — monitored closely during the build, see
+    # commercial/docs/TODO-agent-first-os-2026-08.md Y1-1 row for the
+    # actual disk-usage outcome.
+    TMPDIR = "/yocto-vmfs/tmp-duduclaw-qemux86-64"
+
+    # Without this, the hash-equivalence DB defaults to living inside the
+    # build dir (kas warned about this on the first real run) — sstate
+    # would still get reused, but the equivalence server itself would not
+    # persist across a `kas build` re-invocation, weakening dedup on
+    # incremental rebuilds. Value is kas's own suggested fix verbatim.
+    BB_HASHSERVE_DB_DIR = "${SSTATE_DIR}"
+
+    # rm_work deletes each recipe's WORKDIR after it builds (keeping only
+    # sstate + final deploy artifacts) — the single biggest lever for
+    # keeping TMPDIR small on a disk-constrained host. Deliberately a
+    # build-time INHERIT, not baked into the distro conf, so a future
+    # debug build can drop it without editing distro policy.
+    INHERIT += "rm_work"
+
+    # Root cause turned out to be TMPDIR's filesystem (see TMPDIR comment
+    # above), not parallelism — restored to match the VM's 4 CPUs after
+    # moving TMPDIR off the virtiofs bind mount.
+    PARALLEL_MAKE ?= "-j 4"
+    BB_NUMBER_THREADS ?= "4"

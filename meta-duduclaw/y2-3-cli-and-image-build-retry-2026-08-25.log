@@ -1,0 +1,281 @@
+=== [1/2] rebuilding duduclaw-cli with buildpaths fix (retry after hashserve.sock cleanup) ===
+2026-08-25 09:18:18 - INFO     - kas 5.5 started on Debian GNU/Linux trixie
+2026-08-25 09:18:18 - INFO     - Repository bitbake already contains acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd as commit
+2026-08-25 09:18:18 - INFO     - Repository openembedded-core already contains 5d1aa5c806c061a2994f4decb59016610f093213 as commit
+2026-08-25 09:18:18 - INFO     - Repository meta-yocto already contains 24c24cef5d1523fefe43a3e3d34667b37ae551f3 as commit
+2026-08-25 09:18:18 - INFO     - Repository bitbake checked out to acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd
+2026-08-25 09:18:18 - INFO     - Repository openembedded-core checked out to 5d1aa5c806c061a2994f4decb59016610f093213
+2026-08-25 09:18:18 - INFO     - Repository meta-yocto checked out to 24c24cef5d1523fefe43a3e3d34667b37ae551f3
+2026-08-25 09:18:18 - INFO     - To start the default build, run: bitbake -c build duduclaw-image-minimal
+Loading cache...done.
+Loaded 1976 entries from dependency cache.
+NOTE: Resolving any missing task queue dependencies
+
+Build Configuration:
+BB_VERSION           = "2.18.0"
+BUILD_SYS            = "aarch64-linux"
+NATIVELSBSTRING      = "universal"
+TARGET_SYS           = "x86_64-poky-linux"
+MACHINE              = "duduclaw-qemux86-64"
+SDKMACHINE           = "aarch64"
+DISTRO               = "duduclaw-os"
+DISTRO_VERSION       = "0.1.0-y1-bringup"
+TUNE_FEATURES        = "m64 x86-64-v3"
+meta-duduclaw        = "main:472acd984da0c4c1dafcbf425cf2d2d277e10671"
+meta-poky            
+meta-yocto-bsp       = "HEAD:24c24cef5d1523fefe43a3e3d34667b37ae551f3"
+meta                 = "HEAD:5d1aa5c806c061a2994f4decb59016610f093213"
+
+Initialising tasks...Sstate summary: Wanted 398 Local 386 Mirrors 0 Missed 12 Current 1964 (96% match, 99% complete)
+done.
+NOTE: Executing Tasks
+NOTE: Running task 3445 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_package)
+NOTE: Running task 3446 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_populate_sysroot)
+NOTE: Running task 3863 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_install)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_populate_sysroot: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_populate_sysroot: Succeeded
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_install: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_install: Succeeded
+NOTE: Running task 4606 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_package)
+NOTE: Running task 4607 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_populate_sysroot)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_populate_sysroot: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_populate_sysroot: Succeeded
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package: Succeeded
+NOTE: Running task 4608 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_packagedata)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_packagedata: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_packagedata: Succeeded
+NOTE: Running task 4609 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_package_qa)
+NOTE: Running task 4610 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_package_write_rpm)
+NOTE: Running task 4611 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_create_spdx)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_create_spdx: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package_qa: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package_write_rpm: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package_qa: Succeeded
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package_write_rpm: Succeeded
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_create_spdx: Succeeded
+NOTE: Running task 4612 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_create_package_spdx)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_create_package_spdx: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_create_package_spdx: Succeeded
+NOTE: Running task 4613 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_rm_work)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_rm_work: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_rm_work: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package: Succeeded
+NOTE: Running setscene task 2362 of 2362 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_packagedata_setscene)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_packagedata_setscene: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_packagedata_setscene: Succeeded
+NOTE: Running task 4621 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_create_spdx)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_create_spdx: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_create_spdx: Succeeded
+NOTE: Running task 4623 of 4631 (/workspace/build/../openembedded-core/meta/recipes-extended/iptables/iptables_1.8.13.bb:do_rm_work)
+NOTE: Running task 4624 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_create_package_spdx)
+NOTE: Running task 4626 of 4631 (/workspace/build/../openembedded-core/meta/recipes-core/systemd/systemd_259.5.bb:do_rm_work)
+NOTE: Running task 4628 of 4631 (/workspace/build/../openembedded-core/meta/recipes-core/util-linux/util-linux_2.41.3.bb:do_rm_work)
+NOTE: recipe iptables-1.8.13-r0: task do_rm_work: Started
+NOTE: recipe iptables-1.8.13-r0: task do_rm_work: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_create_package_spdx: Started
+NOTE: recipe util-linux-2.41.3-r0: task do_rm_work: Started
+NOTE: recipe systemd-1_259.5-r0: task do_rm_work: Started
+NOTE: recipe util-linux-2.41.3-r0: task do_rm_work: Succeeded
+NOTE: recipe systemd-1_259.5-r0: task do_rm_work: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_create_package_spdx: Succeeded
+NOTE: Running task 4629 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_rm_work)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_rm_work: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_rm_work: Succeeded
+NOTE: Running noexec task 4630 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_rm_work_all)
+NOTE: Running noexec task 4631 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_build)
+NOTE: Tasks Summary: Attempted 4631 tasks of which 4612 didn't need to be rerun and all succeeded.
+=== duduclaw-cli EXIT: 0
+=== [2/2] building duduclaw-image (qemux86-64, sysd+cli payload) ===
+2026-08-25 09:19:05 - INFO     - kas 5.5 started on Debian GNU/Linux trixie
+2026-08-25 09:19:05 - INFO     - Repository openembedded-core already contains 5d1aa5c806c061a2994f4decb59016610f093213 as commit
+2026-08-25 09:19:05 - INFO     - Repository meta-yocto already contains 24c24cef5d1523fefe43a3e3d34667b37ae551f3 as commit
+2026-08-25 09:19:05 - INFO     - Repository bitbake already contains acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd as commit
+2026-08-25 09:19:05 - INFO     - Repository bitbake checked out to acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd
+2026-08-25 09:19:05 - INFO     - Repository openembedded-core checked out to 5d1aa5c806c061a2994f4decb59016610f093213
+2026-08-25 09:19:05 - INFO     - Repository meta-yocto checked out to 24c24cef5d1523fefe43a3e3d34667b37ae551f3
+2026-08-25 09:19:05 - INFO     - To start the default build, run: bitbake -c build duduclaw-image-minimal
+Loading cache...done.
+Loaded 1976 entries from dependency cache.
+NOTE: Resolving any missing task queue dependencies
+
+Build Configuration:
+BB_VERSION           = "2.18.0"
+BUILD_SYS            = "aarch64-linux"
+NATIVELSBSTRING      = "universal"
+TARGET_SYS           = "x86_64-poky-linux"
+MACHINE              = "duduclaw-qemux86-64"
+SDKMACHINE           = "aarch64"
+DISTRO               = "duduclaw-os"
+DISTRO_VERSION       = "0.1.0-y1-bringup"
+TUNE_FEATURES        = "m64 x86-64-v3"
+meta-duduclaw        = "main:472acd984da0c4c1dafcbf425cf2d2d277e10671"
+meta-poky            
+meta-yocto-bsp       = "HEAD:24c24cef5d1523fefe43a3e3d34667b37ae551f3"
+meta                 = "HEAD:5d1aa5c806c061a2994f4decb59016610f093213"
+
+Initialising tasks...WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+WARNING: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+Sstate summary: Wanted 545 Local 529 Mirrors 0 Missed 16 Current 2730 (97% match, 99% complete)
+done.
+Removing 1 stale sstate objects for arch duduclaw_qemux86_64...done.
+NOTE: Executing Tasks
+NOTE: Running setscene task 3196 of 3275 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_package_write_rpm_setscene)
+NOTE: Running setscene task 3271 of 3275 (/workspace/build/../openembedded-core/meta/recipes-core/packagegroups/packagegroup-core-boot.bb:do_package_write_rpm_setscene)
+NOTE: Running setscene task 3272 of 3275 (/workspace/build/../openembedded-core/meta/recipes-core/packagegroups/packagegroup-core-boot.bb:do_package_qa_setscene)
+NOTE: Running setscene task 3273 of 3275 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_package_qa_setscene)
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_package_write_rpm_setscene: Started
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_package_qa_setscene: Started
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_package_qa_setscene: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package_qa_setscene: Started
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_package_write_rpm_setscene: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package_qa_setscene: Succeeded
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package_write_rpm_setscene: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_package_write_rpm_setscene: Succeeded
+NOTE: Running task 4203 of 6486 (/workspace/build/../openembedded-core/meta/recipes-extended/parted/parted_3.6.bb:do_rm_work)
+NOTE: recipe parted-3.6-r0: task do_rm_work: Started
+NOTE: recipe parted-3.6-r0: task do_rm_work: Succeeded
+NOTE: Running task 5704 of 6486 (/workspace/build/../openembedded-core/meta/recipes-bsp/v86d/v86d_0.1.10.bb:do_rm_work)
+NOTE: Running task 5705 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/packagegroups/packagegroup-core-boot.bb:do_create_package_spdx)
+NOTE: Running task 5838 of 6486 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_package_write_rpm)
+NOTE: recipe v86d-0.1.10-r0: task do_rm_work: Started
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_create_package_spdx: Started
+NOTE: recipe v86d-0.1.10-r0: task do_rm_work: Succeeded
+WARNING: packagegroup-core-boot-1.0-r0 do_create_package_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_create_package_spdx: Succeeded
+NOTE: Running task 6118 of 6486 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_deploy)
+NOTE: Running task 6303 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_prepare_recipe_sysroot)
+NOTE: Running task 6306 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_deploy_source_date_epoch)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package_write_rpm: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_deploy: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_deploy_source_date_epoch: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_prepare_recipe_sysroot: Started
+WARNING: duduclaw-image-1.0-r0 do_deploy_source_date_epoch: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe duduclaw-image-1.0-r0: task do_deploy_source_date_epoch: Succeeded
+NOTE: Running task 6307 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_create_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_spdx: Started
+WARNING: duduclaw-image-1.0-r0 do_create_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_spdx: Succeeded
+NOTE: Running task 6308 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_create_package_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_package_spdx: Started
+WARNING: duduclaw-image-1.0-r0 do_create_package_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe duduclaw-image-1.0-r0: task do_prepare_recipe_sysroot: Succeeded
+NOTE: Running task 6342 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/packagegroups/packagegroup-core-boot.bb:do_rm_work)
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_package_spdx: Succeeded
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_rm_work: Started
+NOTE: recipe packagegroup-core-boot-1.0-r0: task do_rm_work: Succeeded
+WARNING: linux-yocto-6.18.24+git-r0 do_package_write_rpm: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package_write_rpm: Succeeded
+NOTE: Running task 6456 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_rootfs)
+NOTE: Running task 6457 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_rootfs)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_rootfs: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_rootfs: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_rootfs: Succeeded
+NOTE: Running task 6458 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_write_qemuboot_conf)
+NOTE: Running task 6459 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_create_rootfs_spdx)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_write_qemuboot_conf: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_write_qemuboot_conf: Succeeded
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_create_rootfs_spdx: Started
+NOTE: Running task 6460 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_flush_pseudodb)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_flush_pseudodb: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_flush_pseudodb: Succeeded
+NOTE: Running task 6461 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_image_qa)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image_qa: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image_qa: Succeeded
+WARNING: core-image-minimal-initramfs-1.0-r0 do_create_rootfs_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_create_rootfs_spdx: Succeeded
+NOTE: Running task 6462 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_image)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image: Succeeded
+NOTE: Running task 6463 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_image_cpio)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image_cpio: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image_cpio: Succeeded
+NOTE: Running task 6464 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_image_complete)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image_complete: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_rootfs: Succeeded
+NOTE: Running task 6465 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_write_qemuboot_conf)
+NOTE: Running task 6466 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_create_rootfs_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_write_qemuboot_conf: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_write_qemuboot_conf: Succeeded
+NOTE: Running task 6467 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_flush_pseudodb)
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_rootfs_spdx: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_image_complete: Succeeded
+NOTE: Running task 6468 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_create_image_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_flush_pseudodb: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_flush_pseudodb: Succeeded
+NOTE: Running task 6469 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_image_qa)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_create_image_spdx: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_create_image_spdx: Succeeded
+NOTE: Running task 6470 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_create_image_sbom_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_qa: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_qa: Succeeded
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_create_image_sbom_spdx: Started
+WARNING: duduclaw-image-1.0-r0 do_create_rootfs_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_rootfs_spdx: Succeeded
+NOTE: Running task 6471 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_image)
+WARNING: linux-yocto-6.18.24+git-r0 do_deploy: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe duduclaw-image-1.0-r0: task do_image: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_image: Succeeded
+NOTE: Running task 6472 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_image_tar)
+NOTE: Running task 6473 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_image_ext4)
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_tar: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_ext4: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_deploy: Succeeded
+NOTE: Running task 6474 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_populate_lic_deploy)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_populate_lic_deploy: Started
+WARNING: core-image-minimal-initramfs-1.0-r0 do_create_image_sbom_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_populate_lic_deploy: Succeeded
+NOTE: Running task 6475 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_rootfs_wicenv)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_create_image_sbom_spdx: Succeeded
+NOTE: Running task 6476 of 6486 (/workspace/build/../openembedded-core/meta/recipes-core/images/core-image-minimal-initramfs.bb:do_rm_work)
+NOTE: recipe duduclaw-image-1.0-r0: task do_rootfs_wicenv: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_rootfs_wicenv: Succeeded
+NOTE: Running task 6477 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_write_wks_template)
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_rm_work: Started
+NOTE: recipe core-image-minimal-initramfs-1.0-r0: task do_rm_work: Succeeded
+NOTE: recipe duduclaw-image-1.0-r0: task do_write_wks_template: Started
+NOTE: Running task 6478 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_uki)
+NOTE: recipe duduclaw-image-1.0-r0: task do_write_wks_template: Succeeded
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_tar: Succeeded
+NOTE: recipe duduclaw-image-1.0-r0: task do_uki: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_uki: Succeeded
+NOTE: Running task 6479 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_image_wic)
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_wic: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_ext4: Succeeded
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_wic: Succeeded
+NOTE: Running task 6480 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_image_complete)
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_complete: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_image_complete: Succeeded
+NOTE: Running task 6481 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_populate_lic_deploy)
+NOTE: Running task 6482 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_create_image_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_populate_lic_deploy: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_populate_lic_deploy: Succeeded
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_image_spdx: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_image_spdx: Succeeded
+NOTE: Running task 6483 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_create_image_sbom_spdx)
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_image_sbom_spdx: Started
+WARNING: duduclaw-image-1.0-r0 do_create_image_sbom_spdx: Error contacting Hash Equivalence Server unix:///workspace/build/hashserve.sock: [Errno 2] No such file or directory
+NOTE: recipe duduclaw-image-1.0-r0: task do_create_image_sbom_spdx: Succeeded
+NOTE: Running task 6484 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_rm_work)
+NOTE: recipe duduclaw-image-1.0-r0: task do_rm_work: Started
+NOTE: recipe duduclaw-image-1.0-r0: task do_rm_work: Succeeded
+NOTE: Running noexec task 6485 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_rm_work_all)
+NOTE: Running noexec task 6486 of 6486 (/workspace/build/../meta-duduclaw/recipes-core/images/duduclaw-image.bb:do_build)
+NOTE: Tasks Summary: Attempted 6486 tasks of which 6445 didn't need to be rerun and all succeeded.
+
+Summary: There were 24 WARNING messages.
+=== duduclaw-image EXIT: 0
+BUILD_ALL_DONE

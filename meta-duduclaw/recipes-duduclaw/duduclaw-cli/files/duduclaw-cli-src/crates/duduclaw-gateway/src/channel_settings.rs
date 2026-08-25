@@ -1,0 +1,620 @@
+//! Per-channel, per-scope settings stored in SQLite with in-memory cache.
+//!
+//! Supports hierarchical settings: global → channel-type → scope (guild/chat).
+//! Used for mention-only mode, channel whitelists, auto-thread, agent overrides, etc.
+//!
+//! Read-heavy operations use an in-memory HashMap cache to avoid Mutex contention
+//! on the SQLite connection. Cache is invalidated on write (set/delete).
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use rusqlite::{params, Connection};
+use tokio::sync::{Mutex, RwLock};
+use tracing::info;
+
+// ── Types ──────────────────────────────────────────────────────
+
+/// Known setting keys (type-safe access).
+pub mod keys {
+    /// Whether the bot only responds when mentioned. Values: "true" / "false"
+    pub const MENTION_ONLY: &str = "mention_only";
+    /// JSON array of allowed channel/chat IDs. Empty array or missing = all allowed.
+    pub const ALLOWED_CHANNELS: &str = "allowed_channels";
+    /// Whether to auto-create threads for replies. Values: "true" / "false"
+    pub const AUTO_THREAD: &str = "auto_thread";
+    /// Override agent name for this scope.
+    pub const AGENT_OVERRIDE: &str = "agent_override";
+    /// Response mode: "embed" | "plain" | "auto"
+    pub const RESPONSE_MODE: &str = "response_mode";
+    /// Thread auto-archive duration in minutes: "60" | "1440" | "4320" | "10080"
+    pub const THREAD_ARCHIVE_MINUTES: &str = "thread_archive_minutes";
+    /// JSON array of allowed guild/server IDs (global scope). Empty or missing = all allowed.
+    pub const ALLOWED_GUILDS: &str = "allowed_guilds";
+    /// Human-readable guild/server name, recorded on GUILD_CREATE for status reporting.
+    pub const GUILD_NAME: &str = "guild_name";
+    /// JSON array of allowed user IDs (global scope). Missing = open access.
+    pub const ALLOWED_USERS: &str = "allowed_users";
+    /// JSON array of blocked user IDs (global scope). Blocked users are silently ignored.
+    pub const BLOCKED_USERS: &str = "blocked_users";
+    /// Whether unknown users must pair via `/pair <code>` first. Values: "true" / "false".
+    pub const REQUIRE_PAIRING: &str = "require_pairing";
+    /// JSON array of admin user/chat IDs (global scope) allowed to run
+    /// admin-gated chat commands (`!STOP` / `!STOP ALL` / `!RESUME`).
+    /// Missing or empty = NO admins on that channel (fail-closed).
+    pub const ADMIN_USERS: &str = "admin_users";
+    /// WP9: whether this is a company shared bot where employees bind to their
+    /// own agent via a `/start <token>` deep-link. Values: "true" / "false".
+    /// Default false = the global bot keeps its existing default-agent routing.
+    /// When true, an unbound user on the shared bot is shown a bind-first
+    /// guidance message instead of being answered by the default agent.
+    pub const SHARED_BOT_BINDING: &str = "shared_bot_binding";
+}
+
+/// Channel types recognized by the settings store and its RPC/MCP surfaces.
+/// Centralized so the MCP `channel_config` tool (`duduclaw-cli::mcp`) and the
+/// dashboard `channels.config_*`/`access_*` RPCs (`duduclaw-gateway::handlers`)
+/// can never drift into accepting different channel-type strings — one write
+/// path validating "discord" while the other silently accepts "Discord" would
+/// split the settings store into two unreachable halves.
+pub const VALID_CHANNEL_TYPES: &[&str] = &[
+    "discord", "telegram", "slack", "line", "whatsapp", "feishu", "wecom", "dingtalk",
+];
+
+/// "Behavior" setting keys — response shape / routing, not access control.
+/// Exposed to both the `channel_config` MCP tool and the dashboard
+/// `channels.config_get`/`channels.config_set` RPC (E1).
+pub const CONFIG_KEYS: &[&str] = &[
+    keys::MENTION_ONLY,
+    keys::AUTO_THREAD,
+    keys::ALLOWED_CHANNELS,
+    keys::ALLOWED_GUILDS,
+    keys::AGENT_OVERRIDE,
+    keys::RESPONSE_MODE,
+    keys::THREAD_ARCHIVE_MINUTES,
+];
+
+/// Access-control keys an in-channel agent may read/write via the
+/// `channel_config` MCP tool. Deliberately excludes [`keys::ADMIN_USERS`] — an
+/// agent must never be able to grant itself (or anyone else) `!STOP`
+/// authority over channel automation from inside a chat.
+pub const MCP_ACCESS_KEYS: &[&str] = &[keys::REQUIRE_PAIRING, keys::ALLOWED_USERS, keys::BLOCKED_USERS];
+
+/// Access-control keys the dashboard (admin-only, human-operated GUI) may
+/// read/write (E2). Superset of [`MCP_ACCESS_KEYS`]: `admin_users` decides who
+/// can press `!STOP` in-channel — a GUI-only write per the D-C1 "channel-side
+/// read-only for org-wide settings" decision. No MCP tool may set it.
+pub const DASHBOARD_ACCESS_KEYS: &[&str] = &[
+    keys::REQUIRE_PAIRING,
+    keys::ALLOWED_USERS,
+    keys::BLOCKED_USERS,
+    keys::ADMIN_USERS,
+];
+
+/// Validate a `scope_id`: max 64 chars, alphanumeric + underscore/hyphen
+/// (also matches the literal "global"/"dm" scopes). Shared by the MCP
+/// `channel_config` tool and the dashboard `channels.config_*`/`access_*` RPCs
+/// so both write paths reject the same malformed input.
+pub fn validate_scope_id(scope_id: &str) -> Result<(), String> {
+    if scope_id.len() > 64 {
+        return Err("scope_id too long (max 64 chars)".into());
+    }
+    if scope_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Ok(())
+    } else {
+        Err("scope_id contains invalid characters".into())
+    }
+}
+
+/// Validate a setting value against its key's expected shape. Shared by the
+/// MCP `channel_config` tool and the dashboard `channels.config_set`/
+/// `access_set` RPCs — one validator, so a value illegal from the dashboard
+/// can't sneak in from MCP or vice versa. Unrecognized keys are fail-closed
+/// at the call site (not here) by checking membership in [`CONFIG_KEYS`] /
+/// [`MCP_ACCESS_KEYS`] / [`DASHBOARD_ACCESS_KEYS`] first.
+pub fn validate_setting_value(key: &str, value: &str) -> Result<(), String> {
+    match key {
+        keys::MENTION_ONLY | keys::AUTO_THREAD | keys::REQUIRE_PAIRING => {
+            if value != "true" && value != "false" {
+                return Err(format!("{key} must be 'true' or 'false'"));
+            }
+        }
+        keys::ALLOWED_CHANNELS | keys::ALLOWED_GUILDS | keys::ALLOWED_USERS | keys::BLOCKED_USERS
+        | keys::ADMIN_USERS => {
+            if serde_json::from_str::<Vec<String>>(value).is_err() {
+                return Err(format!(
+                    "{key} must be a JSON array of strings, e.g. [\"id1\",\"id2\"]"
+                ));
+            }
+        }
+        keys::RESPONSE_MODE => {
+            if !["embed", "plain", "auto"].contains(&value) {
+                return Err("response_mode must be 'embed', 'plain', or 'auto'".into());
+            }
+        }
+        keys::THREAD_ARCHIVE_MINUTES => {
+            if !["60", "1440", "4320", "10080"].contains(&value) {
+                return Err("thread_archive_minutes must be 60, 1440, 4320, or 10080".into());
+            }
+        }
+        _ => {} // agent_override: any string is valid (checked against registry at use time)
+    }
+    Ok(())
+}
+
+/// Cache key: (channel_type, scope_id, key)
+type CacheKey = (String, String, String);
+
+/// Channel settings manager backed by SQLite with an in-memory read cache.
+pub struct ChannelSettingsManager {
+    conn: Mutex<Connection>,
+    /// In-memory cache: read-heavy path avoids Mutex contention on SQLite connection.
+    /// Populated on first read, invalidated on write.
+    cache: Arc<RwLock<HashMap<CacheKey, Option<String>>>>,
+}
+
+impl ChannelSettingsManager {
+    /// Open or create the channel settings database.
+    pub fn new(db_path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+        if db_path.to_str() != Some(":memory:") {
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+                .map_err(|e| e.to_string())?;
+        }
+        Self::init_tables(&conn)?;
+        info!(?db_path, "Channel settings manager initialized");
+        Ok(Self {
+            conn: Mutex::new(conn),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// Initialize using an existing session database connection path.
+    pub fn from_session_db(db_path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+            .map_err(|e| e.to_string())?;
+        Self::init_tables(&conn)?;
+        info!(?db_path, "Channel settings (co-located with session DB)");
+        Ok(Self {
+            conn: Mutex::new(conn),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    fn init_tables(conn: &Connection) -> Result<(), String> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS channel_settings (
+                channel_type TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (channel_type, scope_id, key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_channel_settings_scope
+                ON channel_settings(channel_type, scope_id);"
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn cache_key(channel_type: &str, scope_id: &str, key: &str) -> CacheKey {
+        (channel_type.to_string(), scope_id.to_string(), key.to_string())
+    }
+
+    /// Get a setting value. Returns `None` if not set.
+    /// Uses in-memory cache for read-heavy path.
+    pub async fn get(&self, channel_type: &str, scope_id: &str, key: &str) -> Option<String> {
+        let ck = Self::cache_key(channel_type, scope_id, key);
+
+        // Fast path: check cache (RwLock read — no contention with other readers)
+        {
+            let cache = self.cache.read().await;
+            if let Some(cached) = cache.get(&ck) {
+                return cached.clone();
+            }
+        }
+
+        // Slow path: query DB and populate cache
+        let conn = self.conn.lock().await;
+        let result: Option<String> = conn.query_row(
+            "SELECT value FROM channel_settings WHERE channel_type = ?1 AND scope_id = ?2 AND key = ?3",
+            params![channel_type, scope_id, key],
+            |row| row.get(0),
+        ).ok();
+        drop(conn);
+
+        // Store in cache (including None to avoid repeated DB misses)
+        let mut cache = self.cache.write().await;
+        cache.insert(ck, result.clone());
+
+        result
+    }
+
+    /// Get a setting with fallback: scope → global → default.
+    pub async fn get_with_fallback(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+        key: &str,
+        default: &str,
+    ) -> String {
+        if let Some(v) = self.get(channel_type, scope_id, key).await {
+            return v;
+        }
+        if scope_id != "global" {
+            if let Some(v) = self.get(channel_type, "global", key).await {
+                return v;
+            }
+        }
+        default.to_string()
+    }
+
+    /// Get a boolean setting with fallback.
+    pub async fn get_bool(&self, channel_type: &str, scope_id: &str, key: &str, default: bool) -> bool {
+        let val = self.get_with_fallback(channel_type, scope_id, key, if default { "true" } else { "false" }).await;
+        val == "true"
+    }
+
+    /// Get allowed channels list (JSON array of strings).
+    ///
+    /// M24: resolve with scope → global fallback. If no per-scope allowlist is
+    /// set, the global allowlist (`scope_id = "global"`) applies. Without this
+    /// fallback a configured global allowlist was silently ignored (= allow-all).
+    pub async fn get_allowed_channels(&self, channel_type: &str, scope_id: &str) -> Vec<String> {
+        // Try the per-scope value first.
+        if let Some(list) = self.parse_allowed_channels(channel_type, scope_id).await {
+            return list;
+        }
+        // Fall back to the global allowlist when no per-scope one is set.
+        if scope_id != "global" {
+            if let Some(list) = self.parse_allowed_channels(channel_type, "global").await {
+                return list;
+            }
+        }
+        Vec::new()
+    }
+
+    /// Parse the allowed-channels JSON for a single scope.
+    ///
+    /// Returns `None` when the key is unset/empty (so the caller can fall back),
+    /// and `Some(vec)` otherwise. Corrupt JSON degrades to `Some(empty)` =
+    /// allow-all for that scope to avoid locking everyone out on bad data.
+    async fn parse_allowed_channels(&self, channel_type: &str, scope_id: &str) -> Option<Vec<String>> {
+        let val = self.get(channel_type, scope_id, keys::ALLOWED_CHANNELS).await?;
+        if val.is_empty() {
+            return None;
+        }
+        Some(serde_json::from_str(&val).unwrap_or_else(|e| {
+            tracing::warn!(key = "allowed_channels", scope = scope_id, error = %e, "Corrupt JSON in channel settings — falling back to allow-all");
+            Vec::new()
+        }))
+    }
+
+    /// Set a setting value (upsert). Invalidates cache for this key.
+    pub async fn set(&self, channel_type: &str, scope_id: &str, key: &str, value: &str) -> Result<(), String> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO channel_settings (channel_type, scope_id, key, value, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(channel_type, scope_id, key) DO UPDATE SET value = ?4, updated_at = ?5",
+            params![channel_type, scope_id, key, value, now],
+        ).map_err(|e| e.to_string())?;
+        drop(conn);
+
+        // Invalidate cache
+        let mut cache = self.cache.write().await;
+        let ck = Self::cache_key(channel_type, scope_id, key);
+        cache.insert(ck, Some(value.to_string()));
+
+        Ok(())
+    }
+
+    /// Delete a setting. Invalidates cache for this key.
+    pub async fn delete(&self, channel_type: &str, scope_id: &str, key: &str) -> Result<(), String> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM channel_settings WHERE channel_type = ?1 AND scope_id = ?2 AND key = ?3",
+            params![channel_type, scope_id, key],
+        ).map_err(|e| e.to_string())?;
+        drop(conn);
+
+        // Invalidate cache
+        let mut cache = self.cache.write().await;
+        let ck = Self::cache_key(channel_type, scope_id, key);
+        cache.insert(ck, None);
+
+        Ok(())
+    }
+
+    /// Get all settings for a scope.
+    pub async fn get_all(&self, channel_type: &str, scope_id: &str) -> Vec<(String, String)> {
+        let conn = self.conn.lock().await;
+        let mut stmt = match conn.prepare(
+            "SELECT key, value FROM channel_settings WHERE channel_type = ?1 AND scope_id = ?2"
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![channel_type, scope_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
+    /// Check if a channel_id is allowed for a given scope.
+    /// Returns true if no whitelist is set (empty = allow all).
+    pub async fn is_channel_allowed(&self, channel_type: &str, scope_id: &str, channel_id: &str) -> bool {
+        let allowed = self.get_allowed_channels(channel_type, scope_id).await;
+        if allowed.is_empty() {
+            return true;
+        }
+        allowed.iter().any(|id| id == channel_id)
+    }
+
+    /// Check if a guild/server is allowed. The guild whitelist lives at the
+    /// GLOBAL scope only (a guild can't whitelist itself). Missing/empty list
+    /// or corrupt JSON = allow all, matching the channel-whitelist semantics.
+    pub async fn is_guild_allowed(&self, channel_type: &str, guild_id: &str) -> bool {
+        let val = match self.get(channel_type, "global", keys::ALLOWED_GUILDS).await {
+            Some(v) if !v.is_empty() => v,
+            _ => return true,
+        };
+        let allowed: Vec<String> = serde_json::from_str(&val).unwrap_or_else(|e| {
+            tracing::warn!(key = "allowed_guilds", error = %e, "Corrupt JSON in channel settings — falling back to allow-all");
+            Vec::new()
+        });
+        if allowed.is_empty() {
+            return true;
+        }
+        allowed.iter().any(|id| id == guild_id)
+    }
+
+    /// List all distinct scope_ids stored for a channel type (excluding "global").
+    /// Used by the `channel_status` MCP tool to enumerate known guilds/chats.
+    pub async fn list_scopes(&self, channel_type: &str) -> Vec<String> {
+        let conn = self.conn.lock().await;
+        let mut stmt = match conn.prepare(
+            "SELECT DISTINCT scope_id FROM channel_settings WHERE channel_type = ?1 AND scope_id != 'global'"
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![channel_type], |row| row.get::<_, String>(0))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn temp_db() -> (NamedTempFile, ChannelSettingsManager) {
+        let tmp = NamedTempFile::new().unwrap();
+        let mgr = ChannelSettingsManager::new(tmp.path()).unwrap();
+        (tmp, mgr)
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "guild123", "mention_only", "true").await.unwrap();
+        assert_eq!(mgr.get("discord", "guild123", "mention_only").await, Some("true".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "guild123", "mention_only", "true").await.unwrap();
+        // First read populates cache
+        let _ = mgr.get("discord", "guild123", "mention_only").await;
+        // Second read should hit cache (no way to assert directly, but ensures no panic)
+        assert_eq!(mgr.get("discord", "guild123", "mention_only").await, Some("true".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation_on_set() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "g1", "mention_only", "true").await.unwrap();
+        assert_eq!(mgr.get("discord", "g1", "mention_only").await, Some("true".to_string()));
+        // Update should invalidate cache
+        mgr.set("discord", "g1", "mention_only", "false").await.unwrap();
+        assert_eq!(mgr.get("discord", "g1", "mention_only").await, Some("false".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation_on_delete() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "g1", "mention_only", "true").await.unwrap();
+        let _ = mgr.get("discord", "g1", "mention_only").await; // populate cache
+        mgr.delete("discord", "g1", "mention_only").await.unwrap();
+        assert_eq!(mgr.get("discord", "g1", "mention_only").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_to_global() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", "mention_only", "true").await.unwrap();
+        let val = mgr.get_with_fallback("discord", "guild999", "mention_only", "false").await;
+        assert_eq!(val, "true");
+    }
+
+    #[tokio::test]
+    async fn test_scope_overrides_global() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", "mention_only", "true").await.unwrap();
+        mgr.set("discord", "guild123", "mention_only", "false").await.unwrap();
+        let val = mgr.get_with_fallback("discord", "guild123", "mention_only", "true").await;
+        assert_eq!(val, "false");
+    }
+
+    #[tokio::test]
+    async fn test_allowed_channels_empty() {
+        let (_tmp, mgr) = temp_db();
+        assert!(mgr.is_channel_allowed("discord", "guild123", "ch456").await);
+    }
+
+    #[tokio::test]
+    async fn test_allowed_channels_whitelist() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "guild123", "allowed_channels", r#"["ch1","ch2"]"#).await.unwrap();
+        assert!(mgr.is_channel_allowed("discord", "guild123", "ch1").await);
+        assert!(!mgr.is_channel_allowed("discord", "guild123", "ch999").await);
+    }
+
+    #[tokio::test]
+    async fn test_allowed_channels_global_fallback() {
+        // M24: a global allowlist must apply to scopes without their own list.
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", "allowed_channels", r#"["chA"]"#).await.unwrap();
+        // guild999 has no per-scope allowlist → inherits global.
+        assert!(mgr.is_channel_allowed("discord", "guild999", "chA").await);
+        assert!(!mgr.is_channel_allowed("discord", "guild999", "chZ").await);
+    }
+
+    #[tokio::test]
+    async fn test_allowed_channels_scope_overrides_global() {
+        // A per-scope allowlist takes precedence over the global one.
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", "allowed_channels", r#"["chA"]"#).await.unwrap();
+        mgr.set("discord", "guild1", "allowed_channels", r#"["chB"]"#).await.unwrap();
+        assert!(mgr.is_channel_allowed("discord", "guild1", "chB").await);
+        assert!(!mgr.is_channel_allowed("discord", "guild1", "chA").await);
+    }
+
+    #[tokio::test]
+    async fn test_get_bool() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("telegram", "global", "mention_only", "true").await.unwrap();
+        assert!(mgr.get_bool("telegram", "global", "mention_only", false).await);
+        assert!(!mgr.get_bool("telegram", "global", "auto_thread", false).await);
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("slack", "global", "mention_only", "true").await.unwrap();
+        mgr.delete("slack", "global", "mention_only").await.unwrap();
+        assert_eq!(mgr.get("slack", "global", "mention_only").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_all() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "guild1", "mention_only", "true").await.unwrap();
+        mgr.set("discord", "guild1", "auto_thread", "false").await.unwrap();
+        let all = mgr.get_all("discord", "guild1").await;
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_guild_whitelist_empty_allows_all() {
+        let (_tmp, mgr) = temp_db();
+        assert!(mgr.is_guild_allowed("discord", "g999").await);
+    }
+
+    #[tokio::test]
+    async fn test_guild_whitelist_filters() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", keys::ALLOWED_GUILDS, r#"["g1","g2"]"#).await.unwrap();
+        assert!(mgr.is_guild_allowed("discord", "g1").await);
+        assert!(!mgr.is_guild_allowed("discord", "g999").await);
+    }
+
+    #[tokio::test]
+    async fn test_guild_whitelist_corrupt_json_allows_all() {
+        // Fail-open on corrupt data mirrors allowed_channels: never lock every
+        // guild out because of a bad write.
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", keys::ALLOWED_GUILDS, "not json").await.unwrap();
+        assert!(mgr.is_guild_allowed("discord", "g1").await);
+    }
+
+    // ── Shared validator tests (moved from duduclaw-cli mcp.rs, W2-2) ──────
+
+    #[test]
+    fn validate_scope_id_accepts_alphanumeric_and_hyphen_underscore() {
+        assert!(validate_scope_id("global").is_ok());
+        assert!(validate_scope_id("guild_123-abc").is_ok());
+        assert!(validate_scope_id(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_id_rejects_too_long() {
+        assert!(validate_scope_id(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn validate_scope_id_rejects_invalid_chars() {
+        assert!(validate_scope_id("guild;drop table").is_err());
+        assert!(validate_scope_id("guild/../etc").is_err());
+    }
+
+    #[test]
+    fn validate_setting_value_bool_keys() {
+        assert!(validate_setting_value(keys::MENTION_ONLY, "true").is_ok());
+        assert!(validate_setting_value(keys::MENTION_ONLY, "false").is_ok());
+        assert!(validate_setting_value(keys::MENTION_ONLY, "yes").is_err());
+        assert!(validate_setting_value(keys::REQUIRE_PAIRING, "1").is_err());
+    }
+
+    #[test]
+    fn validate_setting_value_json_array_keys() {
+        assert!(validate_setting_value(keys::ALLOWED_USERS, r#"["u1","u2"]"#).is_ok());
+        assert!(validate_setting_value(keys::BLOCKED_USERS, "[]").is_ok());
+        assert!(validate_setting_value(keys::ADMIN_USERS, r#"["u1"]"#).is_ok());
+        assert!(validate_setting_value(keys::ALLOWED_USERS, "not json").is_err());
+        assert!(validate_setting_value(keys::ALLOWED_USERS, r#"[1,2]"#).is_err());
+    }
+
+    #[test]
+    fn validate_setting_value_response_mode() {
+        assert!(validate_setting_value(keys::RESPONSE_MODE, "embed").is_ok());
+        assert!(validate_setting_value(keys::RESPONSE_MODE, "plain").is_ok());
+        assert!(validate_setting_value(keys::RESPONSE_MODE, "auto").is_ok());
+        assert!(validate_setting_value(keys::RESPONSE_MODE, "bogus").is_err());
+    }
+
+    #[test]
+    fn validate_setting_value_thread_archive_minutes() {
+        assert!(validate_setting_value(keys::THREAD_ARCHIVE_MINUTES, "60").is_ok());
+        assert!(validate_setting_value(keys::THREAD_ARCHIVE_MINUTES, "10080").is_ok());
+        assert!(validate_setting_value(keys::THREAD_ARCHIVE_MINUTES, "30").is_err());
+    }
+
+    #[test]
+    fn validate_setting_value_agent_override_any_string() {
+        assert!(validate_setting_value(keys::AGENT_OVERRIDE, "any-string-goes").is_ok());
+    }
+
+    #[test]
+    fn mcp_access_keys_excludes_admin_users() {
+        // Security boundary (E2): an in-channel agent must never grant itself
+        // `!STOP` authority via the channel_config MCP tool.
+        assert!(!MCP_ACCESS_KEYS.contains(&keys::ADMIN_USERS));
+        assert!(DASHBOARD_ACCESS_KEYS.contains(&keys::ADMIN_USERS));
+    }
+
+    #[tokio::test]
+    async fn test_list_scopes_excludes_global() {
+        let (_tmp, mgr) = temp_db();
+        mgr.set("discord", "global", "mention_only", "true").await.unwrap();
+        mgr.set("discord", "g1", "guild_name", "Guild One").await.unwrap();
+        mgr.set("discord", "g2", "guild_name", "Guild Two").await.unwrap();
+        mgr.set("telegram", "c1", "mention_only", "true").await.unwrap();
+        let mut scopes = mgr.list_scopes("discord").await;
+        scopes.sort();
+        assert_eq!(scopes, vec!["g1".to_string(), "g2".to_string()]);
+    }
+}

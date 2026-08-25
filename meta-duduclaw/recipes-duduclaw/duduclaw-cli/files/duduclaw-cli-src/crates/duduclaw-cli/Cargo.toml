@@ -1,0 +1,98 @@
+[package]
+name = "duduclaw-cli"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "duduclaw_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "duduclaw"
+path = "src/bin/duduclaw.rs"
+
+[dependencies]
+duduclaw-core = { workspace = true }
+duduclaw-agent = { workspace = true }
+duduclaw-fork = { workspace = true }
+duduclaw-container = { workspace = true }
+duduclaw-security = { workspace = true }
+duduclaw-odoo = { workspace = true }
+duduclaw-inference = { workspace = true }
+# G2 Part B: local reverse-proxy reuses the unified provider layer to forward
+# rotator-selected accounts to their real upstream (OpenAI-compat endpoint out).
+duduclaw-llm = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+# Personal-edition data portability (export/import ~/.duduclaw as .tar.gz).
+tar = "0.4"
+flate2 = "1"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+duduclaw-gateway = { workspace = true }
+bollard = { workspace = true }
+duduclaw-memory = { workspace = true }
+duduclaw-identity = { workspace = true }
+duduclaw-redaction = { workspace = true }
+duduclaw-license = { workspace = true }
+duduclaw-os = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+iana-time-zone = "0.1"
+cron = { workspace = true }
+uuid = { workspace = true }
+toml = { workspace = true }
+# migrate-from: OpenClaw `openclaw.json` is JSON5 (comments + trailing commas);
+# serde_json rejects those, so we parse via json5. Hermes/paperclip use YAML.
+json5 = "0.4"
+serde_yaml = "0.9"
+urlencoding = "2"
+dialoguer = { version = "0.11", features = ["password"] }
+console = "0.15"
+dirs = "6"
+base64 = { workspace = true }
+scraper = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+# WP2.2 R3: registry code-lane signature verification on install
+minisign-verify = "0.2"
+# v1.16.0: refresh-token random bytes (mcp_refresh)
+rand = "0.8"
+rustls = { workspace = true }
+rusqlite = { workspace = true }
+argon2 = { version = "0.5", features = ["std"] }
+regex = "1"
+subtle = "2"
+# W20-P1: HTTP/SSE transport
+axum = { workspace = true }
+futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-trait = { workspace = true }
+# WP2.1/WP2.2: expert-pack install/pack (zip read + write). deflate only —
+# matches the gateway's updater dependency; no zip-bomb-prone extra codecs.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
+# W20-P1: HTTP integration test support
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body-util = "0.1"
+axum = { workspace = true }
+
+[features]
+# Aligned with `duduclaw-gateway/default = ["dashboard", "desktop"]` so that
+# `cargo build -p duduclaw-cli --release` produces a binary whose web UI
+# routes are mounted (RFC-22 Phase 3 dashboard 404 caveat — without this,
+# every HTTP path except `/health` and `/ws` returned 404).
+default = ["dashboard"]
+dashboard = ["duduclaw-gateway/dashboard"]
+# OpenTelemetry GenAI tracing + OTLP export — pass-through to the gateway's
+# feature (see duduclaw-gateway/src/otel.rs). Default OFF: without it the
+# gateway's `otel::try_init_layer` is a no-op stub and no otel deps compile.
+otel = ["duduclaw-gateway/otel"]

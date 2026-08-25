@@ -1,0 +1,308 @@
+=== [1/2] rebuilding duduclaw-cli with buildpaths fix ===
+2026-08-25 08:45:56 - INFO     - kas 5.5 started on Debian GNU/Linux trixie
+2026-08-25 08:45:56 - INFO     - Repository bitbake already contains acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd as commit
+2026-08-25 08:45:56 - INFO     - Repository meta-yocto already contains 24c24cef5d1523fefe43a3e3d34667b37ae551f3 as commit
+2026-08-25 08:45:56 - INFO     - Repository openembedded-core already contains 5d1aa5c806c061a2994f4decb59016610f093213 as commit
+2026-08-25 08:45:56 - INFO     - Repository bitbake checked out to acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd
+2026-08-25 08:45:57 - INFO     - Repository openembedded-core checked out to 5d1aa5c806c061a2994f4decb59016610f093213
+2026-08-25 08:45:57 - INFO     - Repository meta-yocto checked out to 24c24cef5d1523fefe43a3e3d34667b37ae551f3
+2026-08-25 08:45:57 - INFO     - To start the default build, run: bitbake -c build duduclaw-image-minimal
+Loading cache...done.
+Loaded 1976 entries from dependency cache.
+Parsing recipes...done.
+Parsing of 955 .bb files complete (953 cached, 2 parsed). 1976 targets, 48 skipped, 0 masked, 0 errors.
+NOTE: Resolving any missing task queue dependencies
+
+Build Configuration:
+BB_VERSION           = "2.18.0"
+BUILD_SYS            = "aarch64-linux"
+NATIVELSBSTRING      = "universal"
+TARGET_SYS           = "x86_64-poky-linux"
+MACHINE              = "duduclaw-qemux86-64"
+SDKMACHINE           = "aarch64"
+DISTRO               = "duduclaw-os"
+DISTRO_VERSION       = "0.1.0-y1-bringup"
+TUNE_FEATURES        = "m64 x86-64-v3"
+meta-duduclaw        = "main:472acd984da0c4c1dafcbf425cf2d2d277e10671"
+meta-poky            
+meta-yocto-bsp       = "HEAD:24c24cef5d1523fefe43a3e3d34667b37ae551f3"
+meta                 = "HEAD:5d1aa5c806c061a2994f4decb59016610f093213"
+
+Initialising tasks...Sstate summary: Wanted 400 Local 386 Mirrors 0 Missed 14 Current 1962 (96% match, 99% complete)
+done.
+Removing 5 stale sstate objects for arch x86-64-v3...done.
+Removing 1 stale sstate objects for arch duduclaw_qemux86_64...done.
+NOTE: Executing Tasks
+NOTE: Running task 3438 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_transform_kernel)
+NOTE: Running task 3439 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_kernel_link_images)
+NOTE: Running task 3440 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_shared_workdir)
+NOTE: Running task 3853 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_rust_create_wrappers)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_transform_kernel: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_shared_workdir: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_kernel_link_images: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_transform_kernel: Succeeded
+NOTE: Running task 3854 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_deploy_source_date_epoch)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_kernel_link_images: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_shared_workdir: Succeeded
+NOTE: Running task 4003 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_compile_kernelmodules)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_rust_create_wrappers: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_rust_create_wrappers: Succeeded
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_compile_kernelmodules: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_deploy_source_date_epoch: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_deploy_source_date_epoch: Succeeded
+NOTE: Running task 4598 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_configure)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_configure: Started
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_configure: Succeeded
+NOTE: Running task 4599 of 4631 (/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_compile)
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_compile: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_compile_kernelmodules: Succeeded
+NOTE: Running task 4600 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_strip)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_strip: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_strip: Succeeded
+NOTE: Running task 4601 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_sizecheck)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_sizecheck: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_sizecheck: Succeeded
+NOTE: Running task 4602 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_install)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_install: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_install: Succeeded
+NOTE: Running task 4603 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_package)
+NOTE: Running task 4604 of 4631 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_populate_sysroot)
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_populate_sysroot: Started
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package: Started
+ERROR: linux-yocto-6.18.24+git-r0 do_populate_sysroot: Error executing a python function in exec_func_python() autogenerated:
+
+The stack trace of python calls that resulted in this exception/failure was:
+File: 'exec_func_python() autogenerated', lineno: 2, function: <module>
+     0001:
+ *** 0002:sstate_report_unihash(d)
+     0003:
+File: '/workspace/build/../openembedded-core/meta/classes-global/sstate.bbclass', lineno: 915, function: sstate_report_unihash
+     0911:    report_unihash = getattr(bb.parse.siggen, 'report_unihash', None)
+     0912:
+     0913:    if report_unihash:
+     0914:        ss = sstate_state_fromvars(d)
+ *** 0915:        report_unihash(os.getcwd(), ss['task'], d)
+     0916:}
+     0917:
+     0918:#
+     0919:# Shell function to decompress and prepare a package for installation
+File: '/workspace/bitbake/lib/bb/siggen.py', lineno: 813, function: report_unihash
+     0809:                method = self.method
+     0810:                if tid in self.extramethod:
+     0811:                    method = method + self.extramethod[tid]
+     0812:
+ *** 0813:                with self.client() as client:
+     0814:                    data = client.report_unihash(taskhash, method, outhash, unihash, extra_data)
+     0815:
+     0816:                new_unihash = data['unihash']
+     0817:                check_hashserv_unihash(new_unihash)
+File: '/usr/lib/python3.13/contextlib.py', lineno: 141, function: __enter__
+     0137:        # do not keep args and kwds alive unnecessarily
+     0138:        # they are only needed for recreation, which is not possible anymore
+     0139:        del self.args, self.kwds, self.func
+     0140:        try:
+ *** 0141:            return next(self.gen)
+     0142:        except StopIteration:
+     0143:            raise RuntimeError("generator didn't yield") from None
+     0144:
+     0145:    def __exit__(self, typ, value, traceback):
+File: '/workspace/bitbake/lib/bb/siggen.py', lineno: 593, function: client
+     0589:    @contextmanager
+     0590:    def client(self):
+     0591:        with self._client_env():
+     0592:            if getattr(self, '_client', None) is None:
+ *** 0593:                self._client = hashserv.create_client(self.server, **self.get_hashserv_creds())
+     0594:            yield self._client
+     0595:
+     0596:    def reset(self, data):
+     0597:        self.__close_clients()
+File: '/workspace/bitbake/lib/hashserv/__init__.py', lineno: 95, function: create_client
+     0091:            c.connect_tcp(*a)
+     0092:        return c
+     0093:    except Exception as e:
+     0094:        c.close()
+ *** 0095:        raise e
+     0096:
+     0097:
+     0098:async def create_async_client(addr, username=None, password=None):
+     0099:    from . import client
+File: '/workspace/bitbake/lib/hashserv/__init__.py', lineno: 87, function: create_client
+     0083:
+     0084:    try:
+     0085:        (typ, a) = parse_address(addr)
+     0086:        if typ == ADDR_TYPE_UNIX:
+ *** 0087:            c.connect_unix(*a)
+     0088:        elif typ == ADDR_TYPE_WS:
+     0089:            c.connect_websocket(*a)
+     0090:        else:
+     0091:            c.connect_tcp(*a)
+File: '/workspace/bitbake/lib/bb/asyncrpc/client.py', lineno: 246, function: connect_unix
+     0242:            setattr(self, m, self._get_downcall_wrapper(downcall))
+     0243:
+     0244:    def connect_unix(self, path):
+     0245:        self.loop.run_until_complete(self.client.connect_unix(path))
+ *** 0246:        self.loop.run_until_complete(self.client.connect())
+     0247:
+     0248:    @property
+     0249:    def max_chunk(self):
+     0250:        return self.client.max_chunk
+File: '/usr/lib/python3.13/asyncio/base_events.py', lineno: 725, function: run_until_complete
+     0721:            future.remove_done_callback(_run_until_complete_cb)
+     0722:        if not future.done():
+     0723:            raise RuntimeError('Event loop stopped before Future completed.')
+     0724:
+ *** 0725:        return future.result()
+     0726:
+     0727:    def stop(self):
+     0728:        """Stop running the event loop.
+     0729:
+File: '/workspace/bitbake/lib/bb/asyncrpc/client.py', lineno: 157, function: connect
+     0153:        return self.server_headers.get(tag, default)
+     0154:
+     0155:    async def connect(self):
+     0156:        if self.socket is None:
+ *** 0157:            self.socket = await self._connect_sock()
+     0158:            await self.setup_connection()
+     0159:
+     0160:    async def disconnect(self):
+     0161:        if self.socket is not None:
+File: '/workspace/bitbake/lib/bb/asyncrpc/client.py', lineno: 85, function: connect_sock
+     0081:                os.chdir(os.path.dirname(path))
+     0082:                # The socket must be opened synchronously so that CWD doesn't get
+     0083:                # changed out from underneath us so we pass as a sock into asyncio
+     0084:                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+ *** 0085:                sock.connect(os.path.basename(path))
+     0086:            finally:
+     0087:                os.chdir(cwd)
+     0088:            reader, writer = await asyncio.open_unix_connection(sock=sock)
+     0089:            return StreamConnection(reader, writer, self.timeout, self.max_chunk)
+Exception: OSError: [Errno 95] Operation not supported
+
+ERROR: Logfile of failure stored in: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/duduclaw_qemux86_64-poky-linux/linux-yocto/6.18.24+git/temp/log.do_populate_sysroot.2607967
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_populate_sysroot: Failed
+ERROR: Task (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_populate_sysroot) failed with exit code '1'
+ERROR: linux-yocto-6.18.24+git-r0 do_package: Error executing a python function in exec_func_python() autogenerated:
+
+The stack trace of python calls that resulted in this exception/failure was:
+File: 'exec_func_python() autogenerated', lineno: 2, function: <module>
+     0001:
+ *** 0002:sstate_report_unihash(d)
+     0003:
+File: '/workspace/build/../openembedded-core/meta/classes-global/sstate.bbclass', lineno: 915, function: sstate_report_unihash
+     0911:    report_unihash = getattr(bb.parse.siggen, 'report_unihash', None)
+     0912:
+     0913:    if report_unihash:
+     0914:        ss = sstate_state_fromvars(d)
+ *** 0915:        report_unihash(os.getcwd(), ss['task'], d)
+     0916:}
+     0917:
+     0918:#
+     0919:# Shell function to decompress and prepare a package for installation
+File: '/workspace/bitbake/lib/bb/siggen.py', lineno: 813, function: report_unihash
+     0809:                method = self.method
+     0810:                if tid in self.extramethod:
+     0811:                    method = method + self.extramethod[tid]
+     0812:
+ *** 0813:                with self.client() as client:
+     0814:                    data = client.report_unihash(taskhash, method, outhash, unihash, extra_data)
+     0815:
+     0816:                new_unihash = data['unihash']
+     0817:                check_hashserv_unihash(new_unihash)
+File: '/usr/lib/python3.13/contextlib.py', lineno: 141, function: __enter__
+     0137:        # do not keep args and kwds alive unnecessarily
+     0138:        # they are only needed for recreation, which is not possible anymore
+     0139:        del self.args, self.kwds, self.func
+     0140:        try:
+ *** 0141:            return next(self.gen)
+     0142:        except StopIteration:
+     0143:            raise RuntimeError("generator didn't yield") from None
+     0144:
+     0145:    def __exit__(self, typ, value, traceback):
+File: '/workspace/bitbake/lib/bb/siggen.py', lineno: 593, function: client
+     0589:    @contextmanager
+     0590:    def client(self):
+     0591:        with self._client_env():
+     0592:            if getattr(self, '_client', None) is None:
+ *** 0593:                self._client = hashserv.create_client(self.server, **self.get_hashserv_creds())
+     0594:            yield self._client
+     0595:
+     0596:    def reset(self, data):
+     0597:        self.__close_clients()
+File: '/workspace/bitbake/lib/hashserv/__init__.py', lineno: 95, function: create_client
+     0091:            c.connect_tcp(*a)
+     0092:        return c
+     0093:    except Exception as e:
+     0094:        c.close()
+ *** 0095:        raise e
+     0096:
+     0097:
+     0098:async def create_async_client(addr, username=None, password=None):
+     0099:    from . import client
+File: '/workspace/bitbake/lib/hashserv/__init__.py', lineno: 87, function: create_client
+     0083:
+     0084:    try:
+     0085:        (typ, a) = parse_address(addr)
+     0086:        if typ == ADDR_TYPE_UNIX:
+ *** 0087:            c.connect_unix(*a)
+     0088:        elif typ == ADDR_TYPE_WS:
+     0089:            c.connect_websocket(*a)
+     0090:        else:
+     0091:            c.connect_tcp(*a)
+File: '/workspace/bitbake/lib/bb/asyncrpc/client.py', lineno: 246, function: connect_unix
+     0242:            setattr(self, m, self._get_downcall_wrapper(downcall))
+     0243:
+     0244:    def connect_unix(self, path):
+     0245:        self.loop.run_until_complete(self.client.connect_unix(path))
+ *** 0246:        self.loop.run_until_complete(self.client.connect())
+     0247:
+     0248:    @property
+     0249:    def max_chunk(self):
+     0250:        return self.client.max_chunk
+File: '/usr/lib/python3.13/asyncio/base_events.py', lineno: 725, function: run_until_complete
+     0721:            future.remove_done_callback(_run_until_complete_cb)
+     0722:        if not future.done():
+     0723:            raise RuntimeError('Event loop stopped before Future completed.')
+     0724:
+ *** 0725:        return future.result()
+     0726:
+     0727:    def stop(self):
+     0728:        """Stop running the event loop.
+     0729:
+File: '/workspace/bitbake/lib/bb/asyncrpc/client.py', lineno: 157, function: connect
+     0153:        return self.server_headers.get(tag, default)
+     0154:
+     0155:    async def connect(self):
+     0156:        if self.socket is None:
+ *** 0157:            self.socket = await self._connect_sock()
+     0158:            await self.setup_connection()
+     0159:
+     0160:    async def disconnect(self):
+     0161:        if self.socket is not None:
+File: '/workspace/bitbake/lib/bb/asyncrpc/client.py', lineno: 85, function: connect_sock
+     0081:                os.chdir(os.path.dirname(path))
+     0082:                # The socket must be opened synchronously so that CWD doesn't get
+     0083:                # changed out from underneath us so we pass as a sock into asyncio
+     0084:                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+ *** 0085:                sock.connect(os.path.basename(path))
+     0086:            finally:
+     0087:                os.chdir(cwd)
+     0088:            reader, writer = await asyncio.open_unix_connection(sock=sock)
+     0089:            return StreamConnection(reader, writer, self.timeout, self.max_chunk)
+Exception: OSError: [Errno 95] Operation not supported
+
+ERROR: Logfile of failure stored in: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/duduclaw_qemux86_64-poky-linux/linux-yocto/6.18.24+git/temp/log.do_package.2607966
+NOTE: recipe linux-yocto-6.18.24+git-r0: task do_package: Failed
+ERROR: Task (/workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_package) failed with exit code '1'
+Bitbake still alive (no events for 600s). Active tasks:
+/workspace/build/../meta-duduclaw/recipes-duduclaw/duduclaw-cli/duduclaw-cli_1.62.0.bb:do_compile
+NOTE: recipe duduclaw-cli-1.62.0-r0: task do_compile: Succeeded
+NOTE: Tasks Summary: Attempted 4604 tasks of which 4591 didn't need to be rerun and 2 failed.
+
+Summary: 2 tasks failed:
+  /workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_populate_sysroot
+    log: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/duduclaw_qemux86_64-poky-linux/linux-yocto/6.18.24+git/temp/log.do_populate_sysroot.2607967
+  /workspace/build/../openembedded-core/meta/recipes-kernel/linux/linux-yocto_6.18.bb:do_package
+    log: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/duduclaw_qemux86_64-poky-linux/linux-yocto/6.18.24+git/temp/log.do_package.2607966
+Summary: There were 2 ERROR messages, returning a non-zero exit code.
+2026-08-25 09:12:06 - ERROR    - Shell returned non-zero exit status
+2026-08-25 09:12:06 - ERROR    - Command "/bin/sh -c 'bitbake duduclaw-cli'" failed with error 1

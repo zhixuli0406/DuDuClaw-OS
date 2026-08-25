@@ -61,13 +61,25 @@ meta-duduclaw/
 │   ├── distro/duduclaw-os.conf          # INIT_MANAGER=systemd, EFI+systemd-boot
 │   └── machine/
 │       ├── duduclaw-qemux86-64.conf     # QEMU dev/test machine (Y1-1 verified)
-│       └── duduclaw-genericx86-64.conf  # real-HW target (N305/8845HS, Y1-2+)
+│       └── duduclaw-genericx86-64.conf  # real-HW target (N305/8845HS), DEFAULTTUNE
+│                                         # pinned to x86-64-v3 (Y2-3), KMACHINE=
+│                                         # common-pc-64, kernel fragments applied
 ├── recipes-core/images/
-│   └── duduclaw-image-minimal.bb        # console-only bring-up image, UKI+systemd-boot
+│   ├── duduclaw-image-minimal.bb        # console-only bring-up image, UKI+systemd-boot
+│   └── duduclaw-image.bb                # + duduclaw-sysd/duduclaw-cli payload (Y2-3,
+│                                         # qemux86-64 dual-verified: sysd socket + healthz)
 ├── recipes-kernel/linux/
-│   └── linux-yocto_6.18.bbappend        # COMPATIBLE_MACHINE alias fix, see below
-├── recipes-duduclaw/                    # Y1-2+: duduclaw-sysd etc. Rust recipes
-├── kas/duduclaw-os.yml                  # build config — start here
+│   ├── linux-yocto_6.18.bbappend        # COMPATIBLE_MACHINE alias fix (both machines)
+│   └── linux-yocto/                     # duduclaw-{n305,8845hs,gaming}.cfg driver
+│                                         # fragments, real-HW only, Y2-2 written / Y2-3
+│                                         # build-verified via kernel_configme
+├── recipes-duduclaw/                    # duduclaw-sysd + duduclaw-cli built+verified
+│                                         # (Y2-1/Y2-3); duduclaw-comp recipe written but
+│                                         # never build-verified; duduclaw-shell/
+│                                         # duduclaw-cli-worker have no recipe yet
+├── kas/
+│   ├── duduclaw-os.yml                  # build config — start here (qemux86-64)
+│   └── duduclaw-os-genericx86-64.yml    # overlay for the real-HW machine (Y2-2/Y2-3)
 ├── docker/Dockerfile.yocto-builder      # Linux build container for macOS hosts
 └── scripts/                             # (reserved)
 ```

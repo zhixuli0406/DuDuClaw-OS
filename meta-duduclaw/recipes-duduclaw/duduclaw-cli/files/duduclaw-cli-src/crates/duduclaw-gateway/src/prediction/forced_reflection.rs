@@ -1,0 +1,328 @@
+//! ForcedReflection — silence-breaker hook into the evolution loop.
+//!
+//! When [`duduclaw_agent::SilenceBreakerEvent`] fires (the gateway has not
+//! seen any prediction-error trigger for the agent within
+//! `evolution.max_silence_hours`), the gateway invokes
+//! [`fire_forced_reflection`] to:
+//!
+//! 1. Append a typed `silence_breaker` row to `prediction.db.evolution_events`
+//!    so the absence of organic triggers is itself observable.
+//! 2. Apply a per-agent **4-hour cooldown** so the heartbeat scheduler can't
+//!    cause the same agent to fire repeatedly during e.g. a long downtime.
+//! 3. (P1, 2026-05-09) When a `GvuTriggerCtx` is wired in, also invoke the
+//!    GVU loop directly via [`crate::gvu::trigger::maybe_run_gvu`] with
+//!    [`TriggerSource::ForcedReflection`]. Before this hook, sub-agents
+//!    that never see a channel message could only ever record the
+//!    `silence_breaker` event — the actual reflection it asked for never
+//!    materialized because there was no "next conversation" to piggy-back
+//!    on. The trigger helper enforces its own eligibility gate so agents
+//!    with `gvu_enabled = false` short-circuit safely.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use tokio::sync::Mutex;
+use tracing::{debug, info, warn};
+
+use crate::gvu::trigger::{maybe_run_gvu, TriggerSource};
+use crate::prediction::engine::{ErrorCategory, PredictionEngine};
+use crate::prediction::subagent_prediction::GvuTriggerCtx;
+
+/// In-process cooldown table keyed by agent_id.
+///
+/// Mirrors the scheduler-level reset of `last_evolution_trigger`, but adds an
+/// independent guard for the gateway-side handler so a buggy heartbeat
+/// (or a manual `trigger`) can't bypass the cool-down.
+pub struct SilenceBreakerCooldown {
+    last_fire: Mutex<HashMap<String, DateTime<Utc>>>,
+    cooldown: Duration,
+}
+
+impl SilenceBreakerCooldown {
+    pub fn new(cooldown: Duration) -> Self {
+        Self {
+            last_fire: Mutex::new(HashMap::new()),
+            cooldown,
+        }
+    }
+
+    /// Default: 4-hour cooldown.
+    pub fn default_4h() -> Self {
+        Self::new(Duration::from_secs(4 * 3600))
+    }
+
+    /// Returns `true` and records `now` if the cooldown is clear; otherwise
+    /// returns `false` without changing state.
+    pub async fn try_acquire(&self, agent_id: &str, now: DateTime<Utc>) -> bool {
+        let mut guard = self.last_fire.lock().await;
+        if let Some(prev) = guard.get(agent_id) {
+            let elapsed = now.signed_duration_since(*prev).num_seconds();
+            if elapsed >= 0 && (elapsed as u64) < self.cooldown.as_secs() {
+                return false;
+            }
+        }
+        guard.insert(agent_id.to_owned(), now);
+        true
+    }
+}
+
+impl Default for SilenceBreakerCooldown {
+    fn default() -> Self {
+        Self::default_4h()
+    }
+}
+
+/// Drive a single silence-breaker firing to its evolution-side effects.
+///
+/// Returns `true` if the event was consumed, `false` if the cooldown
+/// rejected it (so the caller can update metrics / surface a reason).
+pub async fn fire_forced_reflection(
+    cooldown: &SilenceBreakerCooldown,
+    prediction_engine: &Arc<PredictionEngine>,
+    agent_id: &str,
+    hours: f64,
+    timestamp: DateTime<Utc>,
+) -> bool {
+    if !cooldown.try_acquire(agent_id, timestamp).await {
+        debug!(
+            agent = agent_id,
+            "Silence breaker suppressed by 4h cooldown (hours_since={hours:.1})"
+        );
+        return false;
+    }
+
+    let context = format!(
+        "Silence breaker: no evolution trigger for {hours:.1}h. \
+         Agent has been quiet — schedule a self-reflection on the next \
+         conversation if any pending mistakes need addressing."
+    );
+    prediction_engine.log_evolution_event(
+        "silence_breaker",
+        agent_id,
+        None,
+        None,
+        Some(&context),
+        None,
+        None,
+    );
+    info!(
+        target: "forced_reflection",
+        agent = agent_id,
+        hours = format!("{hours:.1}"),
+        "Forced reflection event emitted"
+    );
+    true
+}
+
+/// Spawn the receiver loop that consumes
+/// [`duduclaw_agent::SilenceBreakerEvent`]s emitted by the heartbeat
+/// scheduler and turns each one into a forced reflection event.
+///
+/// `cooldown` is shared so all fires through the same gateway use the same
+/// per-agent cool-down state.
+///
+/// `gvu_ctx` (P1, 2026-05-09): when supplied, a fired silence-breaker also
+/// invokes the GVU loop via [`maybe_run_gvu`]. The helper enforces its own
+/// eligibility (gvu_enabled, contract presence, …) — passing `None` falls
+/// back to the v1.12.3 behaviour where the silence event is only logged.
+pub fn spawn_silence_event_consumer(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<duduclaw_agent::SilenceBreakerEvent>,
+    prediction_engine: Arc<PredictionEngine>,
+    cooldown: Arc<SilenceBreakerCooldown>,
+    gvu_ctx: Option<Arc<GvuTriggerCtx>>,
+) {
+    tokio::spawn(async move {
+        info!("SilenceBreaker consumer started");
+        while let Some(event) = rx.recv().await {
+            let fired = fire_forced_reflection(
+                cooldown.as_ref(),
+                &prediction_engine,
+                &event.agent_id,
+                event.hours,
+                event.timestamp,
+            )
+            .await;
+            if !fired {
+                // Cool-down rejected — informational only.
+                warn!(
+                    agent = %event.agent_id,
+                    "Silence breaker event ignored (cool-down active)"
+                );
+                continue;
+            }
+
+            // The cooldown has cleared and we recorded the silence event.
+            // If a GVU context is wired in, also fire the loop so silent
+            // sub-agents actually evolve instead of just accumulating
+            // silence_breaker rows. We synthesise a Critical-category
+            // outcome because the event itself signals "12h+ of nothing
+            // happened" which is meaningful enough to warrant the full
+            // self-play pass; the trigger helper still gates by
+            // `[evolution] gvu_enabled` so agents that opted out remain
+            // a no-op.
+            if let Some(ctx) = gvu_ctx.clone() {
+                let agent_dir = ctx.home_dir.join("agents").join(&event.agent_id);
+                let home_for_llm = ctx.home_dir.clone();
+                let agent_dir_for_llm = agent_dir.clone();
+                let agent_id_for_llm = event.agent_id.clone();
+                let extra = format!(
+                    "Silence breaker fired after {hours:.1}h without an organic \
+                     evolution trigger. Treating this as a Critical reflection \
+                     opportunity so SOUL.md can be re-tuned even when no recent \
+                     conversation produced a prediction error.",
+                    hours = event.hours,
+                );
+                // Utility dispatch (RFC-25 N2): this agent's runtime provider +
+                // utility model, falling back to global config then Claude.
+                let call_llm = move |prompt: String| {
+                    let h = home_for_llm.clone();
+                    let ad = agent_dir_for_llm.clone();
+                    let aid = agent_id_for_llm.clone();
+                    async move {
+                        crate::runtime_dispatch::run_utility_prompt(
+                            &h,
+                            Some(&ad),
+                            &aid,
+                            "",
+                            &prompt,
+                            crate::runtime_dispatch::UTILITY_MAX_TOKENS,
+                        )
+                        .await
+                    }
+                };
+                let _ = maybe_run_gvu(
+                    Some(ctx.gvu_loop.clone()),
+                    prediction_engine.clone(),
+                    ctx.notebook.clone(),
+                    &event.agent_id,
+                    &agent_dir,
+                    // composite_error: Critical-band synthetic value — only
+                    // the magnitude matters because category is forced below.
+                    1.0,
+                    ErrorCategory::Critical,
+                    TriggerSource::ForcedReflection,
+                    Some(&extra),
+                    call_llm,
+                )
+                .await;
+            }
+        }
+        warn!("SilenceBreaker consumer channel closed — exiting");
+    });
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration as ChronoDuration;
+    use rusqlite::Connection;
+    use tempfile::TempDir;
+
+    fn make_engine(tmp: &TempDir) -> Arc<PredictionEngine> {
+        let db = tmp.path().join("prediction.db");
+        let meta = tmp.path().join("metacognition.json");
+        Arc::new(PredictionEngine::new(db, Some(meta)))
+    }
+
+    fn count_silence_events(db: &std::path::Path, agent: &str) -> i64 {
+        let conn = Connection::open(db).unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM evolution_events WHERE agent_id = ?1 AND event_type = 'silence_breaker'",
+            rusqlite::params![agent],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn test_fire_forced_reflection_writes_evolution_event() {
+        let tmp = TempDir::new().unwrap();
+        let engine = make_engine(&tmp);
+        let cooldown = SilenceBreakerCooldown::default_4h();
+
+        let fired =
+            fire_forced_reflection(&cooldown, &engine, "agent-q", 13.0, Utc::now()).await;
+        assert!(fired, "first fire should succeed");
+
+        // The write is non-blocking; give the spawned task a moment to flush.
+        for _ in 0..50 {
+            if count_silence_events(&tmp.path().join("prediction.db"), "agent-q") > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("silence_breaker event never persisted");
+    }
+
+    #[tokio::test]
+    async fn test_fire_forced_reflection_respects_cooldown() {
+        let tmp = TempDir::new().unwrap();
+        let engine = make_engine(&tmp);
+        let cooldown = SilenceBreakerCooldown::new(Duration::from_secs(3600));
+
+        let now = Utc::now();
+        assert!(
+            fire_forced_reflection(&cooldown, &engine, "agent-c", 13.0, now).await,
+            "first fire ok"
+        );
+        // 30 minutes later → still within 1h cooldown.
+        let later = now + ChronoDuration::minutes(30);
+        assert!(
+            !fire_forced_reflection(&cooldown, &engine, "agent-c", 1.0, later).await,
+            "second fire within cooldown must be rejected"
+        );
+        // 90 minutes later → cooldown clear.
+        let after = now + ChronoDuration::minutes(90);
+        assert!(
+            fire_forced_reflection(&cooldown, &engine, "agent-c", 1.5, after).await,
+            "third fire after cooldown should succeed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cooldown_is_per_agent() {
+        let cooldown = SilenceBreakerCooldown::new(Duration::from_secs(3600));
+        let now = Utc::now();
+        assert!(cooldown.try_acquire("a", now).await);
+        // Same time, different agent — must be allowed.
+        assert!(cooldown.try_acquire("b", now).await);
+        // Re-fire on `a` — blocked.
+        assert!(!cooldown.try_acquire("a", now).await);
+    }
+
+    /// Ensure the v1.12.3 behaviour is preserved when no GvuTriggerCtx is
+    /// supplied: the consumer still records silence_breaker events and
+    /// honours cooldown, without ever attempting to fire GVU. This is the
+    /// regression guard for the #3.3 wiring — if a future refactor makes
+    /// `gvu_ctx = None` accidentally hit a code path that requires a
+    /// non-None ctx, this test will panic instead of silently regressing.
+    #[tokio::test]
+    async fn consumer_without_gvu_ctx_still_records_silence_event() {
+        let tmp = TempDir::new().unwrap();
+        let engine = make_engine(&tmp);
+        let cooldown = Arc::new(SilenceBreakerCooldown::default_4h());
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        spawn_silence_event_consumer(rx, engine.clone(), cooldown, None);
+
+        tx.send(duduclaw_agent::SilenceBreakerEvent {
+            agent_id: "ghost-agent".to_string(),
+            hours: 13.0,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+
+        // Wait for the spawned task to consume + persist.
+        for _ in 0..50 {
+            if count_silence_events(&tmp.path().join("prediction.db"), "ghost-agent") > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("silence_breaker event never persisted (None gvu_ctx path)");
+    }
+}

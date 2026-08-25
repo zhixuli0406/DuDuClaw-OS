@@ -121,6 +121,39 @@ local_conf_header:
     # mount) — monitored closely during the build, see
     # commercial/docs/TODO-agent-first-os-2026-08.md Y1-1 row for the
     # actual disk-usage outcome.
+    #
+    # Real pitfall hit and reverted (Y2-2, 2026-08-25): tried renaming this
+    # directory to a neutral "tmp-duduclaw-os" so duduclaw-genericx86-64
+    # could share it too (both machines use DEFAULTTUNE = "x86-64-v3" —
+    # verified against openembedded-core/meta/conf/machine/qemux86-64.conf
+    # and meta-yocto/meta-yocto-bsp/conf/machine/genericx86-64.conf, both
+    # `require` the same tune-x86-64-v3.inc — so TUNE_PKGARCH is identical
+    # and non-machine-tied sstate, glibc/gcc-runtime/systemd/busybox/every
+    # rootfs package, was expected to fully cross-reuse). The rename itself
+    # (plain `mv`, same volume) is NOT actually safe: oe-core's uninative
+    # mechanism `patchelf --set-interpreter`s every native-toolchain-built
+    # ELF binary's PT_INTERP to an ABSOLUTE path under
+    # `${TMPDIR}/sysroots-uninative/...`, baked in at build time from
+    # whatever TMPDIR was at that moment — `readelf`/`file` on
+    # pseudo-native's own `usr/bin/pseudo` (needed by bitbake's own
+    # fakeroot worker) confirmed the interpreter path was hardcoded to the
+    # OLD literal string, so after the rename bitbake's fakeworker spawn
+    # failed with `FileNotFoundError` on the loader (not on pseudo itself,
+    # which is misleading — `ls`/`stat` on pseudo showed it present and
+    # correctly permissioned; the failure is one level down, at exec-time
+    # ELF interpreter resolution, invisible to a plain file-existence
+    # check). This is exactly the failure sanity.bbclass's own
+    # "TMPDIR has changed location" check exists to catch (it stores the
+    # last-used TMPDIR in `${TMPDIR}/saved_tmpdir` and hard-errors on
+    # mismatch) — editing that marker file by hand to silence the warning
+    # (which this session tried first) does NOT fix the underlying
+    # problem, it just removes the guard rail protecting against it.
+    # Reverted the directory back to its original name; the two machines'
+    # kas configs now share this SAME literal TMPDIR value (see
+    # duduclaw-os-genericx86-64.yml) — same disk-sharing benefit, without
+    # ever renaming a populated TMPDIR after the fact. Correct fix if a
+    # rename is ever truly needed: delete and let it rebuild (the sanity
+    # checker's own suggestion), not `mv` + marker edit.
     TMPDIR = "/yocto-vmfs/tmp-duduclaw-qemux86-64"
 
     # Without this, the hash-equivalence DB defaults to living inside the

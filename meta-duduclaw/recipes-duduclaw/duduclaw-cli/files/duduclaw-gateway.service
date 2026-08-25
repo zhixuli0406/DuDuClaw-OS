@@ -1,0 +1,44 @@
+# DuDuClaw gateway -- Yocto bring-up unit.
+#
+# Adapted from appliance/mkosi.extra/etc/systemd/system/duduclaw-gateway.service
+# (the Debian appliance line's verified unit), simplified the same way
+# duduclaw-sysd.service was for this Y2-1 bring-up stage:
+#   - No User=duduclaw / ReadWritePaths=/data -- this Yocto image doesn't
+#     provision a non-root service user or a /data mount yet (that's
+#     product-layer work for a later ticket). Runs as root for now.
+#   - No After=/Wants= on duduclaw-firstboot-provision.service or
+#     duduclaw-data-migrate.service -- neither exists in this image (those
+#     are appliance/'s Debian-line concepts, frozen per the map's decision
+#     ⑤, not yet ported to the Yocto product layer).
+#   - Kept: After=duduclaw-sysd.service ordering (the gateway talks to sysd
+#     over a Unix socket, matches the appliance unit's own reasoning), and
+#     the Type=notify + WatchdogSec=60 contract (the app-side sd_notify
+#     ping already lives in crates/duduclaw-gateway/src/watchdog.rs,
+#     unrelated to which distro packages the binary).
+#   - Deliberately NOT ordered after network-online.target, same reasoning
+#     as the appliance unit: the gateway binds 0.0.0.0 and reconnects its
+#     own channels/relay with backoff, so waiting for "fully online" only
+#     stalls boot.
+#
+# `duduclaw run --yes` is the same invocation the appliance line uses --
+# `duduclaw` is the one binary this recipe (duduclaw-cli) produces, and
+# `run` is its gateway-server subcommand (see crates/duduclaw-cli/src/bin/
+# duduclaw.rs) -- this is the concrete evidence that "gateway" and "cli" in
+# the Y2-1 task brief are the same artifact wearing two hats.
+[Unit]
+Description=DuDuClaw gateway (Yocto bring-up)
+After=duduclaw-sysd.service
+Wants=duduclaw-sysd.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/duduclaw run --yes
+Restart=on-failure
+RestartSec=5
+WatchdogSec=60
+
+[Install]
+WantedBy=multi-user.target

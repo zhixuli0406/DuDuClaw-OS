@@ -1,0 +1,1235 @@
+//! Cross-platform utilities for file locking, permissions, and process management.
+//!
+//! This module abstracts away Unix-specific APIs (flock, chmod, signals) so the
+//! rest of the codebase compiles and runs on both Unix and Windows.
+
+use std::fs::File;
+use std::path::{Path, PathBuf};
+
+// ── Home directory ───────────────────────────────────────────
+
+/// Get the user's home directory, cross-platform.
+///
+/// Returns `$HOME` on Unix, `%USERPROFILE%` on Windows.
+pub fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
+}
+
+/// Expand a leading `~` / `~/` segment against the user [`home_dir`].
+///
+/// Only the leading segment is expanded (`~` alone, or `~/rest`); any other
+/// value — including a tilde that is not at the start (`/a/~x`) or a `~user`
+/// form — is returned verbatim as a [`PathBuf`]. This is the single canonical
+/// home-relative path expander for the workspace; call it wherever a config or
+/// tool argument may carry a `~`-relative path (`std::fs::canonicalize` does NOT
+/// expand `~` itself, so an unexpanded `~/…` would spuriously fail to resolve).
+pub fn expand_tilde(raw: &str) -> PathBuf {
+    if raw == "~" {
+        return PathBuf::from(home_dir());
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return PathBuf::from(home_dir()).join(rest);
+    }
+    PathBuf::from(raw)
+}
+
+/// Resolve the DuDuClaw state root, honouring the `DUDUCLAW_HOME` override.
+///
+/// Precedence: `$DUDUCLAW_HOME` (verbatim, when non-empty) → `<home_dir()>/.duduclaw`.
+///
+/// This is the **single source of truth** for the per-instance state root
+/// (config, SQLite DBs, `bus_queue.jsonl`, models, shared wiki, secrets, cron).
+/// Every subsystem MUST resolve its paths through here so that two instances
+/// launched with distinct `DUDUCLAW_HOME` values on one machine never collide
+/// on `~/.duduclaw` (multi-instance isolation — Plan A).
+pub fn duduclaw_home() -> std::path::PathBuf {
+    if let Ok(custom) = std::env::var("DUDUCLAW_HOME") {
+        if !custom.trim().is_empty() {
+            return std::path::PathBuf::from(custom);
+        }
+    }
+    std::path::PathBuf::from(home_dir()).join(".duduclaw")
+}
+
+/// The optional per-instance name from `DUDUCLAW_INSTANCE`, sanitized to
+/// `[a-z0-9-]` (invalid chars → `-`, ends trimmed, capped at 40 chars).
+///
+/// Used to namespace host-shared registrations (e.g. the global MCP server key
+/// in `~/.claude/settings.json`) so two instances on one machine under distinct
+/// `DUDUCLAW_HOME` roots don't overwrite each other. Returns `None` when unset,
+/// empty, or all-invalid — the single-instance default.
+pub fn duduclaw_instance() -> Option<String> {
+    sanitize_instance(&std::env::var("DUDUCLAW_INSTANCE").ok()?)
+}
+
+/// Pure sanitizer for an instance name (see [`duduclaw_instance`]). Split out so
+/// the normalization rules are unit-testable without touching process env.
+fn sanitize_instance(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let trimmed = cleaned.trim_matches('-');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(40).collect())
+    }
+}
+
+/// The `mcpServers` key for this instance's global MCP registration:
+/// `"duduclaw"` by default, or `"duduclaw-<instance>"` when `DUDUCLAW_INSTANCE`
+/// is set. Centralized so the writer and any future reader agree on the name.
+pub fn mcp_server_key() -> String {
+    match duduclaw_instance() {
+        Some(name) => format!("duduclaw-{name}"),
+        None => "duduclaw".to_string(),
+    }
+}
+
+/// Return the Python 3 command name for the current platform.
+///
+/// On Windows, Python is often installed as `python` (the Microsoft Store
+/// `python3` stub is unreliable). On Unix, `python3` is preferred.
+pub fn python3_command() -> &'static str {
+    #[cfg(windows)]
+    { "python" }
+    #[cfg(not(windows))]
+    { "python3" }
+}
+
+// ── Command execution helpers ────────────────────────────────
+
+/// Create a `std::process::Command` for a program, handling Windows shims.
+///
+/// On Windows, `.cmd`/`.bat` shims trigger Rust 1.77+'s BatBadBut rejection
+/// (CVE-2024-24576) when args contain newlines / quotes / `&`. Instead of
+/// spawning the shim directly we parse it to find the underlying real
+/// executable (`.exe` for native binaries, or `node.exe + cli.js` for
+/// JavaScript CLIs) and invoke it directly — clean argument passing, no
+/// shell, no BatBadBut.
+///
+/// On Unix, this is a pass-through to `Command::new(program)`.
+pub fn command_for(program: &str) -> std::process::Command {
+    #[cfg(windows)]
+    if let Some((real, prefix)) = resolve_cmd_shim(program) {
+        let mut cmd = std::process::Command::new(real);
+        for arg in &prefix {
+            cmd.arg(arg);
+        }
+        return cmd;
+    }
+    std::process::Command::new(program)
+}
+
+/// Create a `tokio::process::Command`, handling Windows shims (see
+/// [`command_for`] for the rationale).
+pub fn async_command_for(program: &str) -> tokio::process::Command {
+    #[cfg(windows)]
+    if let Some((real, prefix)) = resolve_cmd_shim(program) {
+        let mut cmd = tokio::process::Command::new(real);
+        for arg in &prefix {
+            cmd.arg(arg);
+        }
+        return cmd;
+    }
+    tokio::process::Command::new(program)
+}
+
+/// On Windows, resolve a `.cmd`/`.bat` shim (npm, Bun, pnpm, yarn …) to a
+/// real spawnable executable plus any prefix args, so callers can avoid
+/// handing user content to `cmd.exe`. Returns `(program, prefix_args)`:
+///
+/// - **Native-binary shim** → `(<path/to/foo.exe>, vec![])`. New-style
+///   `@anthropic-ai/claude-code` (≥ 2.x) ships a `.exe` inside the npm
+///   package and the shim is just a transfer shim — we follow it to the
+///   `.exe` and spawn directly.
+/// - **JavaScript shim** → `(<path/to/node.exe>, vec![<path/to/cli.js>])`
+///   for older / pure-JS CLIs.
+///
+/// Two strategies in order, each returning either kind:
+///
+/// 1. **Parse the shim file** — scan every quoted segment + whitespace
+///    token for a path ending in `.exe` / `.js` / `.mjs` / `.cjs`, expand
+///    common shim variables (`%~dp0`, `%dp0%`, `%~dpn0`, `%~f0`, `%CD%`)
+///    and join with the shim's directory. `.exe` references take
+///    precedence over JS references when both appear.
+///
+/// 2. **Probe known package layouts** — if shim parsing fails (binary
+///    wrappers, custom shims), check well-known relative paths where
+///    `@anthropic-ai/claude-code` keeps either `bin/claude.exe` (≥ 2.x)
+///    or `cli.js` / `cli.mjs` (legacy) for npm / Bun / yarn / pnpm.
+///
+/// Returns `None` only if neither strategy resolves a real file. In that
+/// case the caller falls back to spawning the `.cmd` directly — which may
+/// then trip BatBadBut, but at least both clean paths were attempted.
+#[cfg(windows)]
+fn resolve_cmd_shim(program: &str) -> Option<(String, Vec<String>)> {
+    let lower = program.to_lowercase();
+    // Direct .exe is fine — Rust spawns it cleanly without cmd.exe.
+    if lower.ends_with(".exe") {
+        return None;
+    }
+
+    // Try the .cmd version if given an extensionless path
+    let cmd_path = if !lower.ends_with(".cmd") && !lower.ends_with(".bat") {
+        let with_cmd = format!("{program}.cmd");
+        if std::path::Path::new(&with_cmd).exists() {
+            with_cmd
+        } else {
+            program.to_string()
+        }
+    } else {
+        program.to_string()
+    };
+
+    if !std::path::Path::new(&cmd_path).exists() {
+        return None;
+    }
+
+    let dir = std::path::Path::new(&cmd_path).parent()?;
+
+    // Strategy A: parse the shim's invocation line.
+    if let Ok(content) = std::fs::read_to_string(&cmd_path)
+        && let Some(target) = parse_shim_target(&content)
+    {
+        let candidate = dir.join(target.relative_path());
+        if candidate.exists() {
+            return Some(invocation_for(target.kind(), &candidate, dir));
+        }
+    }
+
+    // Strategy B: probe well-known package layouts.
+    for probe in known_target_subpaths() {
+        let mut p = dir.to_path_buf();
+        for seg in probe.parts {
+            p.push(seg);
+        }
+        if p.exists() {
+            return Some(invocation_for(probe.kind, &p, dir));
+        }
+    }
+
+    None
+}
+
+/// Build the `(program, prefix_args)` invocation tuple for a resolved
+/// shim target — either a direct `.exe` or a `node.exe + cli.js` pair.
+#[cfg(windows)]
+fn invocation_for(
+    kind: ShimKind,
+    target: &std::path::Path,
+    shim_dir: &std::path::Path,
+) -> (String, Vec<String>) {
+    match kind {
+        ShimKind::Exe => (target.to_string_lossy().to_string(), Vec::new()),
+        ShimKind::Script => (
+            locate_node(shim_dir),
+            vec![target.to_string_lossy().to_string()],
+        ),
+    }
+}
+
+/// What the shim ultimately invokes — a native binary, or a JS script via Node.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShimKind {
+    Exe,
+    Script,
+}
+
+/// A resolved (kind, relative-path) pair from the shim parser.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShimTarget {
+    kind: ShimKind,
+    rel: String,
+}
+
+#[cfg(any(windows, test))]
+impl ShimTarget {
+    fn kind(&self) -> ShimKind {
+        self.kind
+    }
+    fn relative_path(&self) -> &str {
+        &self.rel
+    }
+}
+
+/// Parse the invocation line of a Windows shim and return what it ultimately
+/// runs — either a native `.exe` or a JS script — with shim variables
+/// expanded to empty strings (so the path is relative to the shim's
+/// directory).
+///
+/// **Target selection rule** (per line, walking from the bottom):
+///
+/// - When the line mentions BOTH a `.exe` AND a `.js`/`.mjs`/`.cjs`, the JS
+///   path wins. The `.exe` in that case is almost always a runtime
+///   (`node.exe`, `bun.exe`) and the script is what we actually want to run.
+///   Example: Bun's `@"%~dp0\..\bun.exe" "%~dp0\..\packages\…\cli.js" %*`.
+///
+/// - When the line mentions ONLY a `.exe` (no script), the `.exe` is the
+///   real target. Example: new-style `@anthropic-ai/claude-code` ≥ 2.x
+///   shim — `"%dp0%\node_modules\@anthropic-ai\claude-code\bin\claude.exe" %*`.
+///
+/// **Pass strategy**:
+///
+/// 1. Scan double-quoted segments (most reliable for npm/Bun/pnpm/yarn).
+/// 2. ONLY if pass 1 found nothing for this line, scan whitespace-separated
+///    tokens (handles unquoted hand-written shims). Skipping pass 2 when
+///    pass 1 succeeded prevents noisy tokens like `@"…\bun.exe` (a single
+///    whitespace token containing embedded quotes) from contaminating the
+///    cleanly-extracted result.
+///
+/// Cross-platform-compiled so unit tests can exercise it on any host.
+#[cfg(any(windows, test))]
+fn parse_shim_target(content: &str) -> Option<ShimTarget> {
+    // Walk lines in reverse — the actual invocation is at the bottom of the
+    // shim (after all the `IF EXIST` / `SETLOCAL` boilerplate).
+    for line in content.lines().rev() {
+        let mut last_exe: Option<String> = None;
+        let mut last_script: Option<String> = None;
+
+        // Pass 1: every double-quoted segment (odd indices when split by `"`).
+        for (i, segment) in line.split('"').enumerate() {
+            if i % 2 == 1 {
+                let _ = stash_token(segment, &mut last_exe, &mut last_script);
+            }
+        }
+        // Pass 2: whitespace tokens — only when pass 1 yielded nothing.
+        if last_exe.is_none() && last_script.is_none() {
+            for token in line.split_whitespace() {
+                let unquoted = token.trim_matches(['"', '\'']);
+                let _ = stash_token(unquoted, &mut last_exe, &mut last_script);
+            }
+        }
+
+        // Script wins over .exe: when both appear, .exe is the runtime
+        // (node.exe / bun.exe) and the script is the actual target. The
+        // .exe path is only used when there's no script in the line.
+        if let Some(rel) = last_script {
+            return Some(ShimTarget {
+                kind: ShimKind::Script,
+                rel,
+            });
+        }
+        if let Some(rel) = last_exe {
+            return Some(ShimTarget {
+                kind: ShimKind::Exe,
+                rel,
+            });
+        }
+    }
+    None
+}
+
+/// If `raw` looks like a relevant invocation target, store its cleaned path
+/// into the appropriate slot. `.exe` and `.js`/`.mjs`/`.cjs` are recognized;
+/// other extensions and uninteresting tokens (variables, control words) are
+/// skipped silently.
+#[cfg(any(windows, test))]
+fn stash_token(
+    raw: &str,
+    last_exe: &mut Option<String>,
+    last_script: &mut Option<String>,
+) -> Option<()> {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_lowercase();
+    let is_exe = lower.ends_with(".exe");
+    let is_script =
+        lower.ends_with(".mjs") || lower.ends_with(".js") || lower.ends_with(".cjs");
+    if !is_exe && !is_script {
+        return None;
+    }
+    let cleaned = clean_shim_token_path(trimmed)?;
+    if is_exe {
+        *last_exe = Some(cleaned);
+    } else {
+        *last_script = Some(cleaned);
+    }
+    Some(())
+}
+
+/// Strip shim variables from a path token and normalize separators. Used by
+/// [`stash_token`] after the extension classification.
+#[cfg(any(windows, test))]
+fn clean_shim_token_path(raw: &str) -> Option<String> {
+    let expanded = raw
+        .replace("%~dp0", "")
+        .replace("%dp0%", "")
+        .replace("%~dpn0", "")
+        .replace("%~f0", "")
+        .replace("%CD%", "");
+    let normalized = expanded.replace('\\', "/");
+    let cleaned = normalized.trim_start_matches('/').to_string();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// A known-layout probe: relative path segments from the shim's directory
+/// plus what kind of target lives there.
+#[cfg(any(windows, test))]
+struct KnownProbe {
+    kind: ShimKind,
+    parts: &'static [&'static str],
+}
+
+/// Well-known package layouts to probe when shim parsing fails. Each entry
+/// targets either `@anthropic-ai/claude-code/bin/claude.exe` (new-style) or
+/// `cli.js` / `cli.mjs` (legacy) across npm / Bun / yarn / pnpm globals.
+#[cfg(any(windows, test))]
+fn known_target_subpaths() -> &'static [KnownProbe] {
+    use ShimKind::{Exe, Script};
+    &[
+        // ── New-style: native .exe inside the npm package ────────
+        // npm global: %APPDATA%\npm\claude.cmd → ./node_modules/.../bin/claude.exe
+        KnownProbe {
+            kind: Exe,
+            parts: &[
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "bin",
+                "claude.exe",
+            ],
+        },
+        // npm prefix (Node native installer)
+        KnownProbe {
+            kind: Exe,
+            parts: &[
+                "..",
+                "lib",
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "bin",
+                "claude.exe",
+            ],
+        },
+        // yarn global / generic ../node_modules
+        KnownProbe {
+            kind: Exe,
+            parts: &[
+                "..",
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "bin",
+                "claude.exe",
+            ],
+        },
+        // Bun global
+        KnownProbe {
+            kind: Exe,
+            parts: &[
+                "..",
+                "install",
+                "global",
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "bin",
+                "claude.exe",
+            ],
+        },
+        // Bun packages layout
+        KnownProbe {
+            kind: Exe,
+            parts: &[
+                "..",
+                "packages",
+                "@anthropic-ai",
+                "claude-code",
+                "bin",
+                "claude.exe",
+            ],
+        },
+        // ── Legacy: pure-JS CLI invoked via Node ─────────────────
+        KnownProbe {
+            kind: Script,
+            parts: &["node_modules", "@anthropic-ai", "claude-code", "cli.js"],
+        },
+        KnownProbe {
+            kind: Script,
+            parts: &["node_modules", "@anthropic-ai", "claude-code", "cli.mjs"],
+        },
+        KnownProbe {
+            kind: Script,
+            parts: &[
+                "..",
+                "lib",
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "cli.js",
+            ],
+        },
+        KnownProbe {
+            kind: Script,
+            parts: &[
+                "..",
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "cli.js",
+            ],
+        },
+        KnownProbe {
+            kind: Script,
+            parts: &[
+                "..",
+                "install",
+                "global",
+                "node_modules",
+                "@anthropic-ai",
+                "claude-code",
+                "cli.js",
+            ],
+        },
+        KnownProbe {
+            kind: Script,
+            parts: &[
+                "..",
+                "packages",
+                "@anthropic-ai",
+                "claude-code",
+                "cli.js",
+            ],
+        },
+    ]
+}
+
+/// Find a usable `node.exe` near a shim. Falls back to bare `"node"` (relying
+/// on `PATH`) so the spawn still succeeds when Node isn't co-located.
+#[cfg(windows)]
+fn locate_node(dir: &std::path::Path) -> String {
+    let alongside = dir.join("node.exe");
+    if alongside.exists() {
+        return alongside.to_string_lossy().to_string();
+    }
+    if let Some(parent) = dir.parent() {
+        let up = parent.join("node.exe");
+        if up.exists() {
+            return up.to_string_lossy().to_string();
+        }
+    }
+    "node".to_string()
+}
+
+// ── File locking ─────────────────────────────────────────────
+
+/// Acquire an exclusive (write) lock on an open file handle.
+///
+/// On Unix, uses POSIX `flock(LOCK_EX)`. On Windows, uses `LockFileEx`.
+/// The lock is advisory on Unix and mandatory on Windows.
+/// The lock is automatically released when the `File` is dropped.
+pub fn flock_exclusive(file: &File) -> std::io::Result<()> {
+    sys::flock_exclusive(file)
+}
+
+/// Acquire a shared (read) lock on an open file handle.
+pub fn flock_shared(file: &File) -> std::io::Result<()> {
+    sys::flock_shared(file)
+}
+
+// ── File permissions ─────────────────────────────────────────
+
+/// Set file permissions to owner-only read/write (0o600 on Unix).
+///
+/// On Windows, this is a no-op — NTFS ACLs handle permissions differently
+/// and the file is already restricted to the current user by default.
+pub fn set_owner_only(path: &Path) -> std::io::Result<()> {
+    sys::set_owner_only(path)
+}
+
+/// Set file permissions to owner read/write + executable (0o755 on Unix).
+///
+/// On Windows, this is a no-op — executability is determined by file extension.
+pub fn set_executable(path: &Path) -> std::io::Result<()> {
+    sys::set_executable(path)
+}
+
+/// Check if a directory has group/other write bits set (insecure).
+///
+/// On Windows, always returns `false` (not applicable).
+pub fn is_world_writable(path: &Path) -> bool {
+    sys::is_world_writable(path)
+}
+
+/// Whether a binary-install directory is unsafe to self-update into.
+///
+/// World-writable is always unsafe. Group-writable is unsafe **unless** the
+/// owning group is an admin-class group — root/wheel (gid 0) anywhere, plus
+/// `admin` (gid 80) on macOS, where `/usr/local/bin` ships `drwxrwxr-x
+/// root:admin` (or user:admin) by default and every group member is an
+/// administrator anyway. The blanket `is_world_writable` gate (2026-08-17
+/// field report) refused updates on that stock layout, making self-update
+/// unusable on most standalone macOS installs while blocking no one who
+/// couldn't already escalate.
+///
+/// On Windows, always returns `false` (POSIX mode bits not applicable).
+pub fn is_unsafe_update_dir(path: &Path) -> bool {
+    sys::is_unsafe_update_dir(path)
+}
+
+/// Check if a file has group/other permission bits set.
+///
+/// On Windows, always returns `false` (not applicable).
+pub fn has_loose_permissions(path: &Path) -> bool {
+    sys::has_loose_permissions(path)
+}
+
+// ── Process management ───────────────────────────────────────
+
+/// Send a graceful termination signal to a process (SIGTERM on Unix, TerminateProcess on Windows).
+pub fn terminate_process(pid: u32) -> std::io::Result<()> {
+    sys::terminate_process(pid)
+}
+
+/// Forcefully kill a process (SIGKILL on Unix, TerminateProcess on Windows).
+pub fn kill_process(pid: u32) -> std::io::Result<()> {
+    sys::kill_process(pid)
+}
+
+/// Send SIGINT to the current process for graceful self-shutdown.
+///
+/// On Windows, uses `GenerateConsoleCtrlEvent(CTRL_C_EVENT)`.
+pub fn self_interrupt() {
+    sys::self_interrupt();
+}
+
+// ── Self-restart (auto-update) ───────────────────────────────
+
+/// Set when a self-update has been installed and the process should
+/// re-exec into the new binary after graceful shutdown completes.
+static RESTART_AFTER_SHUTDOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Mark the process for re-exec after the graceful shutdown sequence.
+///
+/// Also captures `executable_path()` immediately: on Linux,
+/// `/proc/self/exe` grows a ` (deleted)` suffix once the on-disk binary
+/// has been replaced, so the path must be pinned before/at update time.
+pub fn request_restart_after_shutdown() {
+    let _ = executable_path();
+    RESTART_AFTER_SHUTDOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether `request_restart_after_shutdown` was called.
+pub fn restart_requested() -> bool {
+    RESTART_AFTER_SHUTDOWN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Path of the binary this process was started from, captured once per
+/// process. Self-update replaces the file at this path in place, so the
+/// same path is valid for re-exec after an update.
+pub fn executable_path() -> std::path::PathBuf {
+    static EXE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    EXE.get_or_init(|| {
+        let p = std::env::current_exe().unwrap_or_default();
+        // Linux: /proc/self/exe reads "…/duduclaw (deleted)" if the
+        // running inode was already unlinked by an update — strip it so
+        // re-exec targets the freshly installed binary at the same path.
+        let s = p.to_string_lossy();
+        match s.strip_suffix(" (deleted)") {
+            Some(stripped) => std::path::PathBuf::from(stripped),
+            None => p,
+        }
+    })
+    .clone()
+}
+
+/// Replace the current process with a fresh instance of the binary at
+/// `executable_path()`, preserving argv and environment.
+///
+/// Unix: `execv` keeps the same PID, so launchd `KeepAlive` and systemd
+/// `Type=simple` continue tracking the service across the restart.
+/// Windows: no exec equivalent — spawns a child process and exits 0.
+///
+/// Returns only on failure.
+pub fn self_restart() -> std::io::Error {
+    let exe = executable_path();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    sys::self_restart(&exe, &args)
+}
+
+// ── Unix implementation ──────────────────────────────────────
+
+#[cfg(unix)]
+mod sys {
+    use std::fs::File;
+    use std::os::unix::io::AsRawFd;
+    use std::path::Path;
+
+    pub fn flock_exclusive(file: &File) -> std::io::Result<()> {
+        // SAFETY: fd is a valid, open file descriptor.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn flock_shared(file: &File) -> std::io::Result<()> {
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) };
+        if rc != 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn set_owner_only(path: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    }
+
+    pub fn set_executable(path: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+    }
+
+    pub fn is_world_writable(path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path)
+            .map(|m| m.mode() & 0o022 != 0)
+            .unwrap_or(false)
+    }
+
+    pub fn is_unsafe_update_dir(path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path)
+            .map(|m| unsafe_update_dir_mode(m.mode(), m.gid()))
+            .unwrap_or(false)
+    }
+
+    /// Pure decision for [`is_unsafe_update_dir`], split out for tests (a
+    /// test process cannot chown a real directory to gid 0/80).
+    pub(crate) fn unsafe_update_dir_mode(mode: u32, gid: u32) -> bool {
+        if mode & 0o002 != 0 {
+            return true; // world-writable: always unsafe
+        }
+        if mode & 0o020 != 0 {
+            // Group-writable: tolerate only admin-class groups — root/wheel
+            // (gid 0) everywhere, `admin` (gid 80) on macOS.
+            let privileged = gid == 0 || (cfg!(target_os = "macos") && gid == 80);
+            return !privileged;
+        }
+        false
+    }
+
+    pub fn has_loose_permissions(path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path)
+            .map(|m| m.mode() & 0o077 != 0)
+            .unwrap_or(false)
+    }
+
+    pub fn terminate_process(pid: u32) -> std::io::Result<()> {
+        let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        if rc != 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn kill_process(pid: u32) -> std::io::Result<()> {
+        let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        if rc != 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn self_interrupt() {
+        unsafe { libc::kill(libc::getpid(), libc::SIGINT); }
+    }
+
+    pub fn self_restart(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
+        use std::os::unix::process::CommandExt;
+        // exec() replaces the process image and never returns on success.
+        // Rust-opened fds are CLOEXEC by default, so the listener port is
+        // released before the new image binds it again.
+        std::process::Command::new(exe).args(args).exec()
+    }
+}
+
+// ── Windows implementation ───────────────────────────────────
+
+#[cfg(windows)]
+mod sys {
+    use std::fs::File;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::Path;
+
+    pub fn flock_exclusive(file: &File) -> std::io::Result<()> {
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            LOCKFILE_EXCLUSIVE_LOCK, LOCK_FILE_FLAGS,
+        };
+        use windows_sys::Win32::System::IO::OVERLAPPED;
+
+        let handle = file.as_raw_handle() as HANDLE;
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        // LockFileEx: flags = LOCKFILE_EXCLUSIVE_LOCK for exclusive lock
+        let result = unsafe {
+            windows_sys::Win32::Storage::FileSystem::LockFileEx(
+                handle,
+                LOCKFILE_EXCLUSIVE_LOCK as LOCK_FILE_FLAGS,
+                0,
+                u32::MAX,
+                u32::MAX,
+                &mut overlapped,
+            )
+        };
+        if result == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn flock_shared(file: &File) -> std::io::Result<()> {
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::IO::OVERLAPPED;
+
+        let handle = file.as_raw_handle() as HANDLE;
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        // flags = 0 means shared lock (no LOCKFILE_EXCLUSIVE_LOCK flag)
+        let result = unsafe {
+            windows_sys::Win32::Storage::FileSystem::LockFileEx(
+                handle,
+                0,
+                0,
+                u32::MAX,
+                u32::MAX,
+                &mut overlapped,
+            )
+        };
+        if result == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn set_owner_only(_path: &Path) -> std::io::Result<()> {
+        // On Windows, files are owned by the creating user by default.
+        // Fine-grained ACL manipulation is out of scope; skip.
+        Ok(())
+    }
+
+    pub fn set_executable(_path: &Path) -> std::io::Result<()> {
+        // On Windows, executability is determined by file extension (.exe).
+        Ok(())
+    }
+
+    pub fn is_world_writable(_path: &Path) -> bool {
+        false
+    }
+
+    pub fn is_unsafe_update_dir(_path: &Path) -> bool {
+        false
+    }
+
+    pub fn has_loose_permissions(_path: &Path) -> bool {
+        false
+    }
+
+    pub fn terminate_process(pid: u32) -> std::io::Result<()> {
+        use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        use windows_sys::Win32::Foundation::CloseHandle;
+
+        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let result = unsafe { TerminateProcess(handle, 1) };
+        unsafe { CloseHandle(handle); }
+        if result == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn kill_process(pid: u32) -> std::io::Result<()> {
+        // On Windows, TerminateProcess is always forceful (no graceful equivalent).
+        terminate_process(pid)
+    }
+
+    pub fn self_interrupt() {
+        use windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent;
+        // CTRL_C_EVENT = 0
+        unsafe { GenerateConsoleCtrlEvent(0, 0); }
+    }
+
+    pub fn self_restart(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
+        use std::os::windows::process::CommandExt;
+        // Windows has no exec(): spawn a replacement in a new process
+        // group (so a Ctrl+C aimed at the dying parent doesn't take the
+        // child down with it) and exit cleanly.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        match std::process::Command::new(exe)
+            .args(args)
+            .creation_flags(CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+        {
+            Ok(_) => std::process::exit(0),
+            Err(e) => e,
+        }
+    }
+}
+
+// ── Shim parser tests ─────────────────────────────────────────
+//
+// These tests are cross-platform-compiled — they exercise pure string
+// parsing (`parse_shim_target`) and static data (`known_target_subpaths`)
+// without touching the filesystem or invoking any Windows APIs, so the
+// host can be macOS or Linux.
+#[cfg(test)]
+mod home_tests {
+    use super::{duduclaw_home, duduclaw_instance, mcp_server_key, sanitize_instance};
+    use std::sync::Mutex;
+
+    // Serialize the few env-mutating tests so they don't race each other.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn sanitize_lowercases_and_replaces_invalid_chars() {
+        assert_eq!(sanitize_instance("Work"), Some("work".to_string()));
+        assert_eq!(sanitize_instance("team A/B"), Some("team-a-b".to_string()));
+        assert_eq!(sanitize_instance("café☕"), Some("caf".to_string()));
+    }
+
+    #[test]
+    fn sanitize_trims_edge_dashes_and_rejects_empty() {
+        assert_eq!(sanitize_instance("  -_-  "), None);
+        assert_eq!(sanitize_instance(""), None);
+        assert_eq!(sanitize_instance("--work--"), Some("work".to_string()));
+    }
+
+    #[test]
+    fn sanitize_caps_length_at_40() {
+        let long = "a".repeat(100);
+        assert_eq!(sanitize_instance(&long).unwrap().len(), 40);
+    }
+
+    // `std::env::set_var`/`remove_var` are `unsafe` on edition 2024; these tests
+    // serialize via ENV_LOCK and restore the prior value, so the process-global
+    // mutation is confined and reverted.
+    #[test]
+    fn duduclaw_home_prefers_env_override() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("DUDUCLAW_HOME").ok();
+        unsafe { std::env::set_var("DUDUCLAW_HOME", "/tmp/dd-instance-x") };
+        assert_eq!(duduclaw_home(), std::path::PathBuf::from("/tmp/dd-instance-x"));
+        // Empty override falls back to <home>/.duduclaw (not literal empty).
+        unsafe { std::env::set_var("DUDUCLAW_HOME", "   ") };
+        assert!(duduclaw_home().ends_with(".duduclaw"));
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("DUDUCLAW_HOME", v),
+                None => std::env::remove_var("DUDUCLAW_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn expand_tilde_expands_only_leading_segment() {
+        use super::expand_tilde;
+        let home = std::path::PathBuf::from(super::home_dir());
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/Documents/x.md"), home.join("Documents/x.md"));
+        // No leading tilde → verbatim.
+        assert_eq!(expand_tilde("/abs/path"), std::path::PathBuf::from("/abs/path"));
+        // A tilde not at the start is NOT expanded.
+        assert_eq!(expand_tilde("/a/~x"), std::path::PathBuf::from("/a/~x"));
+        // A `~user` form is not expanded (only `~` / `~/`).
+        assert_eq!(expand_tilde("~root/x"), std::path::PathBuf::from("~root/x"));
+    }
+
+    #[test]
+    fn mcp_key_is_namespaced_by_instance() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("DUDUCLAW_INSTANCE").ok();
+        unsafe { std::env::remove_var("DUDUCLAW_INSTANCE") };
+        assert_eq!(mcp_server_key(), "duduclaw");
+        assert_eq!(duduclaw_instance(), None);
+        unsafe { std::env::set_var("DUDUCLAW_INSTANCE", "Work-1") };
+        assert_eq!(mcp_server_key(), "duduclaw-work-1");
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("DUDUCLAW_INSTANCE", v),
+                None => std::env::remove_var("DUDUCLAW_INSTANCE"),
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+mod update_dir_tests {
+    use super::sys::unsafe_update_dir_mode;
+
+    #[test]
+    fn world_writable_is_always_unsafe() {
+        assert!(unsafe_update_dir_mode(0o777, 0));
+        assert!(unsafe_update_dir_mode(0o757, 80));
+        assert!(unsafe_update_dir_mode(0o40777, 501));
+    }
+
+    #[test]
+    fn owner_only_writable_is_safe() {
+        assert!(!unsafe_update_dir_mode(0o755, 501));
+        assert!(!unsafe_update_dir_mode(0o40755, 20));
+        assert!(!unsafe_update_dir_mode(0o700, 501));
+    }
+
+    #[test]
+    fn group_writable_by_non_admin_group_is_unsafe() {
+        // gid 20 = `staff` on macOS — every local user is a member, so a
+        // staff-writable binary dir hands any user a binary-swap primitive.
+        assert!(unsafe_update_dir_mode(0o775, 20));
+        assert!(unsafe_update_dir_mode(0o40775, 1000));
+    }
+
+    #[test]
+    fn group_writable_by_root_group_is_safe() {
+        assert!(!unsafe_update_dir_mode(0o775, 0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn group_writable_by_macos_admin_is_safe() {
+        // The stock `/usr/local/bin` layout (drwxrwxr-x …:admin) that the
+        // blanket group-writable gate wrongly refused (2026-08-17 field
+        // report — dashboard 更新失敗 on every standalone macOS install).
+        assert!(!unsafe_update_dir_mode(0o40775, 80));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn group_writable_by_gid_80_is_unsafe_off_macos() {
+        // gid 80 has no special meaning outside macOS.
+        assert!(unsafe_update_dir_mode(0o775, 80));
+    }
+}
+
+#[cfg(test)]
+mod shim_parser_tests {
+    use super::{ShimKind, known_target_subpaths, parse_shim_target};
+
+    fn assert_exe(content: &str, expected: &str) {
+        let target = parse_shim_target(content).expect("expected a shim target");
+        assert_eq!(target.kind(), ShimKind::Exe, "expected ShimKind::Exe");
+        assert_eq!(target.relative_path(), expected);
+    }
+
+    fn assert_script(content: &str, expected: &str) {
+        let target = parse_shim_target(content).expect("expected a shim target");
+        assert_eq!(target.kind(), ShimKind::Script, "expected ShimKind::Script");
+        assert_eq!(target.relative_path(), expected);
+    }
+
+    // ── New-style native-binary shims (the v1.8.33 bug fix) ──────
+
+    #[test]
+    fn parses_native_exe_npm_shim_for_claude_code_v2() {
+        // The exact shim format that broke v1.8.32 in production:
+        // @anthropic-ai/claude-code ≥ 2.x ships a real .exe inside the npm
+        // package and the cmd shim is just a transfer wrapper.
+        let content = r#"@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\node_modules\@anthropic-ai\claude-code\bin\claude.exe"   %*
+"#;
+        assert_exe(
+            content,
+            "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+        );
+    }
+
+    #[test]
+    fn script_wins_over_exe_when_both_present_on_line() {
+        // Bun's typical shim: `bun.exe` is the runtime, `cli.js` is the
+        // target. This is the common case where naive ".exe wins" would
+        // pick the wrong target. With the v1.8.33 rule (Script > Exe
+        // when both are on a line), Script wins.
+        let content =
+            r#"@"%~dp0\..\bun.exe" "%~dp0\..\packages\foo\cli.js" %*"#;
+        assert_script(content, "../packages/foo/cli.js");
+    }
+
+    #[test]
+    fn last_exe_wins_when_only_exes_in_line() {
+        // Two `.exe` tokens, no script: the LAST .exe is the actual target
+        // (the first is typically a runtime check or boilerplate). This
+        // mirrors the existing `picks_last_exe_when_multiple_exes_in_line`
+        // case but uses a realistic claude-code path for clarity.
+        let content =
+            r#"@"%~dp0\node.exe" "%~dp0\node_modules\@anthropic-ai\claude-code\bin\claude.exe" %*"#;
+        assert_exe(
+            content,
+            "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+        );
+    }
+
+    // ── Legacy JS-script shims (npm / Bun / pnpm / yarn classic) ──
+
+    #[test]
+    fn parses_npm_v9_legacy_js_shim() {
+        let content = r#"@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@anthropic-ai\claude-code\cli.mjs" %*
+"#;
+        assert_script(content, "node_modules/@anthropic-ai/claude-code/cli.mjs");
+    }
+
+    #[test]
+    fn parses_bun_shim_with_relative_packages_path() {
+        let content = r#"@"%~dp0\..\bun.exe" "%~dp0\..\packages\@anthropic-ai\claude-code\cli.js" %*"#;
+        assert_script(content, "../packages/@anthropic-ai/claude-code/cli.js");
+    }
+
+    #[test]
+    fn parses_pnpm_global_shim() {
+        let content = r#"@"%~dp0\node.exe" "%~dp0\..\global\5\node_modules\@anthropic-ai\claude-code\cli.js" %*"#;
+        assert_script(
+            content,
+            "../global/5/node_modules/@anthropic-ai/claude-code/cli.js",
+        );
+    }
+
+    #[test]
+    fn parses_yarn_classic_global_shim() {
+        let content =
+            r#"@node "%~dp0..\lib\node_modules\@anthropic-ai\claude-code\cli.js" %*"#;
+        assert_script(
+            content,
+            "../lib/node_modules/@anthropic-ai/claude-code/cli.js",
+        );
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────
+
+    #[test]
+    fn returns_none_for_pure_exe_wrapper_to_external_path() {
+        // Scoop-style absolute-.exe wrapper — looks like an exe target but
+        // we only follow shims when the target lies UNDER the shim dir
+        // (after %~dp0 stripping). This case still parses, but if the
+        // resolved path doesn't exist the caller falls back to the
+        // probes / direct-spawn — which for Scoop is fine, the shim's
+        // own .exe lookup works in PATH.
+        //
+        // The parser intentionally still returns a candidate; existence
+        // is verified by `resolve_cmd_shim` against the filesystem.
+        let content = r#"@"%~dp0\..\apps\claude\current\bin\claude.exe" %*"#;
+        assert_exe(content, "../apps/claude/current/bin/claude.exe");
+    }
+
+    #[test]
+    fn returns_none_for_empty_shim() {
+        assert!(parse_shim_target("").is_none());
+    }
+
+    #[test]
+    fn handles_unquoted_token() {
+        let content = "@node %~dp0\\cli.mjs %*";
+        assert_script(content, "cli.mjs");
+    }
+
+    #[test]
+    fn handles_cjs_extension() {
+        let content = r#"@node "%~dp0\node_modules\foo\bar.cjs" %*"#;
+        assert_script(content, "node_modules/foo/bar.cjs");
+    }
+
+    #[test]
+    fn picks_last_js_when_multiple_js_in_line() {
+        // Wrapper.js + real-cli.js → last one wins (only relevant when no
+        // .exe is present, since .exe takes precedence over .js).
+        let content = r#"@node "%~dp0\wrapper.js" "%~dp0\real-cli.js" %*"#;
+        assert_script(content, "real-cli.js");
+    }
+
+    #[test]
+    fn picks_last_exe_when_multiple_exes_in_line() {
+        let content = r#"@node "%~dp0\first.exe" "%~dp0\second.exe" %*"#;
+        assert_exe(content, "second.exe");
+    }
+
+    // ── known_target_subpaths sanity ─────────────────────────────
+
+    #[test]
+    fn known_target_subpaths_cover_native_and_legacy() {
+        let probes = known_target_subpaths();
+
+        let exe_count = probes.iter().filter(|p| p.kind == ShimKind::Exe).count();
+        let script_count = probes
+            .iter()
+            .filter(|p| p.kind == ShimKind::Script)
+            .count();
+
+        // Need both kinds — new-style native .exe AND legacy .js coverage.
+        assert!(
+            exe_count >= 4,
+            "expected ≥4 native-.exe probes (npm/yarn/Bun/pnpm), got {exe_count}"
+        );
+        assert!(
+            script_count >= 4,
+            "expected ≥4 JS-script probes (npm/yarn/Bun/pnpm), got {script_count}"
+        );
+
+        // Every probe targets @anthropic-ai/claude-code under some layout.
+        assert!(
+            probes.iter().all(|p| p.parts.contains(&"@anthropic-ai")
+                && p.parts.contains(&"claude-code")),
+            "every probe should target @anthropic-ai/claude-code"
+        );
+
+        // Native .exe probes end with claude.exe; script probes end with cli.{js,mjs}.
+        for p in probes {
+            let last = *p.parts.last().expect("non-empty");
+            match p.kind {
+                ShimKind::Exe => assert_eq!(
+                    last, "claude.exe",
+                    "exe probe must terminate at claude.exe"
+                ),
+                ShimKind::Script => assert!(
+                    last == "cli.js" || last == "cli.mjs",
+                    "script probe must terminate at cli.js/cli.mjs"
+                ),
+            }
+        }
+    }
+}

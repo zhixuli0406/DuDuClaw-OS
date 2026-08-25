@@ -1,0 +1,96 @@
+# DuDuClaw Manufacturing Agent Template
+# Usage: cp -r templates/manufacturing/ ~/.duduclaw/agents/<your-agent-name>/
+
+[agent]
+name = "factory-assistant"
+display_name = "Factory Assistant"
+role = "main"
+status = "active"
+trigger = "factory"
+reports_to = "none"
+icon = "factory"
+
+# Optional: choose the AI runtime backend (default: claude).
+# Providers: "claude" | "codex" | "gemini" | "antigravity" | "openai_compat".
+# "antigravity" drives Google's `agy` CLI (the 2026-06-18 successor to the
+# personal Gemini CLI; install to ~/.local/bin/agy, key via ANTIGRAVITY_API_KEY).
+# See docs/todo/TODO-antigravity-cli-migration.md.
+# [runtime]
+# provider = "antigravity"
+# fallback = "claude"
+
+[model]
+preferred = "claude-sonnet-4-6"
+fallback = "claude-haiku-4-5"
+account_pool = []  # empty = every rotator account; list account ids/labels to restrict this agent
+api_mode = "cli"
+
+[model.local]
+model = ""
+backend = "llama_cpp"
+context_length = 4096
+gpu_layers = -1
+prefer_local = true
+use_router = true
+
+[container]
+timeout_ms = 30000
+max_concurrent = 2
+readonly_project = true
+sandbox_enabled = false
+network_access = false
+
+[heartbeat]
+enabled = true
+interval_seconds = 300
+max_concurrent_runs = 1
+# `cron` is evaluated in `cron_timezone` when set, otherwise UTC.
+# 5-field syntax (min hour dom mon dow) is normalised to 6-field internally.
+cron = "*/5 * * * *"
+# IANA timezone for `cron`. Empty = UTC (legacy behaviour pre-v1.8.23).
+# With cron_timezone = "Asia/Taipei", `"0 9 * * *"` fires at 09:00 Taipei.
+cron_timezone = ""
+
+[budget]
+monthly_limit_cents = 3000
+warn_threshold_percent = 80
+hard_stop = false
+
+[permissions]
+can_create_agents = false
+can_send_cross_agent = true
+can_modify_own_skills = false
+can_modify_own_soul = false
+can_schedule_tasks = true
+allowed_channels = ["telegram", "line"]
+
+[evolution]
+skill_auto_activate = true
+skill_security_scan = true
+gvu_enabled = true
+max_silence_hours = 4.0
+max_gvu_generations = 3
+observation_period_hours = 24.0
+skill_token_budget = 2500
+max_active_skills = 5
+
+[evolution.external_factors]
+user_feedback = true
+security_events = true
+channel_metrics = true
+business_context = true
+peer_signals = false
+
+[capabilities]
+computer_use = false
+browser_via_bash = false
+allowed_tools = []
+denied_tools = []
+
+# WP2.6 §4 — curated skills a manufacturing/operations agent typically wants.
+[skills]
+recommended = [
+    "anthropic-skills:xlsx",  # BOM / production-schedule spreadsheets
+    "anthropic-skills:pdf",   # spec sheets, work orders
+    "anthropic-skills:docx",  # SOP documents
+]

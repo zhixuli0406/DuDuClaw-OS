@@ -1,0 +1,126 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/duduclaw-agent",
+    "crates/duduclaw-auth",
+    "crates/duduclaw-cli",
+    "crates/duduclaw-cli-runtime",
+    "crates/duduclaw-cli-worker",
+    "crates/duduclaw-container",
+    "crates/duduclaw-core",
+    "crates/duduclaw-dashboard",
+    "crates/duduclaw-fork",
+    "crates/duduclaw-gateway",
+    "crates/duduclaw-identity",
+    "crates/duduclaw-inference",
+    "crates/duduclaw-license",
+    "crates/duduclaw-llm",
+    "crates/duduclaw-memory",
+    "crates/duduclaw-odoo",
+    "crates/duduclaw-os",
+    "crates/duduclaw-redaction",
+    "crates/duduclaw-sandbox",
+    "crates/duduclaw-security",
+    "crates/duduclaw-sysd",
+    "crates/duduclaw-desktop",
+    "crates/duduclaw-relay",
+]
+
+[workspace.package]
+version = "1.62.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["DuDuClaw Contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Web
+axum = { version = "0.8", features = ["ws"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rust-embed = { version = "8", features = ["compression"] }
+mime_guess = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
+
+# Docker
+bollard = "0.18"
+
+# Crypto
+ring = "0.17"
+base64 = "0.22"
+
+# HTML sanitization (white-label About block) — servo ecosystem standard,
+# allowlist-based; security review low. Pinned to the 4.x line.
+ammonia = "4"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+cron = "0.15"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Streams
+futures-util = "0.3"
+
+# HTTP client (shared)
+reqwest = { version = "0.12", features = ["json"] }
+
+# mDNS / DNS-SD — LAN gateway advertising (gateway) + discovery (desktop).
+# Pure Rust, no async runtime dependency, cross-platform (macOS/Linux/Windows).
+mdns-sd = "0.20"
+
+# Internal crates
+duduclaw-core = { path = "crates/duduclaw-core" }
+duduclaw-inference = { path = "crates/duduclaw-inference", default-features = false }
+duduclaw-gateway = { path = "crates/duduclaw-gateway", default-features = false }
+duduclaw-security = { path = "crates/duduclaw-security" }
+duduclaw-memory = { path = "crates/duduclaw-memory" }
+duduclaw-container = { path = "crates/duduclaw-container" }
+duduclaw-agent = { path = "crates/duduclaw-agent" }
+duduclaw-fork = { path = "crates/duduclaw-fork" }
+duduclaw-dashboard = { path = "crates/duduclaw-dashboard" }
+duduclaw-auth = { path = "crates/duduclaw-auth" }
+duduclaw-odoo = { path = "crates/duduclaw-odoo" }
+duduclaw-desktop = { path = "crates/duduclaw-desktop" }
+duduclaw-identity = { path = "crates/duduclaw-identity" }
+duduclaw-redaction = { path = "crates/duduclaw-redaction" }
+duduclaw-cli-runtime = { path = "crates/duduclaw-cli-runtime" }
+duduclaw-cli-worker = { path = "crates/duduclaw-cli-worker" }
+duduclaw-license = { path = "crates/duduclaw-license" }
+duduclaw-llm = { path = "crates/duduclaw-llm" }
+duduclaw-sandbox = { path = "crates/duduclaw-sandbox" }
+duduclaw-os = { path = "crates/duduclaw-os" }
+duduclaw-pets = { path = "crates/duduclaw-pets", default-features = false }
+# WP-E2: gateway-side relay client integration tests spin up the real relay
+# router (crates/duduclaw-relay) on an ephemeral port rather than
+# re-implementing a mock — see duduclaw-gateway's [dev-dependencies].
+duduclaw-relay = { path = "crates/duduclaw-relay" }
+duduclaw-sysd = { path = "crates/duduclaw-sysd" }

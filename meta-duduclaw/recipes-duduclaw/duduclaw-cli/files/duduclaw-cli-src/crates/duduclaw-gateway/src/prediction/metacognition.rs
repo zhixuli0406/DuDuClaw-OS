@@ -1,0 +1,1286 @@
+//! Metacognition — self-calibrating thresholds for the prediction engine.
+//!
+//! Inspired by ICML 2025 "Truly Self-Improving Agents Require Intrinsic
+//! Metacognitive Learning": the evolution engine doesn't just improve agent
+//! performance — it evaluates and adjusts its own triggering thresholds.
+//!
+//! ## Hardening (2025-Q2)
+//!
+//! - **SurpriseDeficitTracker**: Forces GVU exploration when prediction errors
+//!   are consistently too low (dark room convergence). Based on Active Inference
+//!   epistemic foraging (Parr, Pezzulo & Friston 2024).
+//! - **High-confidence penalty**: Lowers thresholds when accuracy is suspiciously
+//!   high for too long (Fountas et al. 2023).
+//! - **Accumulation Principle**: Blends original baseline stats with current stats
+//!   to prevent feedback loop amplification (Gerstgrasser et al. ICLR 2025).
+//! - **CUSUM ChangePointDetector**: Replaces fixed 100-prediction evaluation
+//!   interval with adaptive shift detection (Suk 2024).
+
+use std::collections::{HashMap, VecDeque};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
+
+use super::engine::{ErrorCategory, PredictionError};
+
+// ---------------------------------------------------------------------------
+// GVU Generation Stats — adaptive iteration depth
+// ---------------------------------------------------------------------------
+
+/// Record of a single GVU loop execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GvuAttemptRecord {
+    /// Which generation was accepted (None = all rejected / abandoned).
+    pub accepted_at_generation: Option<u32>,
+    /// How many generations were attempted.
+    pub max_generations_used: u32,
+}
+
+/// Tracks GVU generation outcomes for adaptive depth calculation.
+///
+/// If late-generation acceptances are common, the system increases
+/// max_generations to allow more attempts. If most acceptances happen
+/// early, the default of 3 is sufficient.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GvuGenerationStats {
+    pub recent_outcomes: VecDeque<GvuAttemptRecord>,
+    pub window_size: usize,
+}
+
+impl Default for GvuGenerationStats {
+    fn default() -> Self {
+        Self {
+            recent_outcomes: VecDeque::new(),
+            window_size: 20,
+        }
+    }
+}
+
+impl GvuGenerationStats {
+    /// Record the outcome of a GVU loop execution.
+    pub fn record(&mut self, accepted_at: Option<u32>, max_used: u32) {
+        self.recent_outcomes.push_back(GvuAttemptRecord {
+            accepted_at_generation: accepted_at,
+            max_generations_used: max_used,
+        });
+        while self.recent_outcomes.len() > self.window_size {
+            self.recent_outcomes.pop_front();
+        }
+    }
+
+    /// Calculate adaptive max_generations based on historical outcomes.
+    ///
+    /// Logic:
+    /// - If >30% of acceptances happen at generation >= 3 → extend to 5
+    /// - If >10% at generation >= 3 → extend to 4
+    /// - Otherwise → default 3
+    /// - Hard cap: 7
+    pub fn adaptive_max_generations(&self) -> u32 {
+        if self.recent_outcomes.len() < 3 {
+            return 3; // Not enough data
+        }
+
+        // Only count non-abandoned runs — abandoned entries would deflate the
+        // late_rate and prevent depth extension (review #25).
+        let accepted: Vec<_> = self.recent_outcomes.iter()
+            .filter(|r| r.accepted_at_generation.is_some())
+            .collect();
+
+        if accepted.len() < 3 {
+            return 3; // Not enough accepted data
+        }
+
+        let late_successes = accepted.iter()
+            .filter(|r| r.accepted_at_generation.map(|g| g >= 3).unwrap_or(false))
+            .count() as f64;
+
+        let late_rate = late_successes / accepted.len() as f64;
+
+        let depth = if late_rate > 0.3 {
+            5
+        } else if late_rate > 0.1 {
+            4
+        } else {
+            3
+        };
+
+        depth.min(7)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AdaptiveThresholds
+// ---------------------------------------------------------------------------
+
+/// Thresholds that divide composite_error into ErrorCategory buckets.
+///
+/// These adapt over time based on measured effectiveness of each category's
+/// evolution response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveThresholds {
+    /// Upper bound for Negligible (below this = Negligible).
+    pub negligible_upper: f64,
+    /// Upper bound for Moderate (below this = Moderate, above = Significant).
+    pub moderate_upper: f64,
+    /// Upper bound for Significant (above this = Critical).
+    pub significant_upper: f64,
+}
+
+impl Default for AdaptiveThresholds {
+    fn default() -> Self {
+        Self {
+            negligible_upper: 0.2,
+            moderate_upper: 0.5,
+            significant_upper: 0.8,
+        }
+    }
+}
+
+impl AdaptiveThresholds {
+    /// Classify a composite error into a category.
+    pub fn category_for(&self, composite_error: f64) -> ErrorCategory {
+        if composite_error < self.negligible_upper {
+            ErrorCategory::Negligible
+        } else if composite_error < self.moderate_upper {
+            ErrorCategory::Moderate
+        } else if composite_error < self.significant_upper {
+            ErrorCategory::Significant
+        } else {
+            ErrorCategory::Critical
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LayerEffectiveness
+// ---------------------------------------------------------------------------
+
+/// Tracks how effective a particular error category's response is.
+///
+/// Uses a rolling window: only the last `window_size` events are counted,
+/// preventing early cold-start data from permanently polluting the signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerEffectiveness {
+    /// Rolling window of recent outcomes (true = improved, false = not improved).
+    pub recent_outcomes: std::collections::VecDeque<bool>,
+    /// Maximum window size (default 50).
+    pub window_size: usize,
+    /// Lifetime trigger count (for diagnostics only, not used in rate calculation).
+    pub total_triggers: u64,
+}
+
+impl Default for LayerEffectiveness {
+    fn default() -> Self {
+        Self {
+            recent_outcomes: std::collections::VecDeque::new(),
+            window_size: 50,
+            total_triggers: 0,
+        }
+    }
+}
+
+impl LayerEffectiveness {
+    /// Record a trigger (outcome not yet known).
+    pub fn record_trigger(&mut self) {
+        self.total_triggers += 1;
+    }
+
+    /// Record an outcome for a previous trigger.
+    pub fn record_outcome(&mut self, improved: bool) {
+        self.recent_outcomes.push_back(improved);
+        while self.recent_outcomes.len() > self.window_size {
+            self.recent_outcomes.pop_front();
+        }
+    }
+
+    /// Improvement rate over the rolling window (0.0 - 1.0). Returns 0.5 if no data.
+    pub fn improvement_rate(&self) -> f64 {
+        if self.recent_outcomes.is_empty() {
+            0.5
+        } else {
+            let improved = self.recent_outcomes.iter().filter(|&&b| b).count() as f64;
+            improved / self.recent_outcomes.len() as f64
+        }
+    }
+
+    /// Number of outcomes in the current window.
+    pub fn window_count(&self) -> usize {
+        self.recent_outcomes.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SurpriseDeficitTracker — anti-dark-room
+// ---------------------------------------------------------------------------
+
+/// Tracks cumulative surprise deficit to detect dark room convergence.
+///
+/// When prediction errors are consistently below a floor, the cumulative
+/// deficit grows. Once it exceeds a budget, forced exploration is triggered.
+///
+/// Based on Active Inference epistemic foraging: agents must maintain a
+/// minimum level of surprise to ensure continued learning.
+/// (Parr, Pezzulo & Friston 2024)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurpriseDeficitTracker {
+    /// Minimum expected surprise level (composite error floor).
+    pub expected_surprise_floor: f64,
+    /// Accumulated deficit: Σ max(0, floor - actual_error).
+    pub cumulative_deficit: f64,
+    /// Budget: when cumulative_deficit exceeds this, force exploration.
+    pub deficit_budget: f64,
+    /// How many times the deficit budget has been exceeded (lifetime).
+    pub forced_exploration_count: u64,
+}
+
+impl Default for SurpriseDeficitTracker {
+    fn default() -> Self {
+        Self {
+            expected_surprise_floor: 0.15,
+            cumulative_deficit: 0.0,
+            deficit_budget: 2.0,
+            forced_exploration_count: 0,
+        }
+    }
+}
+
+impl SurpriseDeficitTracker {
+    /// Record a prediction error and accumulate any deficit.
+    pub fn record(&mut self, composite_error: f64) {
+        let deficit = (self.expected_surprise_floor - composite_error).max(0.0);
+        self.cumulative_deficit += deficit;
+    }
+
+    /// Whether the deficit budget is exceeded (force exploration).
+    pub fn should_force_exploration(&self) -> bool {
+        self.cumulative_deficit > self.deficit_budget
+    }
+
+    /// Reset deficit after forced exploration is triggered.
+    pub fn reset(&mut self) {
+        self.cumulative_deficit = 0.0;
+        self.forced_exploration_count += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CUSUM ChangePointDetector — adaptive evaluation interval
+// ---------------------------------------------------------------------------
+
+/// Detects significant distribution shifts in prediction errors using CUSUM.
+///
+/// Replaces the fixed 100-prediction evaluation interval with adaptive
+/// detection: only recalibrate thresholds when a real shift is detected.
+///
+/// Based on Suk (2024) "Adaptive Smooth Non-Stationary Bandits".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePointDetector {
+    /// Running mean of composite errors.
+    running_mean: f64,
+    /// Running count for mean calculation.
+    count: u64,
+    /// CUSUM positive statistic (detects upward shifts).
+    cusum_pos: f64,
+    /// CUSUM negative statistic (detects downward shifts).
+    cusum_neg: f64,
+    /// Slack parameter (minimum detectable shift / 2).
+    slack: f64,
+    /// Detection threshold.
+    threshold: f64,
+    /// Latched detection flag — set by `record()`, cleared by `acknowledge()`.
+    /// Prevents the detection from being lost between `record()` and `should_evaluate()`.
+    detected: bool,
+}
+
+impl Default for ChangePointDetector {
+    fn default() -> Self {
+        Self {
+            running_mean: 0.3,  // initial estimate
+            count: 0,
+            cusum_pos: 0.0,
+            cusum_neg: 0.0,
+            slack: 0.05,
+            threshold: 4.0,
+            detected: false,
+        }
+    }
+}
+
+impl ChangePointDetector {
+    /// Record a new composite error and check for distribution shift.
+    /// Returns `true` if a change point is detected.
+    pub fn record(&mut self, composite_error: f64) -> bool {
+        // CUSUM deviation BEFORE updating mean — otherwise the deviation is always
+        // near-zero because we'd be comparing against a mean that includes this observation.
+        // (Audit issue #3: neutered change-point detector)
+        self.cusum_pos = (self.cusum_pos + composite_error - self.running_mean - self.slack).max(0.0);
+        self.cusum_neg = (self.cusum_neg - composite_error + self.running_mean - self.slack).max(0.0);
+
+        // THEN update running mean (Welford's online mean)
+        self.count += 1;
+        let delta = composite_error - self.running_mean;
+        self.running_mean += delta / self.count as f64;
+
+        if self.cusum_pos > self.threshold || self.cusum_neg > self.threshold {
+            // Latch the detection and reset CUSUM accumulators
+            self.detected = true;
+            self.cusum_pos = 0.0;
+            self.cusum_neg = 0.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether a change point has been detected since the last acknowledgment.
+    pub fn is_detected(&self) -> bool {
+        self.detected
+    }
+
+    /// Acknowledge a detection — clears the latched flag.
+    pub fn acknowledge(&mut self) {
+        self.detected = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MetaCognition
+// ---------------------------------------------------------------------------
+
+/// Self-calibrating metacognition system.
+///
+/// Periodically evaluates whether the prediction engine's thresholds are
+/// well-calibrated and adjusts them based on measured outcomes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaCognition {
+    /// Current adaptive thresholds.
+    pub thresholds: AdaptiveThresholds,
+
+    /// Effectiveness tracking per error category.
+    pub layer_stats: HashMap<String, LayerEffectiveness>,
+
+    /// How many predictions between evaluations (fallback if CUSUM disabled).
+    pub evaluation_interval: u64,
+
+    /// Predictions since last evaluation.
+    pub predictions_since_last_eval: u64,
+
+    /// Total predictions ever made.
+    pub total_predictions: u64,
+
+    // ── Hardening: anti-dark-room (Risk 2) ─────────────────────
+
+    /// Surprise deficit tracker — forces exploration when predictions are
+    /// consistently too accurate (dark room convergence).
+    #[serde(default)]
+    pub surprise_deficit: SurpriseDeficitTracker,
+
+    /// Consecutive accurate predictions counter (for high-confidence penalty).
+    #[serde(default)]
+    pub consecutive_accurate: u64,
+
+    /// Consecutive NON-negligible predictions counter (WP0.4/0.7 — R7).
+    ///
+    /// Mirror of [`Self::consecutive_accurate`]: increments when a prediction
+    /// lands outside `Negligible`, resets to 0 on a `Negligible` prediction.
+    /// Feeds the symmetric recovery rule in [`Self::evaluate_and_adjust`] that
+    /// raises `negligible_upper` back toward its default after a long stretch
+    /// of non-trivial errors — without this, the high-confidence penalty only
+    /// ever lowers `negligible_upper` and it never recovers (R7).
+    #[serde(default)]
+    pub consecutive_non_negligible: u64,
+
+    // ── Hardening: anti-feedback-loop (Risk 3) ─────────────────
+
+    /// CUSUM change-point detector — replaces fixed evaluation interval.
+    #[serde(default)]
+    pub change_detector: ChangePointDetector,
+
+    /// Original improvement rate for Significant category (anchored at first calibration).
+    /// Used for Accumulation Principle: blend 30% original + 70% current.
+    #[serde(default)]
+    pub original_sig_improvement_rate: Option<f64>,
+
+    // ── Proactive self-calibration (Phase D3) ───────────────────
+
+    /// Proactive message threshold (0.0-1.0). Only send proactive messages
+    /// when the motivation score exceeds this threshold.
+    /// Self-calibrates based on user accept/dismiss feedback.
+    #[serde(default = "default_proactive_threshold")]
+    pub proactive_threshold: f64,
+
+    /// Total proactive messages sent (for calibration).
+    #[serde(default)]
+    pub proactive_sent: u64,
+
+    /// Total proactive messages accepted by users.
+    #[serde(default)]
+    pub proactive_accepted: u64,
+
+    /// Total proactive messages dismissed by users.
+    #[serde(default)]
+    pub proactive_dismissed: u64,
+
+    /// Proactive evaluations since last calibration.
+    #[serde(default)]
+    pub proactive_since_last_cal: u64,
+
+    // ── GVU adaptive depth (Phase 1.3) ─────────────────────
+
+    /// GVU generation outcome tracking for adaptive iteration depth.
+    /// Determines whether to extend beyond the default 3 generations.
+    #[serde(default)]
+    pub gvu_generation_stats: GvuGenerationStats,
+
+    // ── M35: windowed Critical proportion ───────────────────────
+    /// Rolling window of recent prediction category labels (most recent at the
+    /// back). Used to compute a *windowed* Critical proportion instead of the
+    /// lifetime-cumulative one, which otherwise ratchets `significant_upper`
+    /// down to its 0.4 floor permanently after any early burst of Critical
+    /// errors and then mis-fires emergency GVU forever.
+    #[serde(default)]
+    pub recent_categories: VecDeque<ErrorCategory>,
+}
+
+/// Window size for the M35 recent-Critical-proportion calculation.
+const RECENT_CATEGORY_WINDOW: usize = 100;
+
+impl Default for MetaCognition {
+    fn default() -> Self {
+        Self {
+            thresholds: AdaptiveThresholds::default(),
+            layer_stats: HashMap::new(),
+            evaluation_interval: 100,
+            predictions_since_last_eval: 0,
+            total_predictions: 0,
+            surprise_deficit: SurpriseDeficitTracker::default(),
+            consecutive_accurate: 0,
+            consecutive_non_negligible: 0,
+            change_detector: ChangePointDetector::default(),
+            original_sig_improvement_rate: None,
+            proactive_threshold: 0.5,
+            proactive_sent: 0,
+            proactive_accepted: 0,
+            proactive_dismissed: 0,
+            proactive_since_last_cal: 0,
+            gvu_generation_stats: GvuGenerationStats::default(),
+            recent_categories: VecDeque::new(),
+        }
+    }
+}
+
+impl MetaCognition {
+    /// Get the adaptive max_generations for GVU loops.
+    ///
+    /// Delegates to `GvuGenerationStats::adaptive_max_generations()`.
+    /// Returns 3 if not enough data.
+    pub fn adaptive_max_generations(&self) -> u32 {
+        self.gvu_generation_stats.adaptive_max_generations()
+    }
+
+    /// Record a GVU loop outcome for adaptive depth tracking.
+    pub fn record_gvu_outcome(&mut self, accepted_at: Option<u32>, max_used: u32) {
+        self.gvu_generation_stats.record(accepted_at, max_used);
+    }
+}
+
+impl MetaCognition {
+    /// Record a prediction error (called after every prediction).
+    pub fn record_prediction(&mut self, error: &PredictionError) {
+        let key = format!("{:?}", error.category);
+        let stats = self.layer_stats.entry(key).or_default();
+        stats.record_trigger();
+
+        // M35: track the category in a bounded rolling window so the Critical
+        // proportion reflects *recent* behaviour, not lifetime cumulative.
+        self.recent_categories.push_back(error.category);
+        while self.recent_categories.len() > RECENT_CATEGORY_WINDOW {
+            self.recent_categories.pop_front();
+        }
+
+        self.predictions_since_last_eval += 1;
+        self.total_predictions += 1;
+
+        // --- Hardening: surprise deficit tracking (Risk 2) ---
+        self.surprise_deficit.record(error.composite_error);
+
+        // Track consecutive accurate predictions (high-confidence penalty)
+        // and its mirror — consecutive non-negligible predictions (WP0.7
+        // recovery rule below).
+        if error.category == ErrorCategory::Negligible {
+            self.consecutive_accurate += 1;
+            self.consecutive_non_negligible = 0;
+        } else {
+            self.consecutive_accurate = 0;
+            self.consecutive_non_negligible += 1;
+        }
+
+        // --- Hardening: CUSUM change-point detection (Risk 3) ---
+        // Feed composite error to the change detector (result used in should_evaluate)
+        self.change_detector.record(error.composite_error);
+    }
+
+    /// Record whether a triggered evolution actually improved things.
+    ///
+    /// Called after an evolution cycle completes and we can measure the outcome.
+    /// Uses rolling window so early cold-start data doesn't permanently pollute.
+    pub fn record_outcome(&mut self, category: ErrorCategory, improved: bool) {
+        let key = format!("{category:?}");
+        let stats = self.layer_stats.entry(key).or_default();
+        stats.record_outcome(improved);
+    }
+
+    /// Whether it's time to evaluate and adjust thresholds.
+    ///
+    /// Uses CUSUM change-point detection as primary trigger, with fixed
+    /// interval as fallback.
+    pub fn should_evaluate(&self) -> bool {
+        // CUSUM detected a distribution shift (latched flag, not stale values)
+        let cusum_triggered = self.change_detector.is_detected();
+
+        // Fallback: fixed interval
+        let interval_triggered = self.predictions_since_last_eval >= self.evaluation_interval;
+
+        cusum_triggered || interval_triggered
+    }
+
+    /// Whether the surprise deficit tracker requires forced exploration.
+    pub fn should_force_exploration(&self) -> bool {
+        self.surprise_deficit.should_force_exploration()
+    }
+
+    /// Reset surprise deficit after forced exploration is acted upon.
+    pub fn reset_surprise_deficit(&mut self) {
+        self.surprise_deficit.reset();
+    }
+
+    /// Evaluate threshold effectiveness and adjust.
+    ///
+    /// The key insight: if a category triggers often but rarely leads to
+    /// improvement, the threshold is too low (too sensitive). If the next
+    /// category up has a high trigger-to-improvement ratio, the lower
+    /// threshold might be too high (missing opportunities).
+    pub fn evaluate_and_adjust(&mut self) {
+        let sig_key = format!("{:?}", ErrorCategory::Significant);
+        let mod_key = format!("{:?}", ErrorCategory::Moderate);
+
+        let current_sig_rate = self
+            .layer_stats
+            .get(&sig_key)
+            .map(|s| s.improvement_rate())
+            .unwrap_or(0.5);
+
+        // --- Hardening: Accumulation Principle (Risk 3) ---
+        // Anchor first-ever sig improvement rate as baseline.
+        // Blend 30% original + 70% current to prevent feedback loop amplification.
+        // (Gerstgrasser et al. ICLR 2025 "Is Model Collapse Inevitable?")
+        if self.original_sig_improvement_rate.is_none()
+            && self.layer_stats.get(&sig_key).map(|s| s.window_count()).unwrap_or(0) >= 5
+        {
+            self.original_sig_improvement_rate = Some(current_sig_rate);
+            info!(rate = format!("{current_sig_rate:.2}"), "Anchored original sig improvement rate");
+        }
+
+        let sig_rate = if let Some(original) = self.original_sig_improvement_rate {
+            0.3 * original + 0.7 * current_sig_rate
+        } else {
+            current_sig_rate
+        };
+
+        // M35: compute the Critical proportion over the recent window, NOT the
+        // lifetime cumulative `total_triggers`. With the cumulative form, once the
+        // proportion exceeded 0.2 it could essentially never fall back below it
+        // (a fixed historical numerator), so `significant_upper` ratcheted down to
+        // its 0.4 floor and emergency GVU mis-fired indefinitely. The windowed
+        // proportion recovers as recent behaviour normalises.
+        let crit_proportion = if self.recent_categories.is_empty() {
+            0.0
+        } else {
+            let crit_recent = self
+                .recent_categories
+                .iter()
+                .filter(|&&c| c == ErrorCategory::Critical)
+                .count();
+            crit_recent as f64 / self.recent_categories.len() as f64
+        };
+
+        let _mod_rate = self
+            .layer_stats
+            .get(&mod_key)
+            .map(|s| s.improvement_rate())
+            .unwrap_or(0.5);
+
+        let mut adjusted = false;
+
+        // If Significant triggers rarely lead to improvement → too sensitive, raise threshold
+        if sig_rate < 0.3 && self.layer_stats.get(&sig_key).map(|s| s.window_count()).unwrap_or(0) >= 5 {
+            self.thresholds.moderate_upper = (self.thresholds.moderate_upper + 0.05).min(0.85);
+            adjusted = true;
+        }
+
+        // If Significant triggers frequently lead to improvement → too conservative
+        if sig_rate > 0.7 && self.layer_stats.get(&sig_key).map(|s| s.window_count()).unwrap_or(0) >= 5 {
+            self.thresholds.moderate_upper = (self.thresholds.moderate_upper - 0.03).max(0.2);
+            adjusted = true;
+        }
+
+        // If Critical proportion is too high → thresholds are too high
+        if crit_proportion > 0.2 {
+            self.thresholds.significant_upper = (self.thresholds.significant_upper - 0.05).max(0.4);
+            adjusted = true;
+        }
+
+        // --- R7 symmetry fix: significant_upper recovery ---
+        // Mirror of the down-ratchet above. Without this, `significant_upper`
+        // only ever moves down (any Critical burst permanently narrows the
+        // Significant band) even after the system has been well-behaved for
+        // a long stretch — the exact one-way-compression failure mode
+        // diagnosed as R7. Trigger logic mirrors the down-ratchet (same
+        // windowed crit_proportion signal, opposite direction, same 0.05
+        // step) and requires a FULL window of recent data so a cold-start
+        // empty window (crit_proportion defaults to 0.0) can't spuriously
+        // raise the threshold before there's any real signal. Bounded at the
+        // AdaptiveThresholds default (0.8) — this rule may only repair prior
+        // down-ratchets, never push significant_upper past its healthy
+        // baseline.
+        if self.recent_categories.len() >= RECENT_CATEGORY_WINDOW && crit_proportion < 0.05 {
+            let default_significant_upper = AdaptiveThresholds::default().significant_upper;
+            let raised = (self.thresholds.significant_upper + 0.05).min(default_significant_upper);
+            if (raised - self.thresholds.significant_upper).abs() > f64::EPSILON {
+                self.thresholds.significant_upper = raised;
+                adjusted = true;
+            }
+        }
+
+        // --- Hardening: high-confidence penalty (Risk 2) ---
+        // When predictions are accurate for too long, the prediction space may
+        // have narrowed rather than improved. Lower thresholds to let more
+        // errors through. (Fountas et al. 2023)
+        if self.consecutive_accurate > 200 {
+            self.thresholds.negligible_upper = (self.thresholds.negligible_upper - 0.03).max(0.1);
+            adjusted = true;
+            info!(
+                consecutive = self.consecutive_accurate,
+                "High-confidence penalty applied — lowering negligible threshold"
+            );
+            // Reset to prevent repeated penalty application on every subsequent
+            // evaluate_and_adjust call (which would drive threshold to minimum).
+            self.consecutive_accurate = 0;
+        }
+
+        // --- R7 symmetry fix: negligible_upper recovery ---
+        // Mirror of the high-confidence penalty above. Same trigger
+        // (streak > 200), same step (0.03), opposite direction and opposite
+        // streak counter — a long run of non-trivial errors implies the
+        // Negligible band may have been over-narrowed by a past penalty
+        // application, so widen it back. Bounded at the AdaptiveThresholds
+        // default (0.2) so this can only undo prior penalties, never grow
+        // negligible_upper past its healthy baseline.
+        if self.consecutive_non_negligible > 200 {
+            let default_negligible_upper = AdaptiveThresholds::default().negligible_upper;
+            self.thresholds.negligible_upper =
+                (self.thresholds.negligible_upper + 0.03).min(default_negligible_upper);
+            adjusted = true;
+            info!(
+                consecutive = self.consecutive_non_negligible,
+                "Negligible threshold recovery applied — raising negligible threshold (R7)"
+            );
+            self.consecutive_non_negligible = 0;
+        }
+
+        // Clamp all thresholds to valid ranges
+        self.thresholds.negligible_upper = self.thresholds.negligible_upper.clamp(0.1, 0.4);
+        self.thresholds.moderate_upper = self.thresholds.moderate_upper.clamp(0.2, 0.85);
+        self.thresholds.significant_upper = self.thresholds.significant_upper.clamp(0.4, 0.95);
+
+        // Ensure ordering: negligible < moderate < significant
+        if self.thresholds.negligible_upper >= self.thresholds.moderate_upper {
+            self.thresholds.negligible_upper = self.thresholds.moderate_upper - 0.05;
+        }
+        if self.thresholds.moderate_upper >= self.thresholds.significant_upper {
+            self.thresholds.moderate_upper = self.thresholds.significant_upper - 0.05;
+        }
+
+        if adjusted {
+            info!(
+                negligible = format!("{:.2}", self.thresholds.negligible_upper),
+                moderate = format!("{:.2}", self.thresholds.moderate_upper),
+                significant = format!("{:.2}", self.thresholds.significant_upper),
+                "Metacognition adjusted thresholds"
+            );
+        }
+
+        // Reset counter (but keep layer_stats for ongoing tracking)
+        self.predictions_since_last_eval = 0;
+
+        // Acknowledge CUSUM detection so it doesn't re-trigger immediately
+        self.change_detector.acknowledge();
+    }
+
+    /// Persist state to a JSON file.
+    pub fn persist(&self, path: &Path) {
+        match serde_json::to_string_pretty(self) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    warn!("Failed to persist metacognition: {e}");
+                }
+            }
+            Err(e) => warn!("Failed to serialize metacognition: {e}"),
+        }
+    }
+
+    /// Load state from a JSON file.
+    pub fn load(path: &Path) -> Option<Self> {
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    /// Re-anchor in-memory counters to the authoritative SQLite tables in
+    /// `prediction.db`.
+    ///
+    /// **Why this exists.** `MetaCognition` is normally written to
+    /// `metacognition.json` in-process and only persists when an evaluation
+    /// happens. If the gateway is killed before that fires (or the JSON file
+    /// is wiped), the next process boots with `total_predictions=0` while the
+    /// SQLite `prediction_log` already has hundreds of rows — adaptive
+    /// thresholds never recalibrate because `evaluation_interval=100` is now
+    /// unreachable.
+    ///
+    /// This method walks the DB once and **takes the maximum** of the on-disk
+    /// counts vs the in-memory counts so we never erase ongoing state.
+    /// Returns `Ok(rows_seen)` for telemetry.
+    pub fn rehydrate_from_db(&mut self, prediction_db: &Path) -> Result<u64, String> {
+        if !prediction_db.exists() {
+            return Ok(0);
+        }
+        let conn = rusqlite::Connection::open(prediction_db)
+            .map_err(|e| format!("open prediction.db: {e}"))?;
+        let total: u64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM prediction_log",
+                [],
+                |r| r.get::<_, i64>(0).map(|v| v as u64),
+            )
+            .unwrap_or(0);
+        if total > self.total_predictions {
+            self.total_predictions = total;
+        }
+        // Predictions accumulated since last evaluation can only be inferred
+        // approximately — clamp to <= total. We use the same DB count as a
+        // conservative upper bound so `should_evaluate` becomes true if the
+        // interval has been exceeded.
+        if self.predictions_since_last_eval < total
+            && total >= self.evaluation_interval
+        {
+            self.predictions_since_last_eval = total;
+        }
+
+        // Re-populate `layer_stats.total_triggers` per category. We do not
+        // touch `recent_outcomes` because outcome attribution requires the
+        // pairing between triggers and downstream `gvu_trigger` events,
+        // which the rehydrate path can't reconstruct safely.
+        let mut stmt = conn
+            .prepare("SELECT category, COUNT(*) FROM prediction_log GROUP BY category")
+            .map_err(|e| format!("prepare layer_stats: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+            })
+            .map_err(|e| format!("query layer_stats: {e}"))?;
+        for row in rows.flatten() {
+            let stats = self.layer_stats.entry(row.0).or_default();
+            if stats.total_triggers < row.1 {
+                stats.total_triggers = row.1;
+            }
+        }
+
+        info!(
+            target: "metacognition",
+            total_predictions = self.total_predictions,
+            "Rehydrated counters from prediction.db"
+        );
+        Ok(total)
+    }
+
+    /// If accumulated predictions exceed the evaluation interval but the
+    /// `predictions_since_last_eval` has been reset (e.g. after a restart
+    /// without rehydrate), force one evaluation pass so adaptive thresholds
+    /// catch up.
+    ///
+    /// Returns `true` if an evaluation was forced.
+    pub fn force_evaluation_if_overdue(&mut self) -> bool {
+        if self.total_predictions >= self.evaluation_interval
+            && self.predictions_since_last_eval < self.evaluation_interval
+            && !self.layer_stats.is_empty()
+        {
+            // Bring the counter past the threshold so should_evaluate() agrees.
+            self.predictions_since_last_eval = self.evaluation_interval;
+            self.evaluate_and_adjust();
+            true
+        } else {
+            false
+        }
+    }
+
+    // ── Proactive self-calibration (Phase D3) ───────────────────
+
+    /// Record that a proactive message was sent.
+    pub fn record_proactive_sent(&mut self) {
+        self.proactive_sent += 1;
+        self.proactive_since_last_cal += 1;
+    }
+
+    /// Record user feedback on a proactive message.
+    pub fn record_proactive_feedback(&mut self, accepted: bool) {
+        if accepted {
+            self.proactive_accepted += 1;
+        } else {
+            self.proactive_dismissed += 1;
+        }
+        self.proactive_since_last_cal += 1;
+
+        // Calibrate every 20 proactive interactions
+        if self.proactive_since_last_cal >= 20 {
+            self.calibrate_proactive_threshold();
+            self.proactive_since_last_cal = 0;
+        }
+    }
+
+    /// Self-calibrate the proactive threshold based on accept/dismiss ratio.
+    ///
+    /// - High accept rate (>70%) → lower threshold (more proactive)
+    /// - Low accept rate (<30%) → raise threshold (less proactive)
+    /// - Otherwise → no change
+    fn calibrate_proactive_threshold(&mut self) {
+        let total = self.proactive_accepted + self.proactive_dismissed;
+        if total < 5 {
+            return; // Not enough data
+        }
+
+        let accept_rate = self.proactive_accepted as f64 / total as f64;
+        let old_threshold = self.proactive_threshold;
+
+        if accept_rate > 0.7 {
+            // Users welcome proactive messages → lower threshold (more proactive)
+            self.proactive_threshold = (self.proactive_threshold - 0.05).max(0.2);
+        } else if accept_rate < 0.3 {
+            // Users dismiss proactive messages → raise threshold (less proactive)
+            self.proactive_threshold = (self.proactive_threshold + 0.05).min(0.9);
+        }
+
+        if (self.proactive_threshold - old_threshold).abs() > f64::EPSILON {
+            info!(
+                old = format!("{old_threshold:.2}"),
+                new = format!("{:.2}", self.proactive_threshold),
+                accept_rate = format!("{:.1}", accept_rate * 100.0),
+                "MetaCognition: proactive threshold calibrated"
+            );
+        }
+    }
+
+    /// Get the current proactive threshold.
+    pub fn proactive_threshold(&self) -> f64 {
+        self.proactive_threshold
+    }
+
+    /// Get proactive stats summary.
+    pub fn proactive_stats(&self) -> (u64, u64, u64, f64) {
+        (self.proactive_sent, self.proactive_accepted, self.proactive_dismissed, self.proactive_threshold)
+    }
+}
+
+fn default_proactive_threshold() -> f64 {
+    0.5
+}
+
+// ── BUG-4 tests: rehydrate / force-evaluation / baseline anchoring ──
+
+#[cfg(test)]
+mod bug4_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use tempfile::TempDir;
+
+    fn seed_prediction_db(path: &Path, rows: &[(&str, &str, f64)]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS prediction_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                composite_error REAL NOT NULL,
+                category TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        for (agent, cat, err) in rows {
+            conn.execute(
+                "INSERT INTO prediction_log (agent_id, user_id, composite_error, category, timestamp)
+                 VALUES (?1, 'u', ?2, ?3, datetime('now'))",
+                rusqlite::params![agent, err, cat],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_rehydrate_from_db_overrides_lower_in_memory() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("prediction.db");
+        // 50 rows in DB.
+        let rows: Vec<_> = (0..50)
+            .map(|_| ("a", "Negligible", 0.05))
+            .collect();
+        seed_prediction_db(&db, &rows);
+
+        let mut meta = MetaCognition::default();
+        // In-memory says 5 — should bump up to 50.
+        meta.total_predictions = 5;
+        let n = meta.rehydrate_from_db(&db).unwrap();
+        assert_eq!(n, 50);
+        assert_eq!(meta.total_predictions, 50);
+        // layer_stats should reflect the per-category counts.
+        assert_eq!(
+            meta.layer_stats
+                .get("Negligible")
+                .map(|s| s.total_triggers),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn test_rehydrate_does_not_lower_existing_counts() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("prediction.db");
+        seed_prediction_db(&db, &[("a", "Negligible", 0.05)]);
+
+        let mut meta = MetaCognition::default();
+        // In-memory has more (100) than DB (1) — must not be reduced.
+        meta.total_predictions = 100;
+        meta.rehydrate_from_db(&db).unwrap();
+        assert_eq!(
+            meta.total_predictions, 100,
+            "rehydrate must take max(disk, in-memory)"
+        );
+    }
+
+    #[test]
+    fn test_rehydrate_missing_db_is_ok() {
+        let tmp = TempDir::new().unwrap();
+        let mut meta = MetaCognition::default();
+        let n = meta.rehydrate_from_db(&tmp.path().join("nope.db")).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(meta.total_predictions, 0);
+    }
+
+    #[test]
+    fn test_force_evaluation_if_overdue_triggers_recalibrate() {
+        let mut meta = MetaCognition::default();
+        // Simulate "I've seen 200 predictions but counter says 0 since last eval".
+        meta.total_predictions = 200;
+        meta.predictions_since_last_eval = 0;
+        // Need at least one layer_stats entry so the evaluator has data.
+        meta.layer_stats.insert(
+            "Significant".into(),
+            LayerEffectiveness {
+                recent_outcomes: vec![true, true, false, true, true].into(),
+                window_size: 50,
+                total_triggers: 10,
+            },
+        );
+        let fired = meta.force_evaluation_if_overdue();
+        assert!(fired, "overdue evaluation must run");
+        assert_eq!(
+            meta.predictions_since_last_eval, 0,
+            "evaluate_and_adjust resets the counter"
+        );
+    }
+
+    #[test]
+    fn test_force_evaluation_skips_when_under_threshold() {
+        let mut meta = MetaCognition::default();
+        meta.total_predictions = 5;
+        meta.predictions_since_last_eval = 0;
+        meta.layer_stats.insert(
+            "Negligible".into(),
+            LayerEffectiveness::default(),
+        );
+        let fired = meta.force_evaluation_if_overdue();
+        assert!(!fired, "below interval — no forced eval");
+    }
+
+    #[test]
+    fn test_first_recalibrate_sets_baseline() {
+        let mut meta = MetaCognition::default();
+        meta.layer_stats.insert(
+            "Significant".into(),
+            LayerEffectiveness {
+                recent_outcomes: vec![true, false, true, true, false].into(),
+                window_size: 50,
+                total_triggers: 5,
+            },
+        );
+        assert!(meta.original_sig_improvement_rate.is_none());
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.original_sig_improvement_rate.is_some(),
+            "first eval with >=5 sig samples must anchor baseline"
+        );
+        let v = meta.original_sig_improvement_rate.unwrap();
+        // 3 of 5 improved.
+        assert!((v - 0.6).abs() < 1e-9, "baseline = 3/5 = 0.6 (got {v})");
+    }
+
+    // ── M35: windowed Critical proportion ──────────────────────────────────────
+
+    /// Push `n` copies of `category` into the recent-category window, evicting
+    /// oldest entries beyond `RECENT_CATEGORY_WINDOW` exactly like
+    /// `record_prediction` does. (Constructing a full `PredictionError` here is
+    /// unnecessary — only the category bookkeeping is under test.)
+    fn push_categories(meta: &mut MetaCognition, category: ErrorCategory, n: usize) {
+        for _ in 0..n {
+            meta.recent_categories.push_back(category);
+            while meta.recent_categories.len() > RECENT_CATEGORY_WINDOW {
+                meta.recent_categories.pop_front();
+            }
+        }
+    }
+
+    /// M35: a window dominated by recent non-Critical predictions must yield a
+    /// LOW Critical proportion even after an early burst of Critical errors, so
+    /// `significant_upper` is NOT ratcheted down to its 0.4 floor.
+    #[test]
+    fn test_crit_proportion_is_windowed_not_cumulative() {
+        let mut meta = MetaCognition::default();
+        let baseline_sig_upper = meta.thresholds.significant_upper;
+
+        // Early burst of Critical errors (would dominate a lifetime-cumulative
+        // proportion forever) followed by a long stretch of well-behaved
+        // predictions that pushes the Critical errors out of the rolling window.
+        push_categories(&mut meta, ErrorCategory::Critical, 30);
+        push_categories(&mut meta, ErrorCategory::Negligible, RECENT_CATEGORY_WINDOW);
+
+        // Window is now entirely Negligible → recent Critical proportion ≈ 0.
+        let crit_recent = meta
+            .recent_categories
+            .iter()
+            .filter(|&&c| c == ErrorCategory::Critical)
+            .count();
+        assert_eq!(crit_recent, 0, "early Critical burst must age out of window");
+
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.thresholds.significant_upper >= baseline_sig_upper - 1e-9,
+            "windowed crit_proportion must not ratchet significant_upper down \
+             (was {baseline_sig_upper}, now {})",
+            meta.thresholds.significant_upper
+        );
+    }
+
+    /// M35: a window genuinely dominated by recent Critical errors should still
+    /// trigger the downward adjustment (the guard must remain effective).
+    #[test]
+    fn test_crit_proportion_recent_high_still_adjusts() {
+        let mut meta = MetaCognition::default();
+        let baseline_sig_upper = meta.thresholds.significant_upper;
+        push_categories(&mut meta, ErrorCategory::Critical, 50);
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.thresholds.significant_upper < baseline_sig_upper,
+            "recent-Critical-heavy window must lower significant_upper"
+        );
+    }
+}
+
+// ── WP0.7: threshold symmetry (R7) ──────────────────────────────────────────
+//
+// R7 diagnosis: `negligible_upper` and `significant_upper` had only-ever-down
+// adjustment rules (the high-confidence penalty, and the M35 Critical-
+// proportion ratchet respectively). Over a long enough production run this
+// one-way compression permanently narrows the Significant band, so GVU's
+// trigger rate decays independent of whether the agent's actual behaviour
+// improved. These tests pin the mirrored recovery rules added above: they
+// must (a) actually raise the threshold back when the opposite condition
+// holds for long enough, and (b) never push past the `AdaptiveThresholds`
+// default — the recovery can only undo a prior penalty, not overshoot it.
+#[cfg(test)]
+mod wp07_threshold_symmetry_tests {
+    use super::*;
+
+    /// Drive `record_prediction`-equivalent bookkeeping without constructing
+    /// a full `PredictionError` — only the streak counters are under test.
+    fn push_negligible_streak(meta: &mut MetaCognition, n: u64) {
+        for _ in 0..n {
+            meta.consecutive_accurate += 1;
+            meta.consecutive_non_negligible = 0;
+        }
+    }
+
+    fn push_non_negligible_streak(meta: &mut MetaCognition, n: u64) {
+        for _ in 0..n {
+            meta.consecutive_accurate = 0;
+            meta.consecutive_non_negligible += 1;
+        }
+    }
+
+    /// Local copy of the `bug4_tests::push_categories` helper — kept
+    /// module-local rather than shared across `#[cfg(test)]` modules to
+    /// avoid coupling two independently-owned test files together.
+    fn push_categories(meta: &mut MetaCognition, category: ErrorCategory, n: usize) {
+        for _ in 0..n {
+            meta.recent_categories.push_back(category);
+            while meta.recent_categories.len() > RECENT_CATEGORY_WINDOW {
+                meta.recent_categories.pop_front();
+            }
+        }
+    }
+
+    #[test]
+    fn negligible_upper_lowers_then_recovers() {
+        let mut meta = MetaCognition::default();
+        let default_negligible = AdaptiveThresholds::default().negligible_upper;
+        assert!((meta.thresholds.negligible_upper - default_negligible).abs() < 1e-9);
+
+        // Simulate the high-confidence penalty firing (long accurate streak).
+        push_negligible_streak(&mut meta, 201);
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.thresholds.negligible_upper < default_negligible,
+            "penalty must lower negligible_upper below default"
+        );
+        let lowered = meta.thresholds.negligible_upper;
+
+        // Now the opposite: a long streak of non-negligible predictions
+        // must raise it back — this is the R7 fix under test.
+        push_non_negligible_streak(&mut meta, 201);
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.thresholds.negligible_upper > lowered,
+            "R7 fix: negligible_upper must recover after a long non-negligible streak \
+             (was {lowered}, now {})",
+            meta.thresholds.negligible_upper
+        );
+    }
+
+    #[test]
+    fn negligible_upper_recovery_never_exceeds_default() {
+        let mut meta = MetaCognition::default();
+        let default_negligible = AdaptiveThresholds::default().negligible_upper;
+
+        // Even with an enormous non-negligible streak (many recovery cycles
+        // worth), the threshold must never overshoot the design default.
+        for _ in 0..20 {
+            push_non_negligible_streak(&mut meta, 201);
+            meta.evaluate_and_adjust();
+        }
+        assert!(
+            meta.thresholds.negligible_upper <= default_negligible + 1e-9,
+            "negligible_upper must never exceed its default ceiling (got {})",
+            meta.thresholds.negligible_upper
+        );
+    }
+
+    #[test]
+    fn significant_upper_lowers_then_recovers() {
+        let mut meta = MetaCognition::default();
+        let default_significant = AdaptiveThresholds::default().significant_upper;
+        assert!((meta.thresholds.significant_upper - default_significant).abs() < 1e-9);
+
+        // Simulate the M35 down-ratchet firing (window heavy with Critical).
+        push_categories(&mut meta, ErrorCategory::Critical, RECENT_CATEGORY_WINDOW);
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.thresholds.significant_upper < default_significant,
+            "down-ratchet must lower significant_upper below default"
+        );
+        let lowered = meta.thresholds.significant_upper;
+
+        // Now a full window of well-behaved (non-Critical) predictions must
+        // raise it back — the R7 fix under test.
+        push_categories(&mut meta, ErrorCategory::Negligible, RECENT_CATEGORY_WINDOW);
+        meta.evaluate_and_adjust();
+        assert!(
+            meta.thresholds.significant_upper > lowered,
+            "R7 fix: significant_upper must recover after a clean window \
+             (was {lowered}, now {})",
+            meta.thresholds.significant_upper
+        );
+    }
+
+    #[test]
+    fn significant_upper_recovery_never_exceeds_default() {
+        let mut meta = MetaCognition::default();
+        let default_significant = AdaptiveThresholds::default().significant_upper;
+
+        for _ in 0..20 {
+            push_categories(&mut meta, ErrorCategory::Negligible, RECENT_CATEGORY_WINDOW);
+            meta.evaluate_and_adjust();
+        }
+        assert!(
+            meta.thresholds.significant_upper <= default_significant + 1e-9,
+            "significant_upper must never exceed its default ceiling (got {})",
+            meta.thresholds.significant_upper
+        );
+    }
+
+    /// Long-term simulated distribution: alternating "down-pressure" /
+    /// "up-pressure" epochs must keep both thresholds bounded within
+    /// [clamp floor, default] — no unbounded one-directional drift over many
+    /// cycles (R7 acceptance criterion: "長期單向漂移不再發生、且有界").
+    ///
+    /// The two underlying signals are independent (streak counters vs. the
+    /// `recent_categories` window), so each epoch drives BOTH thresholds in
+    /// the same direction: a down-pressure epoch feeds a long
+    /// accurate/negligible streak (→ negligible_upper penalty) together with
+    /// a Critical-heavy category window (→ significant_upper down-ratchet);
+    /// an up-pressure epoch feeds the mirror image of each.
+    #[test]
+    fn long_run_alternating_distribution_stays_bounded() {
+        let mut meta = MetaCognition::default();
+        let default_negligible = AdaptiveThresholds::default().negligible_upper;
+        let default_significant = AdaptiveThresholds::default().significant_upper;
+
+        for cycle in 0..50 {
+            if cycle % 2 == 0 {
+                // Down-pressure epoch: pushes both thresholds down.
+                push_negligible_streak(&mut meta, 201);
+                push_categories(&mut meta, ErrorCategory::Critical, RECENT_CATEGORY_WINDOW);
+            } else {
+                // Up-pressure epoch: pushes both thresholds back up (R7 fix).
+                push_non_negligible_streak(&mut meta, 201);
+                push_categories(&mut meta, ErrorCategory::Negligible, RECENT_CATEGORY_WINDOW);
+            }
+            meta.evaluate_and_adjust();
+
+            // Bounded: never below the hard clamp floor, never above default.
+            assert!(
+                meta.thresholds.negligible_upper >= 0.1 - 1e-9
+                    && meta.thresholds.negligible_upper <= default_negligible + 1e-9,
+                "negligible_upper drifted out of bounds at cycle {cycle}: {}",
+                meta.thresholds.negligible_upper
+            );
+            assert!(
+                meta.thresholds.significant_upper >= 0.4 - 1e-9
+                    && meta.thresholds.significant_upper <= default_significant + 1e-9,
+                "significant_upper drifted out of bounds at cycle {cycle}: {}",
+                meta.thresholds.significant_upper
+            );
+        }
+
+        // After ending on an up-pressure epoch (cycle 49 is odd), both
+        // thresholds should have recovered back to (or near) default —
+        // proof that the drift is genuinely two-way, not just "less bad".
+        assert!(
+            (meta.thresholds.negligible_upper - default_negligible).abs() < 0.05,
+            "negligible_upper should recover close to default after an up-pressure epoch, got {}",
+            meta.thresholds.negligible_upper
+        );
+        assert!(
+            (meta.thresholds.significant_upper - default_significant).abs() < 0.05,
+            "significant_upper should recover close to default after an up-pressure epoch, got {}",
+            meta.thresholds.significant_upper
+        );
+    }
+}

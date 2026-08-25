@@ -1,0 +1,542 @@
+//! Query-aware wiki injection (#14 glue, 2026-05-12).
+//!
+//! Bridges `crate::relevance_ranker` (#14 pure ranking policy) with
+//! `duduclaw_memory::WikiStore` (the actual page store). The original
+//! `WikiStore::build_injection_context*` methods dump pages in file
+//! order until a byte cap; this helper instead **ranks** L0+L1 pages
+//! against the current user query and keeps the most relevant ones up
+//! to the same cap.
+//!
+//! Lives in the gateway (not memory) crate so the relevance scoring
+//! policy can iterate independently of the storage layer.
+//!
+//! ## Session-stable selection (cache-friendliness)
+//!
+//! Ranking by the *per-turn* user query means the kept-page set — and
+//! therefore the system prompt bytes — changed every turn, invalidating
+//! the prompt-cache prefix on both the CLI and Direct API paths. With a
+//! `cache_key` (agent + session), the page *selection* is computed once
+//! per session (15-min TTL) and reused; citations are still recorded
+//! every turn so the feedback loop keeps attributing outcomes to pages.
+//!
+//! ## Knowledge ownership (`.scope.toml`)
+//!
+//! A `.scope.toml` at the wiki root may declare, per top-level namespace,
+//! `knowledge_owner = "memory"` — meaning the memory system (temporal
+//! facts with supersession) is the source of truth for that topic and
+//! wiki pages under it are *excluded from prompt injection* (they stay
+//! searchable via wiki tools). Default / absent → wiki-owned, injected
+//! as before. Same file and table shape as the RFC-21 §3 write policy
+//! (`[namespaces."x"]`), so operators manage one file.
+//!
+//! ## Sensitivity (P3-2 context-collapse defence)
+//!
+//! The same `[namespaces."x"]` table may also declare `sensitivity =
+//! "personal"` (or `"restricted"`). Pages under a Personal-or-higher
+//! namespace are **excluded from injection in a shared/group session**
+//! (`allow_personal = false`) — they must not collapse a user's personal
+//! context into a prompt other people see. In a 1:1 private session they
+//! inject as normal. Absent / malformed / lower levels → no change
+//! (fail-safe). See `duduclaw_core::sensitivity`.
+
+use std::collections::HashSet;
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use duduclaw_memory::feedback::{CitationTracker, WikiCitation};
+use duduclaw_memory::{WikiLayer, WikiStore};
+
+/// Optional citation recording context. When `Some`, kept-pages are
+/// recorded in the citation log so the feedback bus can later attribute
+/// outcomes back to specific pages.
+pub struct CitationContext<'a> {
+    pub agent_id: &'a str,
+    pub conversation_id: &'a str,
+    pub session_id: Option<&'a str>,
+    pub tracker: &'a CitationTracker,
+}
+
+/// How long a session's kept-page selection stays pinned before being
+/// re-ranked. Within the window the system prompt's wiki section is
+/// byte-stable → the cached prefix survives across turns.
+const SESSION_SELECTION_TTL: Duration = Duration::from_secs(900);
+/// Upper bound on cached sessions; expired entries are evicted on access.
+const SESSION_CACHE_CAP: usize = 256;
+
+/// Build the wiki injection context with relevance-aware page selection.
+///
+/// `query` should be the current user message (or a digest of it).
+/// When `query` is empty or whitespace, behaviour falls back to file
+/// order — identical to `WikiStore::build_injection_context` so this is
+/// a safe drop-in.
+///
+/// `cache_key` — when `Some` (e.g. `"{agent_id}:{session_id}"`), the page
+/// selection is served from the session cache (see module docs). `None`
+/// ranks fresh every call (previous behaviour).
+///
+/// Returns the rendered injection text. On any store-side error we log
+/// and return an empty string — wiki injection is a best-effort signal,
+/// never fatal.
+/// `viewer_department` (WP7) — the department of the agent this prompt is for.
+/// Pages under the built-in `departments/<dept>/` namespace are kept only when
+/// `<dept>` matches; a `None` viewer (no department) sees no department page.
+/// Company-layer pages are always eligible. Department is a stable property of
+/// the agent, so it does not perturb the session-stable selection cache
+/// (the cache key already scopes per agent).
+/// `allow_personal` (P3-2) — when `false` (a shared/group session), pages under
+/// a namespace whose `.scope.toml` `sensitivity` is Personal-or-higher are
+/// excluded from injection (context-collapse defence). `true` (a 1:1 private
+/// session) injects them as before. The flag is folded into the session cache
+/// key by the caller, so a session's chat type never mixes cached selections.
+pub fn ranked_wiki_injection(
+    store: &WikiStore,
+    query: &str,
+    max_chars: usize,
+    citation: Option<CitationContext<'_>>,
+    cache_key: Option<&str>,
+    viewer_department: Option<&str>,
+    allow_personal: bool,
+) -> String {
+    if let Some(key) = cache_key {
+        if let Some(pages) = cached_selection(key) {
+            return render_and_cite(&pages, citation);
+        }
+        let pages = select_pages(store, query, max_chars, viewer_department, allow_personal);
+        store_selection(key, pages.clone());
+        return render_and_cite(&pages, citation);
+    }
+    let pages = select_pages(store, query, max_chars, viewer_department, allow_personal);
+    render_and_cite(&pages, citation)
+}
+
+/// One page with the metadata needed for ranking + citation recording.
+#[derive(Debug, Clone)]
+struct RankedPage {
+    layer: WikiLayer,
+    path: String,
+    body: String,
+    trust: f32,
+}
+
+/// Collect eligible pages, apply knowledge-ownership filtering, rank by
+/// relevance, and keep the top pages within `max_chars`.
+fn select_pages(
+    store: &WikiStore,
+    query: &str,
+    max_chars: usize,
+    viewer_department: Option<&str>,
+    allow_personal: bool,
+) -> Vec<RankedPage> {
+    // Gather all candidate pages first. Identity and Core layers are
+    // both eligible; L2/L3 stay search-only as the wiki contract states.
+    let memory_owned = load_memory_owned_namespaces(store.wiki_dir());
+    // P3-2: namespaces the operator marked Personal-or-higher. In a shared
+    // session (`!allow_personal`) their pages are withheld from injection.
+    let personal_ns = if allow_personal {
+        HashSet::new()
+    } else {
+        load_personal_namespaces(store.wiki_dir())
+    };
+    // WP2.3: namespaces declaring `visible_to_departments = [...]` in
+    // `.scope.toml` are injected only for agents in one of those departments.
+    // Empty/absent policy → no extra restriction (fail-safe).
+    let dept_vis = duduclaw_core::DepartmentVisibilityPolicy::load_for_wiki_dir(store.wiki_dir());
+    let mut stripped_personal = 0usize;
+    let mut candidates: Vec<RankedPage> = Vec::new();
+    for layer in [WikiLayer::Identity, WikiLayer::Core] {
+        match store.collect_by_layer_with_meta(layer) {
+            Ok(pages) => {
+                for (path, body, trust) in pages {
+                    if is_memory_owned(&path, &memory_owned) {
+                        continue; // memory system is SoT for this namespace
+                    }
+                    if namespace_in_set(&path, &personal_ns) {
+                        stripped_personal += 1;
+                        continue; // P3-2: context-collapse — withhold in group
+                    }
+                    // WP7 + WP2.3: never inject another department's page (the
+                    // built-in `departments/<dept>/` isolation) nor a page in a
+                    // namespace whose `visible_to_departments` excludes the
+                    // viewer. Company pages with no declaration always pass; a
+                    // no-department viewer sees neither restricted kind.
+                    if !dept_vis.page_visible(&path, viewer_department) {
+                        continue;
+                    }
+                    candidates.push(RankedPage {
+                        layer,
+                        path,
+                        body,
+                        trust,
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::warn!(?layer, error = %e, "wiki collect_by_layer_with_meta failed");
+            }
+        }
+    }
+    if stripped_personal > 0 {
+        tracing::debug!(
+            stripped_personal,
+            "P3-2 context-collapse: withheld Personal+ wiki pages from a shared session"
+        );
+    }
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    // Rank by relevance to the user query (TF-IDF over bigrams; empty
+    // query → original order preserved).
+    let ranking =
+        crate::relevance_ranker::rank_by_relevance(query, &candidates, |c| c.body.as_str());
+
+    // Keep in ranked order within the byte budget. Oversize pages are
+    // skipped, not aborting — a smaller lower-rank page might still fit
+    // (matches the existing wiki rendering contract).
+    let mut kept: Vec<RankedPage> = Vec::new();
+    let mut remaining = max_chars;
+    for &idx in &ranking {
+        let Some(page) = candidates.get(idx) else { continue };
+        let needed = page.body.len() + 2; // +2 newline pair
+        if needed > remaining {
+            continue;
+        }
+        remaining -= needed;
+        kept.push(page.clone());
+    }
+    kept
+}
+
+/// Render kept pages grouped by layer and record citations for each.
+///
+/// Rendering is deterministic from `pages`, so cache hits re-render the
+/// identical bytes while still recording this turn's citations.
+fn render_and_cite(pages: &[RankedPage], citation: Option<CitationContext<'_>>) -> String {
+    let kept_identity: Vec<&RankedPage> =
+        pages.iter().filter(|p| p.layer == WikiLayer::Identity).collect();
+    let kept_core: Vec<&RankedPage> =
+        pages.iter().filter(|p| p.layer == WikiLayer::Core).collect();
+
+    let mut output = String::new();
+    if !kept_identity.is_empty() {
+        output.push_str("### Wiki — Identity\n\n");
+        for p in &kept_identity {
+            output.push_str(&p.body);
+            output.push_str("\n\n");
+        }
+    }
+    if !kept_core.is_empty() {
+        output.push_str("### Wiki — Core\n\n");
+        for p in &kept_core {
+            output.push_str(&p.body);
+            output.push_str("\n\n");
+        }
+    }
+
+    // Citation recording — only for kept pages.
+    if let Some(ctx) = citation {
+        let now = chrono::Utc::now();
+        let citations: Vec<WikiCitation> = kept_identity
+            .iter()
+            .chain(kept_core.iter())
+            .map(|p| {
+                let st = duduclaw_memory::wiki::derive_source_type(&p.path, p.trust);
+                WikiCitation {
+                    page_path: p.path.clone(),
+                    agent_id: ctx.agent_id.to_string(),
+                    conversation_id: ctx.conversation_id.to_string(),
+                    retrieved_at: now,
+                    trust_at_cite: p.trust,
+                    source_type: st,
+                    session_id: ctx.session_id.map(|s| s.to_string()),
+                }
+            })
+            .collect();
+        if !citations.is_empty() {
+            ctx.tracker.record_many(citations);
+        }
+    }
+
+    output
+}
+
+// ── Knowledge ownership (.scope.toml) ────────────────────────────────
+
+/// Read the set of top-level namespaces whose `knowledge_owner` is
+/// `"memory"` from `<wiki_root>/.scope.toml`. Absent or malformed file →
+/// empty set (fail-safe: wiki-owned, inject as before).
+fn load_memory_owned_namespaces(wiki_root: &Path) -> HashSet<String> {
+    let path = wiki_root.join(".scope.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashSet::new();
+    };
+    let table: toml::Table = match content.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, ".scope.toml malformed — ignoring knowledge_owner");
+            return HashSet::new();
+        }
+    };
+    let Some(namespaces) = table.get("namespaces").and_then(|v| v.as_table()) else {
+        return HashSet::new();
+    };
+    namespaces
+        .iter()
+        .filter(|(_, v)| {
+            v.get("knowledge_owner").and_then(|o| o.as_str()) == Some("memory")
+        })
+        .map(|(ns, _)| ns.clone())
+        .collect()
+}
+
+/// A page belongs to a memory-owned namespace when its first path
+/// segment matches. Top-level files (no `/`) are never filtered.
+fn is_memory_owned(page_path: &str, memory_owned: &HashSet<String>) -> bool {
+    namespace_in_set(page_path, memory_owned)
+}
+
+/// Whether `page_path`'s top-level namespace is in `set`. Top-level files
+/// (no `/`) are never filtered. Shared by the memory-owned and P3-2
+/// personal-namespace filters.
+fn namespace_in_set(page_path: &str, set: &HashSet<String>) -> bool {
+    if set.is_empty() {
+        return false;
+    }
+    match page_path.split('/').next() {
+        Some(ns) if ns != page_path => set.contains(ns),
+        _ => false,
+    }
+}
+
+/// Read the set of top-level namespaces whose `.scope.toml` `sensitivity` is
+/// Personal-or-higher. Absent / malformed file, or a namespace with no/lower
+/// `sensitivity`, contributes nothing (fail-safe: inject as before). Same file
+/// and table shape as `knowledge_owner`, so operators manage one file.
+fn load_personal_namespaces(wiki_root: &Path) -> HashSet<String> {
+    let path = wiki_root.join(".scope.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashSet::new();
+    };
+    let table: toml::Table = match content.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, ".scope.toml malformed — ignoring sensitivity");
+            return HashSet::new();
+        }
+    };
+    let Some(namespaces) = table.get("namespaces").and_then(|v| v.as_table()) else {
+        return HashSet::new();
+    };
+    namespaces
+        .iter()
+        .filter(|(_, v)| {
+            v.get("sensitivity")
+                .and_then(|s| s.as_str())
+                .and_then(duduclaw_core::Sensitivity::parse)
+                .map(|s| s.is_personal_or_higher())
+                .unwrap_or(false)
+        })
+        .map(|(ns, _)| ns.clone())
+        .collect()
+}
+
+// ── Session-stable selection cache ───────────────────────────────────
+
+type SelectionCache = std::collections::HashMap<String, (Instant, Vec<RankedPage>)>;
+
+static SESSION_SELECTIONS: std::sync::OnceLock<std::sync::Mutex<SelectionCache>> =
+    std::sync::OnceLock::new();
+
+fn cached_selection(key: &str) -> Option<Vec<RankedPage>> {
+    let cache = SESSION_SELECTIONS.get_or_init(Default::default);
+    let guard = cache.lock().ok()?;
+    guard
+        .get(key)
+        .filter(|(at, _)| at.elapsed() < SESSION_SELECTION_TTL)
+        .map(|(_, pages)| pages.clone())
+}
+
+fn store_selection(key: &str, pages: Vec<RankedPage>) {
+    let cache = SESSION_SELECTIONS.get_or_init(Default::default);
+    let Ok(mut guard) = cache.lock() else { return };
+    if guard.len() >= SESSION_CACHE_CAP {
+        guard.retain(|_, (at, _)| at.elapsed() < SESSION_SELECTION_TTL);
+        if guard.len() >= SESSION_CACHE_CAP {
+            // Still full of live sessions — drop the oldest entry.
+            if let Some(oldest) = guard
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            {
+                guard.remove(&oldest);
+            }
+        }
+    }
+    guard.insert(key.to_string(), (Instant::now(), pages));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_owned_namespace_matching() {
+        let owned: HashSet<String> = ["people".to_string()].into_iter().collect();
+        assert!(is_memory_owned("people/alice.md", &owned));
+        assert!(!is_memory_owned("policies/security.md", &owned));
+        // Top-level files are never namespace-filtered.
+        assert!(!is_memory_owned("faq.md", &owned));
+        assert!(!is_memory_owned("people.md", &owned));
+    }
+
+    #[test]
+    fn scope_toml_parses_knowledge_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".scope.toml"),
+            r#"
+[namespaces."people"]
+mode = "agent_writable"
+knowledge_owner = "memory"
+
+[namespaces."policies"]
+mode = "operator_only"
+knowledge_owner = "wiki"
+
+[namespaces."sop"]
+mode = "agent_writable"
+"#,
+        )
+        .unwrap();
+        let owned = load_memory_owned_namespaces(dir.path());
+        assert_eq!(owned.len(), 1);
+        assert!(owned.contains("people"));
+    }
+
+    #[test]
+    fn scope_toml_absent_or_malformed_is_failsafe_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_memory_owned_namespaces(dir.path()).is_empty());
+        std::fs::write(dir.path().join(".scope.toml"), "not [ valid toml").unwrap();
+        assert!(load_memory_owned_namespaces(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn scope_toml_parses_personal_sensitivity_namespaces() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".scope.toml"),
+            r#"
+[namespaces."calendar"]
+mode = "agent_writable"
+sensitivity = "personal"
+
+[namespaces."health"]
+mode = "agent_writable"
+sensitivity = "restricted"
+
+[namespaces."sop"]
+mode = "agent_writable"
+sensitivity = "internal"
+
+[namespaces."faq"]
+mode = "agent_writable"
+"#,
+        )
+        .unwrap();
+        let personal = load_personal_namespaces(dir.path());
+        // Personal + Restricted are withheld; Internal / unset are not.
+        assert_eq!(personal.len(), 2);
+        assert!(personal.contains("calendar"));
+        assert!(personal.contains("health"));
+        assert!(!personal.contains("sop"));
+        assert!(!personal.contains("faq"));
+    }
+
+    #[test]
+    fn personal_namespace_filter_matches_by_top_segment() {
+        let personal: HashSet<String> = ["calendar".to_string()].into_iter().collect();
+        assert!(namespace_in_set("calendar/2026-07.md", &personal));
+        assert!(!namespace_in_set("sop/deploy.md", &personal));
+        // Top-level files are never filtered.
+        assert!(!namespace_in_set("calendar.md", &personal));
+        // Empty set never matches.
+        assert!(!namespace_in_set("calendar/x.md", &HashSet::new()));
+    }
+
+    #[test]
+    fn scope_toml_sensitivity_absent_or_malformed_is_failsafe_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        // Absent → empty.
+        assert!(load_personal_namespaces(dir.path()).is_empty());
+        // Malformed → empty (fail-safe, never panics).
+        std::fs::write(dir.path().join(".scope.toml"), "not [ valid toml").unwrap();
+        assert!(load_personal_namespaces(dir.path()).is_empty());
+        // Unknown sensitivity value → treated as no restriction.
+        std::fs::write(
+            dir.path().join(".scope.toml"),
+            "[namespaces.\"x\"]\nmode = \"agent_writable\"\nsensitivity = \"bogus\"\n",
+        )
+        .unwrap();
+        assert!(load_personal_namespaces(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn scope_toml_department_visibility_filters_injection() {
+        // WP2.3: the injection path loads visible_to_departments from the same
+        // .scope.toml as knowledge_owner / sensitivity, and page_visible
+        // combines the built-in departments/ isolation with the namespace
+        // filter. This proves select_pages' filter reads the file it should.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".scope.toml"),
+            r#"
+[namespaces."hr"]
+mode = "operator_only"
+visible_to_departments = ["hr", "legal"]
+
+[namespaces."sop"]
+mode = "agent_writable"
+"#,
+        )
+        .unwrap();
+        let vis = duduclaw_core::DepartmentVisibilityPolicy::load_for_wiki_dir(dir.path());
+        // hr/* only injected for hr/legal agents; sales + no-dept are excluded.
+        assert!(vis.page_visible("hr/salary.md", Some("hr")));
+        assert!(vis.page_visible("hr/salary.md", Some("legal")));
+        assert!(!vis.page_visible("hr/salary.md", Some("sales")));
+        assert!(!vis.page_visible("hr/salary.md", None));
+        // Undeclared company page stays visible to everyone.
+        assert!(vis.page_visible("sop/deploy.md", None));
+        // Built-in department isolation still applies independently.
+        assert!(!vis.page_visible("departments/art/x.md", Some("hr")));
+    }
+
+    #[test]
+    fn scope_toml_visibility_absent_or_malformed_is_failsafe() {
+        let dir = tempfile::tempdir().unwrap();
+        // Absent → empty policy, nothing restricted.
+        let vis = duduclaw_core::DepartmentVisibilityPolicy::load_for_wiki_dir(dir.path());
+        assert!(vis.is_empty());
+        assert!(vis.page_visible("hr/x.md", None));
+        // Malformed → fail-safe empty (never blocks injection).
+        std::fs::write(dir.path().join(".scope.toml"), "not [ valid toml").unwrap();
+        let vis = duduclaw_core::DepartmentVisibilityPolicy::load_for_wiki_dir(dir.path());
+        assert!(vis.is_empty());
+    }
+
+    #[test]
+    fn session_cache_pins_selection_across_queries() {
+        let pages = vec![RankedPage {
+            layer: WikiLayer::Core,
+            path: "sop/deploy.md".to_string(),
+            body: "deploy steps".to_string(),
+            trust: 0.8,
+        }];
+        store_selection("agent-x:sess-1", pages.clone());
+        let hit = cached_selection("agent-x:sess-1").expect("cache hit");
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].path, "sop/deploy.md");
+        assert!(cached_selection("agent-x:sess-2").is_none());
+    }
+}

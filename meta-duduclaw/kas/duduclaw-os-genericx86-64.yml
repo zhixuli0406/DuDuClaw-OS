@@ -1,0 +1,32 @@
+# kas build config overlay — DuDuClaw OS Y2-2, real-hardware machine.
+#
+# Composes on top of duduclaw-os.yml via kas's `header.includes` (kas 5.5,
+# config format version 23 — confirmed present in the builder container via
+# `kas --version`) rather than duplicating the repo pin table: everything
+# about *which upstream commits* (bitbake/openembedded-core/meta-yocto) is
+# defined exactly once, in duduclaw-os.yml. This file only overrides what
+# actually differs for the real-hardware target — the MACHINE.
+#
+# TMPDIR/DL_DIR/SSTATE_DIR are inherited unchanged from duduclaw-os.yml's
+# local_conf_header, which is deliberate: duduclaw-qemux86-64 and
+# duduclaw-genericx86-64 share the same TUNE (x86-64-v3), so building both
+# from the same TMPDIR/build dir gets near-total sstate reuse for every
+# non-machine-tied package (see duduclaw-os.yml's TMPDIR comment for the
+# verification). Building this target REWRITES build/conf/local.conf and
+# bblayers.conf in place (kas's normal behavior, same build dir as the base
+# config) — it does not corrupt or lose the qemu machine's sstate, only its
+# MACHINE selection, which the next `kas build duduclaw-os.yml` invocation
+# restores.
+#
+# Usage (from the Docker builder container, cwd = /workspace = repo root):
+#   kas build meta-duduclaw/kas/duduclaw-os-genericx86-64.yml
+
+header:
+  version: 14
+  includes:
+    - meta-duduclaw/kas/duduclaw-os.yml
+
+machine: duduclaw-genericx86-64
+
+target:
+  - duduclaw-image-minimal

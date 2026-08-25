@@ -1,0 +1,67 @@
+=== building genericx86-64 (duduclaw-image-minimal, real-HW kernel fragments) ===
+2026-08-25 10:48:50 - INFO     - kas 5.5 started on Debian GNU/Linux trixie
+2026-08-25 10:48:50 - INFO     - Repository bitbake already contains acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd as commit
+2026-08-25 10:48:50 - INFO     - Repository meta-yocto already contains 24c24cef5d1523fefe43a3e3d34667b37ae551f3 as commit
+2026-08-25 10:48:50 - INFO     - Repository openembedded-core already contains 5d1aa5c806c061a2994f4decb59016610f093213 as commit
+2026-08-25 10:48:50 - INFO     - Repository bitbake checked out to acfe02fa38b5da9e6a36c6cedcf91d4fcbefbfbd
+2026-08-25 10:48:50 - INFO     - Repository openembedded-core checked out to 5d1aa5c806c061a2994f4decb59016610f093213
+2026-08-25 10:48:50 - INFO     - Repository meta-yocto checked out to 24c24cef5d1523fefe43a3e3d34667b37ae551f3
+2026-08-25 10:48:52 - INFO     - Loading cache...done.
+2026-08-25 10:48:52 - INFO     - Loaded 1974 entries from dependency cache.
+2026-08-25 10:49:15 - INFO     - Parsing recipes...done.
+2026-08-25 10:49:16 - INFO     - Parsing of 955 .bb files complete (0 cached, 955 parsed). 1976 targets, 50 skipped, 0 masked, 0 errors.
+2026-08-25 10:49:16 - INFO     - NOTE: Resolving any missing task queue dependencies
+2026-08-25 10:49:16 - INFO     - 
+2026-08-25 10:49:16 - INFO     - Build Configuration:
+2026-08-25 10:49:16 - INFO     - BB_VERSION           = "2.18.0"
+2026-08-25 10:49:16 - INFO     - BUILD_SYS            = "aarch64-linux"
+2026-08-25 10:49:16 - INFO     - NATIVELSBSTRING      = "universal"
+2026-08-25 10:49:16 - INFO     - TARGET_SYS           = "x86_64-poky-linux"
+2026-08-25 10:49:16 - INFO     - MACHINE              = "duduclaw-genericx86-64"
+2026-08-25 10:49:16 - INFO     - SDKMACHINE           = "aarch64"
+2026-08-25 10:49:16 - INFO     - DISTRO               = "duduclaw-os"
+2026-08-25 10:49:16 - INFO     - DISTRO_VERSION       = "0.1.0-y1-bringup"
+2026-08-25 10:49:16 - INFO     - TUNE_FEATURES        = "m64 core2"
+2026-08-25 10:49:16 - INFO     - meta-duduclaw        = "main:472acd984da0c4c1dafcbf425cf2d2d277e10671"
+2026-08-25 10:49:16 - INFO     - meta-poky
+2026-08-25 10:49:16 - INFO     - meta-yocto-bsp       = "HEAD:24c24cef5d1523fefe43a3e3d34667b37ae551f3"
+2026-08-25 10:49:16 - INFO     - meta                 = "HEAD:5d1aa5c806c061a2994f4decb59016610f093213"
+2026-08-25 10:49:16 - INFO     - 
+2026-08-25 10:49:18 - INFO     - Initialising tasks...WARNING: /workspace/build/../openembedded-core/meta/recipes-devtools/qemu/qemu-helper-native_1.0.bb:do_populate_sysroot is tainted from a forced run
+2026-08-25 10:49:19 - INFO     - Sstate summary: Wanted 1364 Local 224 Mirrors 0 Missed 1140 Current 1829 (16% match, 64% complete)
+2026-08-25 10:49:20 - INFO     - done.
+2026-08-25 10:49:20 - INFO     - NOTE: Executing Tasks
+2026-08-25 10:49:20 - INFO     - NOTE: Running setscene task 2251 of 3193 (/workspace/build/../openembedded-core/meta/recipes-kernel/linux-libc-headers/linux-libc-headers_6.18.bb:do_package_write_rpm_setscene)
+2026-08-25 10:49:20 - INFO     - NOTE: Running setscene task 2339 of 3193 (/workspace/build/../openembedded-core/meta/recipes-core/base-files/base-files_3.0.14.bb:do_package_write_rpm_setscene)
+2026-08-25 10:49:20 - INFO     - NOTE: recipe base-files-3.0.14-r0: task do_package_write_rpm_setscene: Started
+2026-08-25 10:49:20 - INFO     - NOTE: recipe linux-libc-headers-6.18-r0: task do_package_write_rpm_setscene: Started
+2026-08-25 10:49:20 - INFO     - NOTE: recipe base-files-3.0.14-r0: task do_package_write_rpm_setscene: Succeeded
+2026-08-25 10:49:20 - INFO     - NOTE: recipe linux-libc-headers-6.18-r0: task do_package_write_rpm_setscene: Succeeded
+2026-08-25 10:49:20 - INFO     - NOTE: Running task 1333 of 6310 (/workspace/build/../openembedded-core/meta/recipes-core/glibc/glibc_2.43.bb:do_compile)
+2026-08-25 10:49:20 - INFO     - NOTE: recipe glibc-2.43+git-r1: task do_compile: Started
+2026-08-25 10:49:20 - ERROR    - ERROR: glibc-2.43+git-r1 do_compile: Execution of '/yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/temp/run.do_compile.2648146' failed with exit code 2
+2026-08-25 10:49:20 - ERROR    - ERROR: Logfile of failure stored in: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/temp/log.do_compile.2648146
+2026-08-25 10:49:20 - INFO     - Log data follows:
+2026-08-25 10:49:20 - INFO     - | DEBUG: Executing shell function do_compile
+2026-08-25 10:49:20 - INFO     - | NOTE: nothing to compile
+2026-08-25 10:49:20 - INFO     - | Adjust ldd script
+2026-08-25 10:49:20 - INFO     - | cat: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/build-x86_64-poky-linux/elf/ldd: No such file or directory
+2026-08-25 10:49:20 - INFO     - | ldd " /usr/lib/ld-linux-x86-64.so.2" -> "/usr/lib/ld-linux-x86-64.so.2"
+2026-08-25 10:49:20 - INFO     - | sed: can't read /yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/build-x86_64-poky-linux/elf/ldd: No such file or directory
+2026-08-25 10:49:20 - INFO     - | WARNING: exit code 2 from a shell command.
+2026-08-25 10:49:20 - INFO     - NOTE: recipe glibc-2.43+git-r1: task do_compile: Failed
+2026-08-25 10:49:20 - ERROR    - ERROR: Task (/workspace/build/../openembedded-core/meta/recipes-core/glibc/glibc_2.43.bb:do_compile) failed with exit code '1'
+2026-08-25 10:49:21 - INFO     - NOTE: Tasks Summary: Attempted 1811 tasks of which 1810 didn't need to be rerun and 1 failed.
+2026-08-25 10:49:21 - INFO     - 
+2026-08-25 10:49:21 - INFO     - Summary: 1 task failed:
+2026-08-25 10:49:21 - INFO     - /workspace/build/../openembedded-core/meta/recipes-core/glibc/glibc_2.43.bb:do_compile
+2026-08-25 10:49:21 - INFO     - log: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/temp/log.do_compile.2648146
+2026-08-25 10:49:21 - INFO     - Summary: There was 1 WARNING message.
+2026-08-25 10:49:21 - INFO     - Summary: There was 1 ERROR message, returning a non-zero exit code.
+2026-08-25 10:49:21 - ERROR    - Command "/workspace/build$ /workspace/bitbake/bin/bitbake -c build duduclaw-image-minimal" failed:
+ERROR: glibc-2.43+git-r1 do_compile: Execution of '/yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/temp/run.do_compile.2648146' failed with exit code 2
+ERROR: Logfile of failure stored in: /yocto-vmfs/tmp-duduclaw-qemux86-64/work/core2-64-poky-linux/glibc/2.43+git/temp/log.do_compile.2648146
+ERROR: Task (/workspace/build/../openembedded-core/meta/recipes-core/glibc/glibc_2.43.bb:do_compile) failed with exit code '1'
+2026-08-25 10:49:21 - ERROR    - Command "/workspace/bitbake/bin/bitbake -c build duduclaw-image-minimal" failed with error 1
+=== genericx86-64 EXIT: 2
+GENERICX86_BUILD_DONE

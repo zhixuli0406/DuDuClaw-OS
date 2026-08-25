@@ -1,0 +1,4159 @@
+//! Shared helper for calling the Claude CLI (Claude Code SDK) on behalf of an agent.
+//!
+//! Used by both the cron scheduler and the agent dispatcher.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+
+use duduclaw_agent::registry::AgentRegistry;
+// Trait must be in scope to call `.complete()` / `.stream()` on providers.
+use duduclaw_llm::ChatProvider as _;
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
+
+use crate::llm_fallback::{
+    emit_llm_fallback_audit, format_fallback_error_message, is_llm_fallback_error,
+    should_attempt_model_fallback,
+};
+
+/// Shared `Arc<TaskStore>` injected by `server.rs` at startup so
+/// `build_pending_tasks_section` reuses the gateway-owned connection
+/// instead of opening a fresh SQLite connection per agent invocation.
+///
+/// The fallback path (open-per-call) is kept for tests and for graceful
+/// degradation if the store injection somehow fails to run.
+static SHARED_TASK_STORE: OnceLock<Arc<crate::task_store::TaskStore>> = OnceLock::new();
+
+/// Register the shared `TaskStore` for use by `build_pending_tasks_section`.
+/// Idempotent — only the first call takes effect. Called once from `server.rs`
+/// after the store is opened.
+pub fn set_shared_task_store(store: Arc<crate::task_store::TaskStore>) {
+    let _ = SHARED_TASK_STORE.set(store);
+}
+
+/// Build a system prompt from an agent's loaded markdown files.
+///
+/// Skills are sorted alphabetically by name to ensure deterministic byte
+/// sequences across calls — this maximizes prompt cache hit rates.
+///
+/// `citation_ctx`: when present, wiki pages injected here are recorded into
+/// the global `CitationTracker` keyed by `(agent_id, turn_id, session_id)`.
+/// `session_id` is None when the dispatcher chain doesn't carry session
+/// context (e.g. cron-triggered tasks); the per-conversation cap then
+/// degrades to a per-turn cap, which is conservative.
+/// (review B2 — sub-agent dispatch was previously bypassing trust feedback.)
+fn build_system_prompt(
+    agent: &duduclaw_agent::LoadedAgent,
+    citation_ctx: Option<(&str, &str, Option<&str>)>,
+    // `config.toml [general] default_language`, when set — see
+    // `crate::prompt_identity` for the rationale. `None` preserves the
+    // pre-existing "follow the user's input language" behaviour.
+    default_language: Option<&str>,
+) -> String {
+    // #11 (2026-05-12) — Minimal mode shortcut. Same opt-in flag as the
+    // channel_reply path so an agent's mode choice is global. Cron path
+    // routes through here, so flipping the flag also covers cron.
+    if agent.config.prompt.mode == duduclaw_core::types::PromptMode::Minimal {
+        let sender_block = ""; // citation_ctx doesn't carry a sender — minimal omits.
+        let pinned = "";
+        return crate::prompt_minimal::build_minimal_system_prompt(
+            agent,
+            sender_block,
+            pinned,
+            default_language,
+        );
+    }
+
+    let mut parts = Vec::new();
+    // Mirror `parts` with labelled byte counts for the prompt-size audit
+    // log. Cheap (one usize per push) and gives operators per-section
+    // visibility when the 200K cliff fires.
+    let mut audit: Vec<crate::prompt_audit::PromptSection> = Vec::new();
+
+    // Authoritative identity + global default language, ahead of SOUL so it
+    // wins over any stale name/language text SOUL.md still contains (see
+    // `crate::prompt_identity` doc comment for the root-cause writeup).
+    let display_name = if agent.config.agent.display_name.trim().is_empty() {
+        &agent.config.agent.name
+    } else {
+        &agent.config.agent.display_name
+    };
+    if let Some(s) =
+        crate::prompt_identity::identity_and_language_section(display_name, default_language)
+    {
+        audit.push(crate::prompt_audit::PromptSection::new(
+            "identity_directive",
+            &s,
+        ));
+        parts.push(s);
+    }
+
+    if let Some(soul) = &agent.soul {
+        let s = format!("# Soul\n{}", soul.trim_end());
+        audit.push(crate::prompt_audit::PromptSection::new("soul", &s));
+        parts.push(s);
+    }
+    if let Some(identity) = &agent.identity {
+        let s = format!("# Identity\n{}", identity.trim_end());
+        audit.push(crate::prompt_audit::PromptSection::new("identity", &s));
+        parts.push(s);
+    }
+
+    // Sort skills by name for deterministic ordering (cache-friendly).
+    // #6.2b: cap the unbounded loop at DEFAULT_LEGACY_SKILL_BYTE_CAP so
+    // an over-stuffed `SKILLS/` directory can't single-handedly push the
+    // system prompt past the 200K cliff. Truncation footer surfaces the
+    // omitted skills so it's debuggable rather than mysterious.
+    let mut skills: Vec<_> = agent.skills.iter().collect();
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    let pairs: Vec<(String, String)> = skills
+        .iter()
+        .map(|s| (s.name.clone(), s.content.trim_end().to_string()))
+        .collect();
+    let (rendered, footer) = crate::prompt_audit::budgeted_legacy_skills(
+        &pairs,
+        crate::prompt_audit::DEFAULT_LEGACY_SKILL_BYTE_CAP,
+    );
+    let mut skills_total_bytes: usize = 0;
+    for s in rendered {
+        skills_total_bytes += s.len();
+        parts.push(s);
+    }
+    if let Some(note) = footer {
+        skills_total_bytes += note.len();
+        parts.push(note);
+    }
+    if skills_total_bytes > 0 {
+        audit.push(crate::prompt_audit::PromptSection {
+            label: "skills",
+            bytes: skills_total_bytes,
+        });
+    }
+
+    if let Some(memory) = &agent.memory {
+        let s = format!("# Memory\n{}", memory.trim_end());
+        audit.push(crate::prompt_audit::PromptSection::new("memory", &s));
+        parts.push(s);
+    }
+
+    // Wiki knowledge injection — L0 (Identity) + L1 (Core) pages
+    let wiki_dir = agent.dir.join("wiki");
+    if wiki_dir.exists() {
+        let store = duduclaw_memory::WikiStore::new(wiki_dir);
+        let result = match citation_ctx {
+            Some((agent_id, turn_id, session_id)) => {
+                let tracker = duduclaw_memory::feedback::global_tracker();
+                store.build_injection_context_with_citations(
+                    6000, agent_id, turn_id, session_id, &tracker,
+                )
+            }
+            None => store.build_injection_context(6000),
+        };
+        match result {
+            Ok(wiki_ctx) if !wiki_ctx.is_empty() => {
+                let s = format!("# Wiki Knowledge\n{}", wiki_ctx.trim_end());
+                audit.push(crate::prompt_audit::PromptSection::new("wiki", &s));
+                parts.push(s);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("Wiki injection failed in dispatcher: {e}");
+            }
+        }
+    }
+
+    // Behavioral contract boundaries — must_not / must_always rules.
+    let contract_prompt = duduclaw_agent::contract::contract_to_prompt(&agent.contract);
+    if !contract_prompt.is_empty() {
+        audit.push(crate::prompt_audit::PromptSection::new(
+            "contract",
+            &contract_prompt,
+        ));
+        parts.push(contract_prompt);
+    }
+
+    crate::prompt_audit::maybe_log_breakdown(
+        &agent.config.agent.name,
+        "claude_runner",
+        &audit,
+        crate::prompt_audit::DEFAULT_EMIT_THRESHOLD_BYTES,
+    );
+
+    parts.join("\n\n---\n\n")
+}
+
+/// Build a concise "## Your Task Queue" section from the Task Board.
+///
+/// Pulls up to 5 open tasks (in_progress → todo → blocked, ordered by
+/// priority urgent→low) assigned to `agent_id` and renders a bullet list
+/// plus a reminder of the MCP tools available for task management.
+///
+/// Returns `None` when the agent has no pending tasks — callers should
+/// skip appending the section in that case to keep the prompt tight.
+/// U4: fetch the agent's co-edited plan checklist (shared store first,
+/// per-call fallback — same access pattern as the task-queue section).
+/// Any store/query failure ⇒ `None`, never an error into the reply path.
+async fn plan_section_for_agent(home_dir: &Path, agent_id: &str) -> Option<String> {
+    let shared = SHARED_TASK_STORE.get().cloned();
+    let fallback_store;
+    let store: &crate::task_store::TaskStore = match shared.as_deref() {
+        Some(s) => s,
+        None => {
+            fallback_store = crate::task_store::TaskStore::open(home_dir).ok()?;
+            &fallback_store
+        }
+    };
+    match store.plan_prompt_section(agent_id).await {
+        Ok(section) => section,
+        Err(e) => {
+            tracing::debug!(agent = %agent_id, error = %e, "plan section omitted from system prompt");
+            None
+        }
+    }
+}
+
+async fn build_pending_tasks_section(home_dir: &Path, agent_id: &str) -> Option<String> {
+    // Prefer the shared store (one SQLite connection for the whole
+    // gateway process — avoids WAL write-lock contention on high-volume
+    // channel replies). Fall back to per-call open only when the
+    // injection hasn't run yet (tests, or a race at startup).
+    let shared = SHARED_TASK_STORE.get().cloned();
+    let fallback_store;
+    let store: &crate::task_store::TaskStore = match shared.as_deref() {
+        Some(s) => s,
+        None => {
+            fallback_store = match crate::task_store::TaskStore::open(home_dir) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        agent = %agent_id,
+                        error = %e,
+                        "task queue omitted from system prompt — TaskStore open failed"
+                    );
+                    return None;
+                }
+            };
+            &fallback_store
+        }
+    };
+
+    let mut all: Vec<crate::task_store::TaskRow> = Vec::new();
+    // `pending` = durable dispatch-engine tasks awaiting a claim — they must be
+    // surfaced here or nobody ever sees them (MED finding, 2026-07 review).
+    for status in &["in_progress", "todo", "pending", "blocked"] {
+        if let Ok(mut rows) = store.list_tasks(Some(status), Some(agent_id), None).await {
+            all.append(&mut rows);
+        }
+    }
+    if all.is_empty() {
+        return None;
+    }
+
+    let priority_rank = |p: &str| match p {
+        "urgent" => 0,
+        "high" => 1,
+        "medium" => 2,
+        "low" => 3,
+        _ => 4,
+    };
+    all.sort_by(|a, b| priority_rank(&a.priority).cmp(&priority_rank(&b.priority)));
+
+    let total = all.len();
+
+    // G8 goal chain: resolve the why-chain (Initiative → Project → Issue) for
+    // each distinct goal referenced by the shown tasks so agents see the WHY,
+    // not just the WHAT. Rendering is deterministic (data-derived only), so the
+    // injected block stays byte-stable when the underlying rows are unchanged
+    // (prompt-cache friendly). Truncation is CJK-safe (`truncate_chars`).
+    let mut goal_chains: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for t in all.iter().take(5) {
+        let Some(gid) = t.goal_id.as_deref() else {
+            continue;
+        };
+        if goal_chains.contains_key(gid) {
+            continue;
+        }
+        match store.goal_ancestry(gid).await {
+            Ok(chain) if !chain.is_empty() => {
+                let mut parts: Vec<String> = chain
+                    .iter()
+                    .map(|g| duduclaw_core::truncate_chars(&g.title, 40))
+                    .collect();
+                // The leaf goal carries the immediate "why" — append it.
+                if let Some(leaf) = chain.last() {
+                    let why = leaf.description.trim();
+                    if !why.is_empty() {
+                        if let Some(last) = parts.last_mut() {
+                            *last = format!("{last} ({})", duduclaw_core::truncate_chars(why, 80));
+                        }
+                    }
+                }
+                goal_chains.insert(gid.to_string(), parts.join(" → "));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(goal = %gid, error = %e, "goal ancestry lookup failed — omitted");
+            }
+        }
+    }
+
+    let shown: Vec<String> = all
+        .iter()
+        .take(5)
+        .enumerate()
+        .map(|(i, t)| {
+            let extra = match t.status.as_str() {
+                "blocked" => t
+                    .blocked_reason
+                    .as_deref()
+                    .map(|r| format!(" — blocked: {r}"))
+                    .unwrap_or_default(),
+                "in_progress" => " [in progress]".to_string(),
+                "pending" => " [unclaimed — use tasks_claim]".to_string(),
+                _ => String::new(),
+            };
+            let goal_line = t
+                .goal_id
+                .as_deref()
+                .and_then(|gid| goal_chains.get(gid))
+                .map(|chain| format!("\n   Goal: {chain}"))
+                .unwrap_or_default();
+            format!(
+                "{}. [{}] {}{}{}",
+                i + 1,
+                t.priority,
+                t.title,
+                extra,
+                goal_line
+            )
+        })
+        .collect();
+    let more = if total > 5 {
+        format!("\n+{} more — call tasks_list to see all", total - 5)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "## Your Task Queue ({total} pending)\n{}{}\n\n\
+         Use `tasks_list`, `tasks_claim`, `tasks_update`, `tasks_complete`, `tasks_block` \
+         to manage these, and `activity_post` to report progress without changing status. \
+         Claimed tasks are leased: on long-running work, call `tasks_renew` every few \
+         minutes or the lease expires and the task is reclaimed.",
+        shown.join("\n"),
+        more,
+    ))
+}
+
+/// Resolve the effective working directory for a Claude CLI subprocess.
+///
+/// If L0 worktree isolation is active (task-local `WORKTREE_PATH` is set),
+/// use the worktree path. Otherwise fall back to the agent's base directory.
+fn effective_work_dir(agent_dir: &Path) -> Option<PathBuf> {
+    // Check worktree task-local first.
+    let wt = WORKTREE_PATH.try_with(|opt| opt.clone()).ok().flatten();
+    if let Some(ref p) = wt {
+        if p.exists() {
+            return Some(p.clone());
+        }
+    }
+    agent_dir.exists().then(|| agent_dir.to_path_buf())
+}
+
+/// Look up an agent from the registry and route to the best model.
+///
+/// Routing logic per agent:
+/// 1. If agent has `model.local` with `prefer_local = true` and local engine is available
+///    → try local inference first
+/// 2. If local fails or is not configured → fall back to Claude Code SDK via AccountRotator
+///
+/// Local inference and account rotation are completely separate paths.
+pub async fn call_claude_for_agent(
+    home_dir: &Path,
+    registry: &Arc<RwLock<AgentRegistry>>,
+    agent_id: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    call_claude_for_agent_with_type(
+        home_dir,
+        registry,
+        agent_id,
+        prompt,
+        crate::cost_telemetry::RequestType::Chat,
+    )
+    .await
+}
+
+/// Like [`call_claude_for_agent`] but allows specifying the request type for telemetry.
+///
+/// Delegation context (depth, origin, sender) is read from the [`DELEGATION_ENV`]
+/// task-local — set by the dispatcher before calling this function.
+pub async fn call_claude_for_agent_with_type(
+    home_dir: &Path,
+    registry: &Arc<RwLock<AgentRegistry>>,
+    agent_id: &str,
+    prompt: &str,
+    request_type: crate::cost_telemetry::RequestType,
+) -> Result<String, String> {
+    invoke_recorded(
+        home_dir,
+        agent_id,
+        prompt,
+        request_type,
+        call_claude_for_agent_impl(home_dir, registry, agent_id, prompt, request_type, None),
+    )
+    .await
+}
+
+/// Wrap one dispatcher invocation with dispatch-run recording — the LWM D4
+/// observability gap: 202 intraday cron runs left zero rows anywhere the
+/// dashboard could read (`runs.list` folds channel sessions only, and the
+/// `run_steps` step stream was channel_reply-exclusive). Cron/Dispatch
+/// invocations now land one `dispatch_runs` row (+ per-tool steps under
+/// `dispatch:<run_id>`) in `run_steps.db`.
+///
+/// Chat/Evolution invocations pass through untouched (channel runs and
+/// evolution events already have their own surfaces — no double-recording).
+/// Recording is strictly fail-open: a store failure never affects the reply.
+async fn invoke_recorded<F>(
+    home_dir: &Path,
+    agent_id: &str,
+    prompt: &str,
+    request_type: crate::cost_telemetry::RequestType,
+    fut: F,
+) -> Result<String, String>
+where
+    F: std::future::Future<Output = Result<String, String>>,
+{
+    use crate::cost_telemetry::RequestType as RT;
+    if !matches!(request_type, RT::Cron | RT::Dispatch) {
+        return fut.await;
+    }
+    let started_at = chrono::Utc::now().to_rfc3339();
+    // Native-tool collection: REUSE an outer scope when the goal loop already
+    // installed one — installing a nested scope would shadow it and starve
+    // the settle-side evidence consumers (forward-model observe / grounding /
+    // judge digest). Cloning the accumulated events is read-only. Only when
+    // no scope exists (plain cron / bus dispatch) do we install our own.
+    let outer_scope = crate::runtime::NATIVE_TOOL_COLLECTOR.try_with(|_| ()).is_ok();
+    let (result, events) = if outer_scope {
+        let r = fut.await;
+        let ev = crate::runtime::NATIVE_TOOL_COLLECTOR
+            .try_with(|c| c.lock().map(|g| g.clone()).unwrap_or_default())
+            .unwrap_or_default();
+        (r, ev)
+    } else {
+        let collector: std::sync::Arc<std::sync::Mutex<Vec<crate::runtime::NativeToolEvent>>> =
+            Default::default();
+        let r = crate::runtime::NATIVE_TOOL_COLLECTOR
+            .scope(collector.clone(), fut)
+            .await;
+        let ev = collector
+            .lock()
+            .map(|mut g| std::mem::take(&mut *g))
+            .unwrap_or_default();
+        (r, ev)
+    };
+    let ended_at = chrono::Utc::now().to_rfc3339();
+    let (status, preview_out) = match &result {
+        Ok(text) => ("completed".to_string(), text.clone()),
+        Err(e) => ("error".to_string(), e.clone()),
+    };
+    let steps: Vec<(String, bool)> =
+        events.iter().map(|e| (e.tool_name.clone(), e.success)).collect();
+    if let Some(store) = crate::run_steps::shared_store(home_dir) {
+        let agent = agent_id.to_string();
+        let source = request_type.as_str().to_string();
+        // Store masks + caps again; this pre-trim just bounds the move.
+        let preview_in = duduclaw_core::truncate_chars(prompt, 500);
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = store.record_dispatch_run(
+                &agent, &source, &started_at, &ended_at, &status, &preview_in, &preview_out,
+                &steps,
+            ) {
+                tracing::debug!(error = %e, "dispatch run record failed (ignored)");
+            }
+        })
+        .await;
+    }
+
+    // Knowledge/memory extraction for scheduled work (LWM D4 finding #2):
+    // the whole distillation pipeline (`wiki_ingest::run_ingest` → memory
+    // facts + auto wiki pages) hung exclusively off the channel-reply path,
+    // so a cron-driven agent accumulated NOTHING in four days of real
+    // decisions (observer: not even a memory.db). Feed successful Cron/
+    // Dispatch runs through the same pipeline, throttled to one ingest per
+    // agent per hour — intraday crons repeat every 3 minutes with mostly
+    // identical content, and `classify_for_ingest`'s cloud indicators would
+    // otherwise burn a utility call per patrol. Fail-open: throttle-file
+    // errors just skip this round's ingest.
+    if let Ok(reply) = &result {
+        if !reply.trim().is_empty() && ingest_throttle_acquire(home_dir, agent_id) {
+            let user_text = prompt.to_string();
+            let reply = reply.clone();
+            let agent = agent_id.to_string();
+            let home = home_dir.to_path_buf();
+            let memory_db = home_dir.join("memory.db");
+            let session = format!("{}:{agent_id}", request_type.as_str());
+            tokio::spawn(async move {
+                crate::wiki_ingest::run_ingest(
+                    &user_text, &reply, &agent, "system", &home, &memory_db, &session,
+                )
+                .await;
+            });
+        }
+    }
+    result
+}
+
+/// Sliding one-hour throttle for dispatch-path ingestion, keyed per agent by
+/// a stamp file's mtime. Returns `true` (and refreshes the stamp) when this
+/// invocation may ingest. Any filesystem error skips ingestion (fail-open
+/// toward "no extra cost", never toward "burn a call").
+fn ingest_throttle_acquire(home_dir: &Path, agent_id: &str) -> bool {
+    const THROTTLE_SECS: u64 = 3600;
+    if !duduclaw_core::is_valid_agent_id(agent_id) {
+        return false;
+    }
+    let dir = home_dir.join("ingest_throttle");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let stamp = dir.join(format!("{agent_id}.stamp"));
+    if let Ok(meta) = std::fs::metadata(&stamp) {
+        if let Ok(modified) = meta.modified() {
+            match modified.elapsed() {
+                Ok(age) if age.as_secs() < THROTTLE_SECS => return false,
+                // Future mtime (clock skew) — treat as fresh, skip.
+                Err(_) => return false,
+                _ => {}
+            }
+        }
+    }
+    std::fs::write(&stamp, chrono::Utc::now().to_rfc3339()).is_ok()
+}
+
+/// O2 (ephemeral sub-agent synthesis): like [`call_claude_for_agent_with_type`]
+/// but for an agent loaded from disk instead of the registry. Ephemeral
+/// scaffolds live under `<home>/agents/.ephemeral/` where the registry scan
+/// never sees them — `crate::ephemeral::dispatch` loads the scaffold and
+/// threads it through here so the full delegation path (tier routing guard,
+/// capabilities → allowed/disallowed tools, rotation/PTY/local offload,
+/// cost telemetry) applies unchanged.
+pub async fn call_claude_for_agent_preloaded(
+    home_dir: &Path,
+    registry: &Arc<RwLock<AgentRegistry>>,
+    agent: &duduclaw_agent::LoadedAgent,
+    prompt: &str,
+    request_type: crate::cost_telemetry::RequestType,
+) -> Result<String, String> {
+    let agent_id = agent.config.agent.name.clone();
+    invoke_recorded(
+        home_dir,
+        &agent_id,
+        prompt,
+        request_type,
+        call_claude_for_agent_impl(home_dir, registry, &agent_id, prompt, request_type, Some(agent)),
+    )
+    .await
+}
+
+// OTel GenAI semconv (Development): root `invoke_agent` span for one
+// dispatcher agent run (sub-agent delegation / cron / bus tasks). Attribute
+// names centralized in `crate::otel`; model + usage are resolved mid-flight
+// and recorded post-hoc (usage in `call_claude_streaming` / the chat spans).
+#[tracing::instrument(
+    name = "invoke_agent",
+    skip_all,
+    fields(
+        gen_ai.operation.name = "invoke_agent",
+        gen_ai.system = "anthropic",
+        gen_ai.provider.name = "anthropic",
+        gen_ai.agent.name = %agent_id,
+        gen_ai.request.model = tracing::field::Empty,
+        gen_ai.usage.input_tokens = tracing::field::Empty,
+        gen_ai.usage.output_tokens = tracing::field::Empty,
+    )
+)]
+async fn call_claude_for_agent_impl(
+    home_dir: &Path,
+    registry: &Arc<RwLock<AgentRegistry>>,
+    agent_id: &str,
+    prompt: &str,
+    request_type: crate::cost_telemetry::RequestType,
+    preloaded: Option<&duduclaw_agent::LoadedAgent>,
+) -> Result<String, String> {
+    let reg = registry.read().await;
+
+    let agent = match preloaded {
+        Some(a) => a,
+        None => {
+            let found = if agent_id == "default" {
+                reg.main_agent()
+            } else {
+                reg.get(agent_id)
+            };
+            found.ok_or_else(|| format!("Agent '{agent_id}' not found in registry"))?
+        }
+    };
+
+    // Sub-agents inherit a turn id from the dispatch chain via tokio
+    // task_local — set by `channel_reply` before invoking the dispatcher.
+    // When None (top-level callers, tests), skip citation tracking; we can't
+    // pair the citation with a downstream prediction error otherwise.
+    //
+    // Session id is also propagated so the per-conversation 0.10 cap stays
+    // session-scoped across all sub-agent calls within the same channel
+    // session (review BLOCKER R2-1).
+    let turn_owned = duduclaw_memory::feedback::CURRENT_TURN_ID
+        .try_with(|tid| tid.clone())
+        .ok()
+        .flatten();
+    let session_owned = duduclaw_memory::feedback::CURRENT_SESSION_ID
+        .try_with(|sid| sid.clone())
+        .ok()
+        .flatten();
+    let citation_ref = turn_owned
+        .as_deref()
+        .map(|tid| (agent_id, tid, session_owned.as_deref()));
+    let default_language = crate::prompt_identity::read_default_language(home_dir).await;
+    let system_prompt = build_system_prompt(agent, citation_ref, default_language.as_deref());
+    let agent_name = agent.config.agent.name.clone();
+    let claude_model = agent.config.model.preferred.clone();
+    // OTel: record the resolved model on the `invoke_agent` span.
+    tracing::Span::current().record(crate::otel::attrs::REQUEST_MODEL, claude_model.as_str());
+    let fallback_model = agent.config.model.fallback.clone();
+    let local_config = agent.config.model.local.clone();
+    let api_mode = agent.config.model.api_mode.clone();
+    let capabilities = agent.config.capabilities.clone();
+    // #15 (2026-05-12) — agent's opt-in to Claude CLI `--bare` mode.
+    // Read here so the rest of this function (and the rotator path)
+    // can wrap subprocess invocations in a `BARE_MODE` scope and
+    // know to filter the rotator to API-key accounts.
+    let cli_bare_mode = agent.config.prompt.cli_bare_mode;
+    // G1: the agent's `[model] account_pool` — threaded into every rotation
+    // path below (fresh-spawn `call_with_rotation` + the PTY short-circuit).
+    let account_pool = agent.config.model.account_pool.clone();
+    // The agent's on-disk directory. For registry agents this equals
+    // `<home>/agents/<id>`; for preloaded (ephemeral) agents it is the
+    // scaffold dir under `<home>/agents/.ephemeral/<id>` — every downstream
+    // config read ([runtime] provider, tier models, hooks, workdir) must use
+    // this, not a recomputed `agents/<id>` join.
+    let agent_dir_owned = agent.dir.clone();
+    drop(reg);
+
+    // Pending Task Queue is computed from the Task Board so the agent
+    // opens each turn aware of its queue. Captured SEPARATELY rather than
+    // appended to `system_prompt` because Direct API uses the prompt cache
+    // on the system block — appending dynamic content would invalidate
+    // the entire cached prefix (Soul/Identity/Skills/Contract) every turn.
+    // Direct API path passes this as an uncached secondary system block;
+    // CLI / local inference paths concatenate when composing their prompt
+    // (those paths manage cache opaquely through the upstream SDK).
+    let tasks_suffix = build_pending_tasks_section(home_dir, agent_id).await;
+    // U4 co-edited plan: append the agent's shared-plan checklist (steps
+    // assigned to it) so the agent opens each turn aware of the plan. Kept
+    // in the same uncached dynamic block as the task queue; rendering is
+    // byte-stable so unchanged plans don't churn prompt bytes. Independent
+    // of the task queue — a plan can exist with zero board tasks.
+    let tasks_suffix = match plan_section_for_agent(home_dir, agent_id).await {
+        Some(plan) => Some(match tasks_suffix {
+            Some(t) => format!("{t}\n\n{plan}"),
+            None => plan,
+        }),
+        None => tasks_suffix,
+    };
+    // WP-6F (agent presets P1): the agent-visible preset line — placed
+    // BEFORE working_state (design §3.2: "preset 行接在它前面即可"). A preset
+    // switch can silently change model/tools/evolution posture; without this
+    // the agent keeps reasoning from its old self-image and misattributes
+    // capability-driven failures to itself.
+    let tasks_suffix =
+        match crate::preset_prompt::build_preset_section(home_dir, agent_id) {
+            Some(ps) => Some(match tasks_suffix {
+                Some(t) => format!("{t}\n\n{ps}"),
+                None => ps,
+            }),
+            None => tasks_suffix,
+        };
+    // Cross-wake working state: the agent's authoritative key-value posture
+    // + handoff note (working_state.rs, D3 ghost-memory fix). Placed BEFORE
+    // the recent-actions feed — standing authority first, action evidence
+    // second. Same uncached dynamic block as the task queue.
+    let tasks_suffix =
+        match crate::working_state::build_working_state_section(home_dir, agent_id) {
+            Some(ws) => Some(match tasks_suffix {
+                Some(t) => format!("{t}\n\n{ws}"),
+                None => ws,
+            }),
+            None => tasks_suffix,
+        };
+    // Cross-invocation continuity: recent self-action feed from the audit
+    // log, so a dispatch/cron/heartbeat run opens aware of what this agent
+    // already did in other invocations (channel replies included). Same
+    // uncached dynamic block as the task queue.
+    let tasks_suffix =
+        match crate::recent_actions::build_recent_actions_section(home_dir, agent_id) {
+            Some(actions) => Some(match tasks_suffix {
+                Some(t) => format!("{t}\n\n{actions}"),
+                None => actions,
+            }),
+            None => tasks_suffix,
+        };
+
+    // Install agent-file-guard PreToolUse hook before any spawn.
+    // Blocks the sub-agent from using raw Write/Edit to create
+    // agent-structure files outside <home>/agents/<name>/.
+    // Best-effort — logs warning on failure and continues.
+    let agent_dir = agent_dir_owned;
+
+    // RFC-25 Phase 2: when the delegated agent's [runtime] provider is not
+    // Claude, route the whole task through the provider-agnostic choke-point
+    // (Codex / Gemini / OpenAI-compat). Claude keeps the optimized rotation +
+    // local/hybrid path below. This makes sub-agent delegation respect the
+    // responding agent's runtime — and is the foundation A2A (Phase 3) builds on.
+    // Parse agent.toml once for the routing decision and the choke-point (L7 followup).
+    let delegation_settings = crate::runtime_config::load_runtime_settings(&agent_dir);
+
+    // O1: confidence-aware multi-scale routing for delegated sub-tasks
+    // (arXiv:2601.04861). Opt-in, default OFF — `config.toml [delegation]
+    // confidence_routing`, per-agent override `agent.toml [model]
+    // delegation_routing` (agent wins). Applies to the dispatcher path only
+    // (RequestType::Dispatch — bus delegation + worktree dispatch); channel
+    // replies / cron / evolution keep the preferred model untouched. Tiers
+    // resolve through config helpers only (Cheap ⇒ `[model] utility`,
+    // Standard ⇒ `[model] standard` else preferred) — no hardcoded model ids.
+    // Fail-safe: when off or on any config gap this is byte-identical to the
+    // preferred model, never a spawn failure.
+    //
+    // Multi-model doctrine guard (MED, 2026-07 review): tier models are Claude
+    // ids, so tier re-routing only applies when the resolved runtime provider
+    // is Claude — a gemini/codex agent keeps its own model untouched (the
+    // `provider_is_claude` flag below; the non-Claude branch follows).
+    let claude_model = if matches!(request_type, crate::cost_telemetry::RequestType::Dispatch) {
+        let routed = crate::delegation_router::resolve_delegation_model(
+            home_dir,
+            &agent_dir,
+            agent_id,
+            prompt,
+            &claude_model,
+            &delegation_settings.utility_model,
+            delegation_settings.non_claude_provider().is_none(),
+        );
+        if routed != claude_model {
+            // Routing changed the model — re-record it on the OTel span.
+            tracing::Span::current().record(crate::otel::attrs::REQUEST_MODEL, routed.as_str());
+        }
+        routed
+    } else {
+        claude_model
+    };
+
+    // HIGH-A (2026-07 review): `moa:<name>` virtual models are API-mode only —
+    // they must NEVER reach a CLI spawn (`claude -p --model moa:x` 404s
+    // upstream) and, worse, the rotation loop would call `rotator.on_error`
+    // once per account, poisoning the SHARED pool for every other agent over
+    // one agent's config. Route to the MoA executor here, BEFORE any rotator
+    // or local/hybrid path is touched. Mirrors `channel_reply`'s MoA branch;
+    // dispatch is single-shot by design, so history is empty (same as the
+    // non-Claude branch below).
+    if duduclaw_llm::is_moa_model_id(&claude_model) {
+        info!(
+            agent = %agent_id,
+            model = %claude_model,
+            "dispatcher: routing through MoA ensemble (API mode — no CLI, no rotator)"
+        );
+        let system_with_tasks: std::borrow::Cow<str> = match &tasks_suffix {
+            Some(s) => std::borrow::Cow::Owned(format!("{system_prompt}\n\n---\n\n{s}")),
+            None => std::borrow::Cow::Borrowed(system_prompt.as_str()),
+        };
+        return crate::direct_api::call_moa_model(
+            home_dir,
+            agent_id,
+            request_type,
+            &claude_model,
+            &system_with_tasks,
+            prompt,
+            &[],
+        )
+        .await
+        .map_err(|e| format!("MoA 模型 `{claude_model}` 需要 API 模式（無法經由 CLI 執行）：{e}"));
+    }
+
+    if let Some(provider) = delegation_settings.non_claude_provider() {
+        info!(
+            agent = %agent_id,
+            provider = provider.as_str(),
+            "delegation: routing through multi-runtime choke-point (non-Claude provider)"
+        );
+        // RFC-25 A2: non-Claude runtimes have no separate uncached secondary
+        // system block (that's a Direct-API cache optimization). Inline the
+        // pending-tasks section into the system prompt — the same content and
+        // format the Claude CLI / local paths concatenate below — so non-Claude
+        // sub-agents still open each turn aware of their Task-Board queue.
+        // (`cli_bare_mode` is a Claude-CLI `--bare` flag with no equivalent on
+        // other runtimes, so it does not apply here.)
+        let system_with_tasks = match &tasks_suffix {
+            Some(s) => std::borrow::Cow::Owned(format!("{system_prompt}\n\n---\n\n{s}")),
+            None => std::borrow::Cow::Borrowed(system_prompt.as_str()),
+        };
+        return crate::runtime_dispatch::run_agent_prompt_text(
+            crate::runtime_dispatch::AgentPrompt {
+                agent_dir: Some(&agent_dir),
+                home_dir,
+                agent_id,
+                prompt,
+                system_prompt: &system_with_tasks,
+                model: &claude_model,
+                max_tokens: 8192,
+                provider_override: None,
+                // Single-shot by design: delegation / cron / reminder / A2A
+                // dispatch a discrete task prompt, not a conversation — the same
+                // is true for the Claude path here and the Direct-API path
+                // (see the `&[]` at try_direct_api), so this is symmetric across
+                // providers, not a non-Claude amnesia gap. Multi-turn history is
+                // a channel-reply concept (where a session exists) and is wired
+                // there (A1).
+                conversation_history: &[],
+                request_type: crate::cost_telemetry::RequestType::Dispatch,
+                runtime_settings: Some(&delegation_settings),
+            },
+        )
+        .await;
+    }
+
+    if agent_dir.exists() {
+        let bin = crate::agent_hook_installer::resolve_duduclaw_bin();
+        if let Err(e) =
+            crate::agent_hook_installer::ensure_agent_hook_settings(&agent_dir, &bin).await
+        {
+            warn!(
+                agent = %agent_name,
+                error = %e,
+                "Failed to install agent-file-guard hook — continuing without enforcement"
+            );
+        }
+
+        // Phase 3.C.5 (2026-05-14): dispatcher PTY short-circuit.
+        //
+        // When the agent opts in to `[runtime] pty_pool_enabled = true`,
+        // dispatcher-side invocations short-circuit local offload + hybrid
+        // routing and go straight to the PTY pool. The semantic is "I've
+        // chosen PTY-as-runtime; respect that across all entry points
+        // (channel reply + sub-agent dispatch)".
+        //
+        // Cost gates (local offload, model fallback) are intentionally
+        // bypassed because:
+        // 1. The operator's intent is clear from the flag.
+        // 2. PTY interactive mode reuses sessions across turns, so the
+        //    cost saving from local offload is less material.
+        // 3. Mixing PTY-with-local-offload would create surprising
+        //    behaviour — the in-session conversation context would get
+        //    truncated by occasional local-offload diversions.
+        let runtime_mode = crate::pty_runtime::runtime_mode_for_agent(&agent_dir);
+        if runtime_mode == crate::pty_runtime::RuntimeMode::PtyPool {
+            info!(
+                agent = %agent_name,
+                mode = runtime_mode.as_str(),
+                "dispatcher: short-circuit through PTY pool (skipping local offload + hybrid routing)"
+            );
+            // Stall detection + hard cap, same policy as the channel path
+            // (per-agent configurable via `agent.toml [runtime]`).
+            let hard_cap = crate::pty_runtime::interactive_repl_deadline(Some(&agent_dir));
+            let idle_timeout = crate::pty_runtime::interactive_repl_idle_timeout(Some(&agent_dir));
+            // Round 4 deferred-cleanup (LOW F-3): canonical options entry.
+            // Unbind from hardcoded Claude: the PtyPool kind follows the agent's
+            // configured provider. Non-Claude providers are short-circuited to
+            // `runtime_dispatch` above (the `non_claude_provider` guard), so this
+            // resolves to Claude in practice today — but the coupling is gone.
+            let cli_kind = crate::pty_runtime::cli_kind_for_provider(delegation_settings.provider)
+                .unwrap_or(duduclaw_cli_runtime::CliKind::Claude);
+            // Gap A fix: route each rotator-selected account's credential env
+            // into the PTY pool (per-account `account_id` + `env`), mirroring the
+            // channel-reply path. Previously this dispatcher short-circuit called
+            // `acquire_and_invoke_with` with NO account_id / env, so PTY-pooled
+            // sub-agent dispatch ran under whatever ambient OAuth happened to live
+            // in `~/.claude/` — breaking multi-account isolation and the managed
+            // worker's HS14 per-account scoping. Use the same `rotate_cli_spawn`
+            // primitive the channel path uses so failover + per-account cooldown
+            // apply here too.
+            // WP10 M1: feed the demotion breaker from this path too. The
+            // breaker is read upstream at `runtime_mode_for_agent` (line above),
+            // so a demoted agent never enters this block and falls through to
+            // the fresh-spawn path below — consistent with channel reply. But
+            // without recording here, dispatcher-only agents would never
+            // ACCUMULATE toward demotion and would keep paying the stall tax.
+            let record_pty_outcome = |r: &Result<String, String>| match r {
+                Ok(_) => crate::pty_runtime::record_pty_success(agent_id),
+                Err(e) if crate::pty_runtime::is_pty_transport_error(e) => {
+                    crate::pty_runtime::record_pty_transport_failure(agent_id);
+                }
+                Err(_) => {}
+            };
+            match get_rotator(home_dir).await {
+                Ok(rotator) if rotator.count().await > 0 => {
+                    let out = crate::channel_reply::rotate_cli_spawn(
+                        &rotator,
+                        &account_pool,
+                        move |env_vars, _retry_hint| {
+                            let account_id =
+                                crate::channel_reply::account_id_from_env_vars(&env_vars);
+                            async move {
+                                let acquire = crate::pty_runtime::AcquireOptions::new(
+                                    agent_id,
+                                    cli_kind,
+                                    cli_bare_mode,
+                                )
+                                .account_id(account_id.as_deref())
+                                .env(env_vars.clone());
+                                crate::pty_runtime::acquire_and_invoke_with(
+                                    crate::pty_runtime::InvokeOptions::new(
+                                        acquire,
+                                        prompt,
+                                        hard_cap,
+                                        idle_timeout,
+                                    ),
+                                )
+                                .await
+                            }
+                        },
+                        prompt.len(),
+                    )
+                    .await;
+                    record_pty_outcome(&out);
+                    return out;
+                }
+                _ => {
+                    // No rotator accounts / rotator unavailable → ambient-env
+                    // fallback (the user's default `claude auth login` session),
+                    // matching the pre-fix behaviour.
+                    let acquire =
+                        crate::pty_runtime::AcquireOptions::new(agent_id, cli_kind, cli_bare_mode);
+                    let out = crate::pty_runtime::acquire_and_invoke_with(
+                        crate::pty_runtime::InvokeOptions::new(
+                            acquire,
+                            prompt,
+                            hard_cap,
+                            idle_timeout,
+                        ),
+                    )
+                    .await;
+                    record_pty_outcome(&out);
+                    return out;
+                }
+            }
+        }
+    }
+
+    // For CLI / local inference paths, tasks suffix is inlined into the
+    // system prompt — those paths don't use our manual `cache_control`,
+    // so an inline append costs nothing cache-wise. For the Direct API
+    // path we instead pass the suffix as a separate uncached block.
+    let system_prompt_inlined: std::borrow::Cow<str> = match &tasks_suffix {
+        Some(s) => std::borrow::Cow::Owned(format!("{system_prompt}\n\n---\n\n{s}")),
+        None => std::borrow::Cow::Borrowed(system_prompt.as_str()),
+    };
+
+    // P0 fix: global mode gate BEFORE per-agent routing
+    let inference_mode = get_inference_mode(home_dir).await;
+    match inference_mode.as_str() {
+        "local" => {
+            // Force local inference regardless of per-agent prefer_local
+            let model_id = local_config.as_ref().map(|c| c.model.as_str());
+            return call_local_inference(
+                home_dir,
+                prompt,
+                &system_prompt_inlined,
+                model_id,
+                Some(agent_id),
+                Some(&capabilities),
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "Agent '{agent_name}' is in local-only mode but inference failed: {e}. \
+                     Fix local model setup or switch to 'hybrid' mode in config.toml."
+                )
+            });
+        }
+        "claude" => {
+            // Skip local entirely, go straight to Claude API
+            info!(agent = %agent_name, model = %claude_model, "Claude-only mode");
+            let wd = effective_work_dir(&agent_dir);
+            let primary_result = call_with_rotation(
+                home_dir,
+                agent_id,
+                prompt,
+                &claude_model,
+                &system_prompt_inlined,
+                request_type,
+                Some(&capabilities),
+                wd.as_deref(),
+                cli_bare_mode,
+                &account_pool,
+            )
+            .await;
+            return match primary_result {
+                Ok(text) => Ok(text),
+                Err(ref e)
+                    if is_llm_fallback_error(e)
+                        && should_attempt_model_fallback(&claude_model, &fallback_model) =>
+                {
+                    warn!(
+                        primary = %claude_model,
+                        fallback = %fallback_model,
+                        error = %e,
+                        "LLM timeout/overloaded — attempting model fallback (claude mode)"
+                    );
+                    emit_llm_fallback_audit(home_dir, agent_id, &claude_model, &fallback_model, e)
+                        .await;
+                    call_with_rotation(
+                        home_dir,
+                        agent_id,
+                        prompt,
+                        &fallback_model,
+                        &system_prompt_inlined,
+                        request_type,
+                        Some(&capabilities),
+                        wd.as_deref(),
+                        cli_bare_mode,
+                        &account_pool,
+                    )
+                    .await
+                    .map_err(|fe| {
+                        format_fallback_error_message(&claude_model, e, &fallback_model, &fe)
+                    })
+                }
+                Err(e) => Err(e),
+            };
+        }
+        _ => {
+            // "hybrid" — SDK-first design (see routing logic below)
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // Hybrid mode routing — SDK is the brain, local is cost-saving offload
+    //
+    // Design principle: "Claude Code SDK = brain, DuDuClaw = plumbing"
+    // OAuth subscription is the primary fuel, API Key is the reserve tank.
+    //
+    //  ① Local offload: Router-confirmed simple queries → zero cost
+    //  ② CLI (claude -p): primary brain, uses OAuth subscription
+    //     - Multiple OAuth accounts rotated via CLAUDE_CODE_OAUTH_TOKEN
+    //  ③ Direct API (API Key): fallback when all OAuth accounts rate-limited
+    //     - cache_control for 95%+ cache hit rate
+    // ══════════════════════════════════════════════════════════════
+
+    // Validate api_mode
+    if !matches!(api_mode.as_str(), "cli" | "direct" | "auto") {
+        warn!(
+            agent = %agent_name,
+            api_mode = %api_mode,
+            "Unrecognized api_mode in agent.toml — expected cli/direct/auto, defaulting to cli"
+        );
+    }
+
+    // ── ① Local offload: only for clearly simple queries ─────────
+    let adaptive_prefer = crate::cost_telemetry::should_prefer_local(agent_id).await;
+    if let Some(ref local) = local_config {
+        let should_try_local = adaptive_prefer || local.use_router || local.prefer_local;
+        if should_try_local {
+            let reason = if adaptive_prefer {
+                "adaptive-override"
+            } else if local.use_router {
+                "router-driven"
+            } else {
+                "prefer-local"
+            };
+            info!(agent = %agent_name, local_model = %local.model, reason, "Trying local offload");
+            match call_local_inference(
+                home_dir,
+                prompt,
+                &system_prompt_inlined,
+                Some(&local.model),
+                Some(agent_id),
+                Some(&capabilities),
+            )
+            .await
+            {
+                Ok(response) => {
+                    info!(agent = %agent_name, "Query served by local model (cost saved)");
+                    return Ok(response);
+                }
+                Err(e) if e == "ROUTER_ESCALATE_TO_CLOUD" => {
+                    info!(agent = %agent_name, "Router: query too complex → escalating to SDK");
+                }
+                Err(e) => {
+                    warn!(agent = %agent_name, error = %e, "Local offload failed → escalating to SDK");
+                }
+            }
+        }
+    }
+
+    // ── ② CLI: primary brain (OAuth subscription) ────────────────
+    // In "auto" mode: try CLI first. Only fall through to Direct API
+    // if CLI fails with rate limit (all OAuth accounts exhausted).
+    // In "cli" mode: CLI is the only cloud path.
+    // In "direct" mode: skip CLI, go straight to Direct API.
+    let wd = effective_work_dir(&agent_dir);
+    if api_mode != "direct" {
+        info!(agent = %agent_name, model = %claude_model, "Calling Claude CLI (SDK primary)");
+        match call_with_rotation(
+            home_dir,
+            agent_id,
+            prompt,
+            &claude_model,
+            &system_prompt_inlined,
+            request_type,
+            Some(&capabilities),
+            wd.as_deref(),
+            cli_bare_mode,
+            &account_pool,
+        )
+        .await
+        {
+            Ok(text) => return Ok(text),
+            Err(e) => {
+                let is_rate = is_rate_limit_error(&e);
+                let is_fallback_trigger = is_llm_fallback_error(&e);
+                let can_model_fallback = is_fallback_trigger
+                    && should_attempt_model_fallback(&claude_model, &fallback_model);
+
+                if can_model_fallback {
+                    // Model-level fallback takes priority over account-level
+                    // Direct API fallback: switching to a lighter model reuses
+                    // existing OAuth accounts and avoids consuming API Key quota.
+                    // Even if the error was also a rate-limit, haiku is less
+                    // likely to be overloaded and shares the same account pool.
+                    warn!(
+                        primary = %claude_model,
+                        fallback = %fallback_model,
+                        error = %e,
+                        "LLM timeout/overloaded — attempting model fallback via CLI (hybrid mode)"
+                    );
+                    emit_llm_fallback_audit(home_dir, agent_id, &claude_model, &fallback_model, &e)
+                        .await;
+                    return call_with_rotation(
+                        home_dir,
+                        agent_id,
+                        prompt,
+                        &fallback_model,
+                        &system_prompt_inlined,
+                        request_type,
+                        Some(&capabilities),
+                        wd.as_deref(),
+                        cli_bare_mode,
+                        &account_pool,
+                    )
+                    .await
+                    .map_err(|fe| {
+                        format_fallback_error_message(&claude_model, &e, &fallback_model, &fe)
+                    });
+                } else if api_mode == "auto" && is_rate {
+                    // No model fallback available: all OAuth accounts rate-limited
+                    // and the two models are the same (or fallback is unset).
+                    // Fall through to Direct API (account-level fallback).
+                    warn!(agent = %agent_name, "All CLI accounts rate-limited → trying Direct API fallback");
+                } else {
+                    // "cli" mode or non-retriable error → report error
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    // ── ③ Direct API: fallback with API Key (cache-optimized) ────
+    // Only reached when: api_mode="direct", or api_mode="auto" + all OAuth rate-limited.
+    // Pass tasks_suffix as a separate uncached block so the static system
+    // prefix stays cacheable.
+
+    // G1: when the agent configures `[model] fallbacks`, run the cross-provider
+    // fallback chain (preferred → fallbacks). Absent/empty ⇒ fall through to the
+    // byte-identical single-shot path below.
+    let model_fallbacks = crate::runtime_config::agent_model_fallbacks(&agent_dir);
+    if !model_fallbacks.is_empty() {
+        info!(
+            agent = %agent_name,
+            model = %claude_model,
+            fallbacks = ?model_fallbacks,
+            "Trying Direct API cross-provider fallback chain"
+        );
+        return try_direct_api_chain(
+            home_dir,
+            agent_id,
+            prompt,
+            &claude_model,
+            &model_fallbacks,
+            &system_prompt,
+            tasks_suffix.as_deref(),
+            request_type,
+            Some(&capabilities),
+        )
+        .await;
+    }
+
+    // Rotator threaded into the single-shot path so a non-Anthropic preferred
+    // model uses provider-aware rotation (G3); the Anthropic legacy body ignores
+    // it, staying byte-identical for Claude agents.
+    let direct_rotator = get_rotator(home_dir).await.ok();
+    info!(agent = %agent_name, model = %claude_model, "Trying Direct API (API Key fallback)");
+    match try_direct_api(
+        home_dir,
+        agent_id,
+        prompt,
+        &claude_model,
+        &system_prompt,
+        tasks_suffix.as_deref(),
+        request_type,
+        direct_rotator.as_deref(),
+        Some(&capabilities),
+    )
+    .await
+    {
+        Ok(text) => Ok(text),
+        Err(ref e)
+            if is_llm_fallback_error(e)
+                && should_attempt_model_fallback(&claude_model, &fallback_model) =>
+        {
+            warn!(
+                primary = %claude_model,
+                fallback = %fallback_model,
+                error = %e,
+                "LLM Direct API timeout/overloaded — attempting model fallback"
+            );
+            emit_llm_fallback_audit(home_dir, agent_id, &claude_model, &fallback_model, e).await;
+            try_direct_api(
+                home_dir,
+                agent_id,
+                prompt,
+                &fallback_model,
+                &system_prompt,
+                tasks_suffix.as_deref(),
+                request_type,
+                direct_rotator.as_deref(),
+                Some(&capabilities),
+            )
+            .await
+            .map_err(|fe| format_fallback_error_message(&claude_model, e, &fallback_model, &fe))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Check whether an error string indicates a billing/credit exhaustion issue.
+///
+/// These errors should NOT be retried with the same account — the account
+/// needs a long cooldown (topped up manually).
+pub(crate) fn is_billing_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("credit")
+        || lower.contains("balance")
+        || lower.contains("billing")
+        || lower.contains("payment")
+        || lower.contains("402")
+        || lower.contains("insufficient_quota")
+}
+
+/// Check whether an error indicates rate limiting (usage limit exhausted).
+///
+/// Defence in depth against the `rate_limit_event` ADVISORY frame (an
+/// early-warning the CLI emits while the run continues normally): its field
+/// names lowercase into matching substrings (`rateLimitType` →
+/// "ratelimittype" ⊃ "ratelimit"), so an error string that merely embeds a
+/// frame would classify a healthy account as rate-limited and cool it down.
+/// The stream parsers no longer embed those frames (see
+/// `rate_limit_watch`); here the frame's own tokens are additionally
+/// neutralized before matching, so a genuine refusal must match on its own
+/// words.
+pub(crate) fn is_rate_limit_error(error: &str) -> bool {
+    let mut lower = error.to_lowercase();
+    if lower.contains("rate_limit_event") || lower.contains("allowed_warning") {
+        for advisory_token in [
+            "rate_limit_event",
+            "rate_limit_info",
+            "ratelimittype",
+            "allowed_warning",
+        ] {
+            lower = lower.replace(advisory_token, "");
+        }
+    }
+    lower.contains("rate limit")
+        || lower.contains("rate-limit")
+        || lower.contains("ratelimit")
+        || lower.contains("429")
+        || lower.contains("usage limit")
+        || lower.contains("overloaded")
+        || lower.contains("capacity limit")
+}
+
+/// Where a Direct-API request for a model is served.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectApiRoute {
+    /// api.anthropic.com via `crate::direct_api` (ANTHROPIC key, layered
+    /// cache breakpoints + invalidation attribution) — the pre-existing path.
+    LegacyAnthropic,
+    /// A duduclaw-llm provider client, keyed by registry provider id
+    /// ("openai", "gemini", "deepseek", ...).
+    LlmProvider(String),
+}
+
+/// Pure routing decision: registry-known non-Anthropic models go to the
+/// matching duduclaw-llm provider; Anthropic models AND unknown models keep
+/// the legacy path (unknown → legacy preserves pre-multi-provider behavior
+/// exactly, including its failure mode).
+fn direct_api_route(model: &str) -> DirectApiRoute {
+    match crate::cost_telemetry::model_registry().get(model) {
+        Some(info) if info.provider != "anthropic" => {
+            DirectApiRoute::LlmProvider(info.provider.clone())
+        }
+        _ => DirectApiRoute::LegacyAnthropic,
+    }
+}
+
+/// Build a duduclaw-llm provider client for `provider_id` from an explicit API
+/// key. Fail-closed: an unknown compat provider with no preset → Err (no
+/// guessed base URL).
+fn build_llm_provider_with_key(
+    provider_id: &str,
+    key: &str,
+) -> Result<Box<dyn duduclaw_llm::ChatProvider>, String> {
+    let auth = duduclaw_llm::ApiAuth::new(key.to_string());
+    match provider_id {
+        "openai" => Ok(Box::new(duduclaw_llm::providers::OpenAiProvider::new(auth))),
+        "gemini" | "google" => Ok(Box::new(duduclaw_llm::providers::GeminiProvider::new(auth))),
+        other => duduclaw_llm::providers::OpenAiCompatProvider::from_preset(other, auth)
+            .map(|p| Box::new(p) as Box<dyn duduclaw_llm::ChatProvider>)
+            // Fail closed: no preset → no guessed base URL.
+            .ok_or_else(|| format!("no direct-API preset for provider {other}")),
+    }
+}
+
+/// Build the normalized ChatRequest for a non-Anthropic direct call.
+///
+/// The system prompt splits on `CACHE_SPLIT_MARKER` — duduclaw-llm re-exports
+/// the identical constant as `direct_api.rs` (test-pinned below) — so the
+/// marker never reaches the wire. Providers with explicit caching get
+/// `Explicit` hints per block; others get plain blocks (their implicit prefix
+/// caching ignores hints). `dynamic_system_suffix` lands as a final uncached
+/// block so the static prefix stays cache-stable, mirroring the legacy path.
+fn build_llm_chat_request(
+    model: &str,
+    supports_caching: bool,
+    system_prompt: &str,
+    dynamic_system_suffix: Option<&str>,
+    prompt: &str,
+) -> duduclaw_llm::ChatRequest {
+    use duduclaw_llm::{ChatMessage, ChatRequest, SystemBlock, CACHE_SPLIT_MARKER};
+
+    let mut req = ChatRequest::new(model);
+    for segment in system_prompt.split(CACHE_SPLIT_MARKER) {
+        let text = segment.trim();
+        if text.is_empty() {
+            continue;
+        }
+        req.system.push(if supports_caching {
+            SystemBlock::cached(text)
+        } else {
+            SystemBlock::uncached(text)
+        });
+    }
+    if let Some(suffix) = dynamic_system_suffix {
+        let text = suffix.trim();
+        if !text.is_empty() {
+            req.system.push(SystemBlock::uncached(text));
+        }
+    }
+    req.messages.push(ChatMessage::user(prompt));
+    // ChatRequest::new defaults to 4096 == direct_api::DEFAULT_MAX_TOKENS;
+    // pinned explicitly so the two paths can't drift apart silently.
+    req.max_tokens = 4096;
+    req
+}
+
+/// A [`ChatProvider`] decorator that records token-usage telemetry after every
+/// `complete()` — so a multi-round [`duduclaw_llm::run_tool_loop`] bills each
+/// provider round-trip (G2 cost guard), not just the final response — and
+/// accumulates the total cost for the rotator's per-account budget (G3).
+///
+/// `pub(crate)`: `direct_api::call_moa_model` reuses it to bill every MoA
+/// member call (proposers + aggregator) under the calling agent — previously
+/// MoA usage was completely invisible to CostTelemetry (2026-07 HIGH-B).
+pub(crate) struct RecordingProvider {
+    inner: Box<dyn duduclaw_llm::ChatProvider>,
+    agent_id: String,
+    request_type: crate::cost_telemetry::RequestType,
+    cost_acc: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl RecordingProvider {
+    pub(crate) fn new(
+        inner: Box<dyn duduclaw_llm::ChatProvider>,
+        agent_id: &str,
+        request_type: crate::cost_telemetry::RequestType,
+    ) -> Self {
+        Self {
+            inner,
+            agent_id: agent_id.to_string(),
+            request_type,
+            cost_acc: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl duduclaw_llm::ChatProvider for RecordingProvider {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    async fn complete(
+        &self,
+        req: &duduclaw_llm::ChatRequest,
+    ) -> Result<duduclaw_llm::ChatResponse, duduclaw_llm::LlmError> {
+        let resp = self.inner.complete(req).await?;
+        // Reasoning fold: bill reasoning exactly once at the output rate
+        // (mirrors the legacy single-shot mapping).
+        let usage = crate::cost_telemetry::TokenUsage {
+            input_tokens: resp.usage.input_tokens,
+            cache_read_tokens: resp.usage.cache_read_tokens,
+            cache_creation_tokens: resp.usage.cache_write_tokens,
+            output_tokens: resp.usage.output_tokens + resp.usage.reasoning_tokens,
+        };
+        self.cost_acc.fetch_add(
+            crate::cost_telemetry::cost_for(&resp.model_used, &usage),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        if let Some(telemetry) = crate::cost_telemetry::get_telemetry() {
+            telemetry
+                .record(&self.agent_id, self.request_type, &resp.model_used, &usage)
+                .await;
+        }
+        Ok(resp)
+    }
+
+    async fn stream(
+        &self,
+        req: &duduclaw_llm::ChatRequest,
+    ) -> Result<
+        futures_util::stream::BoxStream<
+            'static,
+            Result<duduclaw_llm::StreamEvent, duduclaw_llm::LlmError>,
+        >,
+        duduclaw_llm::LlmError,
+    > {
+        self.inner.stream(req).await
+    }
+}
+
+/// Env for the duduclaw MCP server subprocess — mirrors
+/// `runtime::duduclaw_mcp_server_json` (self-identify via `DUDUCLAW_AGENT_ID` +
+/// the multi-instance overrides) so the API-path tool loop reaches the same MCP
+/// tools the CLI backends do.
+fn mcp_client_envs(agent_id: &str) -> Vec<(String, String)> {
+    // Identity pair: id + (when `<home>/identity.key` exists) the WP21 debt ⑧
+    // `DUDUCLAW_AGENT_TOKEN`. Without the token this path is the one MCP
+    // spawn point that `[delegation] require_identity_token = true` would
+    // refuse to boot — API-mode agents would silently lose their whole tool
+    // surface the moment an operator enables strict mode.
+    let mut envs = duduclaw_core::agent_identity_env_vars_default(agent_id);
+    // Shared forward set (home/port/instance + MCP auth) — see
+    // `duduclaw_core::mcp_forward_env_vars`. The spawned mcp-server inherits
+    // this process env too, but the explicit pairs keep the tool loop working
+    // even if a future spawn path sanitizes the child env.
+    envs.extend(duduclaw_core::mcp_forward_env_vars());
+    envs
+}
+
+/// Base tool name — the part before an optional `(` qualifier (e.g.
+/// `Bash(git:*)` → `Bash`), trimmed, with an `mcp__<server>__` namespace prefix
+/// stripped (`mcp__duduclaw__office_script` → `office_script`). Token-anchored
+/// (never substring), per the 2026-06 review conventions.
+///
+/// The prefix strip is what lets the Claude-CLI-qualified entries the dashboard
+/// tool picker writes into `[capabilities] allowed_tools` / `denied_tools`
+/// match the BARE tool names the API-path `ToolRegistry` advertises — without
+/// it, an allowlist of qualified names would drop every MCP tool for API-mode
+/// agents, and a qualified deny would silently not deny. Stripping ignores the
+/// server segment, so a deny of `mcp__other__foo` also drops a tool named
+/// `foo` from any server — over-matching on deny is fail-safe, and allowlist
+/// collisions across servers are an accepted trade-off (documented here).
+fn tool_base_name(entry: &str) -> &str {
+    let e = entry.split('(').next().unwrap_or(entry).trim();
+    if let Some(rest) = e.strip_prefix("mcp__") {
+        if let Some(idx) = rest.find("__") {
+            let bare = &rest[idx + 2..];
+            if !bare.is_empty() {
+                return bare;
+            }
+        }
+    }
+    e
+}
+
+/// Filter MCP tool defs by the agent's capabilities (G2, fail-closed): a tool
+/// whose base name is bare-denied is dropped, and when an explicit
+/// `allowed_tools` allowlist is set only tools named there survive. `None`
+/// capabilities ⇒ all tools offered.
+pub(crate) fn filter_tool_defs(
+    defs: Vec<duduclaw_llm::ToolDef>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Vec<duduclaw_llm::ToolDef> {
+    let Some(caps) = capabilities else {
+        return defs;
+    };
+    let denied = caps.disallowed_tools();
+    let allowed = caps.allowed_tools();
+    defs.into_iter()
+        .filter(|d| {
+            let name = tool_base_name(&d.name);
+            if denied
+                .iter()
+                .any(|x| tool_base_name(x).eq_ignore_ascii_case(name))
+            {
+                return false;
+            }
+            if !allowed.is_empty()
+                && !allowed
+                    .iter()
+                    .any(|x| tool_base_name(x).eq_ignore_ascii_case(name))
+            {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+/// Spawn the duduclaw MCP server and build a [`duduclaw_llm::ToolRegistry`] for
+/// the tool loop (G2). Fail-safe: any resolve/spawn/handshake/list failure logs
+/// a warning and returns `None`, so the caller degrades to a tools-less answer
+/// rather than failing the whole reply.
+pub(crate) async fn build_mcp_tool_registry(agent_id: &str) -> Option<duduclaw_llm::ToolRegistry> {
+    let bin = duduclaw_core::resolve_duduclaw_bin();
+    if !bin.is_absolute() {
+        warn!("MCP tool loop disabled — duduclaw binary did not resolve to an absolute path");
+        return None;
+    }
+
+    // Connect the internal duduclaw MCP server (always client 0 → wins name
+    // collisions against any external server).
+    let connect_internal = || async {
+        duduclaw_llm::McpClient::connect(
+            &bin.to_string_lossy(),
+            &["mcp-server".to_string()],
+            &mcp_client_envs(agent_id),
+            duduclaw_llm::DEFAULT_MCP_TIMEOUT,
+        )
+        .await
+    };
+    let internal = match connect_internal().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "MCP server spawn failed — Direct-API reply will be tools-less");
+            return None;
+        }
+    };
+
+    // MCP Bridge: mount external third-party servers declared in agent.toml.
+    // `secret://` env refs are resolved here against the secret manager (async);
+    // a server with an unresolvable credential is dropped fail-safe.
+    let home_dir = duduclaw_core::platform::duduclaw_home();
+    let agent_dir = home_dir.join("agents").join(agent_id);
+    let externals =
+        crate::mcp_external::load_external_mcp_servers_resolved(&agent_dir, &home_dir).await;
+
+    if externals.is_empty() {
+        return match duduclaw_llm::ToolRegistry::from_clients(vec![internal]).await {
+            Ok(reg) => Some(reg),
+            Err(e) => {
+                warn!(error = %e, "MCP tools/list failed — Direct-API reply will be tools-less");
+                None
+            }
+        };
+    }
+
+    let mut clients = vec![internal];
+    let mut filters = vec![duduclaw_llm::ToolFilter::default()];
+    for ext in externals {
+        // Transport per entry: `url` ⇒ remote Streamable HTTP (Google
+        // Workspace official MCP, DocuSeal self-hosted /mcp, …); otherwise
+        // spawn the stdio child as before.
+        let connected = match &ext.url {
+            Some(url) => {
+                duduclaw_llm::McpClient::connect_http(
+                    url,
+                    &ext.http_headers(),
+                    duduclaw_llm::DEFAULT_MCP_TIMEOUT,
+                )
+                .await
+            }
+            None => {
+                duduclaw_llm::McpClient::connect(
+                    &ext.command,
+                    &ext.args,
+                    &ext.env,
+                    duduclaw_llm::DEFAULT_MCP_TIMEOUT,
+                )
+                .await
+            }
+        };
+        match connected {
+            Ok(c) => {
+                info!(server = %ext.name, "external MCP server mounted");
+                clients.push(c);
+                filters.push(ext.filter);
+            }
+            // A single external server failing must not sink the whole reply —
+            // skip it; the internal server + other externals still serve.
+            Err(e) => {
+                warn!(server = %ext.name, error = %e, "external MCP connect failed — skipping")
+            }
+        }
+    }
+
+    match duduclaw_llm::ToolRegistry::from_clients_filtered(clients, filters).await {
+        Ok(reg) => Some(reg),
+        Err(e) => {
+            // A misbehaving external server can fail the combined tools/list.
+            // Degrade to internal-only rather than losing all tools.
+            warn!(error = %e, "combined MCP registry build failed — retrying internal-only");
+            let internal = connect_internal().await.ok()?;
+            duduclaw_llm::ToolRegistry::from_clients(vec![internal])
+                .await
+                .ok()
+        }
+    }
+}
+
+/// Where a direct-API key came from — the pure output of [`choose_key_source`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KeySource {
+    /// A rotator account (budget/cooldown tracked) — carries its id + key.
+    Rotator { account_id: String, key: String },
+    /// A provider env var (no usable rotator account matched).
+    Env { key: String },
+}
+
+/// Pure decision (G3): prefer a rotator-selected account's key, else the env
+/// key. `rotator_pick` is `(account_id, raw_key)` from
+/// [`duduclaw_agent::account_rotator::AccountRotator::select_for_provider`];
+/// `raw_key = None` marks an OAuth account (no static key), which non-Anthropic
+/// providers can't use → treated as no rotator key, so we fall back to env.
+fn choose_key_source(
+    rotator_pick: Option<(String, Option<String>)>,
+    env_key: Option<String>,
+) -> Option<KeySource> {
+    match rotator_pick {
+        Some((account_id, Some(key))) => Some(KeySource::Rotator { account_id, key }),
+        _ => env_key.map(|key| KeySource::Env { key }),
+    }
+}
+
+/// Resolve a direct-API key for `provider` via the rotator (G3), falling back
+/// to the provider's env var. `select_for_provider` itself already env-fallbacks
+/// (synthesizing a harmless `<provider>-env` ephemeral account), so threading a
+/// rotator both rotates real `[[accounts]]` and covers the env-only case; the
+/// direct `resolve_env_key` branch only matters when no rotator is available.
+async fn resolve_provider_key(
+    provider: &str,
+    rotator: Option<&duduclaw_agent::account_rotator::AccountRotator>,
+) -> Result<KeySource, String> {
+    let rotator_pick = match rotator {
+        Some(r) => r
+            .select_for_provider(provider)
+            .await
+            .map(|env| (env.id, env.raw_key)),
+        None => None,
+    };
+    let env_key = duduclaw_llm::resolve_env_key(provider);
+    choose_key_source(rotator_pick, env_key).ok_or_else(|| {
+        format!(
+            "no API key for provider {provider} — add an [[accounts]] entry or set \
+             its standard env var (e.g. OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY)"
+        )
+    })
+}
+
+/// Direct-API call through a duduclaw-llm provider (non-Anthropic models) with
+/// provider-aware rotation (G3) and the MCP tool loop (G2).
+///
+/// Returns a [`ChainError`] so the fallback chain can classify failover vs.
+/// terminal from the typed [`duduclaw_llm::LlmError`] (auth/invalid ⇒ terminal;
+/// rate-limit/billing/timeout/5xx ⇒ failover).
+// OTel GenAI: `chat` span for one non-Anthropic Direct-API model call.
+#[tracing::instrument(
+    name = "chat",
+    skip_all,
+    fields(
+        gen_ai.operation.name = "chat",
+        gen_ai.system = %provider_id,
+        gen_ai.provider.name = %provider_id,
+        gen_ai.agent.name = %agent_id,
+        gen_ai.request.model = %model,
+        gen_ai.usage.input_tokens = tracing::field::Empty,
+        gen_ai.usage.output_tokens = tracing::field::Empty,
+    )
+)]
+async fn run_llm_provider(
+    agent_id: &str,
+    prompt: &str,
+    model: &str,
+    system_prompt: &str,
+    dynamic_system_suffix: Option<&str>,
+    request_type: crate::cost_telemetry::RequestType,
+    provider_id: &str,
+    rotator: Option<&duduclaw_agent::account_rotator::AccountRotator>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Result<String, ChainError> {
+    // G3: resolve the key (rotator → env). A missing key is terminal for this
+    // candidate — nothing to retry with on the same provider.
+    let key_source = match resolve_provider_key(provider_id, rotator).await {
+        Ok(k) => k,
+        Err(e) => {
+            return Err(ChainError {
+                message: e,
+                failover: false,
+            })
+        }
+    };
+    let (account_id, key) = match key_source {
+        KeySource::Rotator { account_id, key } => (Some(account_id), key),
+        KeySource::Env { key } => (None, key),
+    };
+
+    let base_provider = match build_llm_provider_with_key(provider_id, &key) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(ChainError {
+                message: e,
+                failover: false,
+            })
+        }
+    };
+
+    let supports_caching =
+        crate::cost_telemetry::model_registry().supports(model, duduclaw_llm::Feature::Caching);
+    let mut req = build_llm_chat_request(
+        model,
+        supports_caching,
+        system_prompt,
+        dynamic_system_suffix,
+        prompt,
+    );
+
+    let cost_acc = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let provider = RecordingProvider {
+        inner: base_provider,
+        agent_id: agent_id.to_string(),
+        request_type,
+        cost_acc: cost_acc.clone(),
+    };
+
+    // G2: MCP tool registry (fail-safe → tools-less bare completion).
+    let registry = build_mcp_tool_registry(agent_id).await;
+    info!(
+        provider = provider_id,
+        model,
+        tools = registry.is_some(),
+        "Direct API via duduclaw-llm provider"
+    );
+
+    let outcome: Result<duduclaw_llm::ChatResponse, duduclaw_llm::LlmError> = match &registry {
+        Some(reg) => {
+            // Fail-closed capability filter — never advertise a denied tool.
+            req.tools = filter_tool_defs(reg.tool_defs(), capabilities);
+            // P1-4: enforce the agent's static PolicyKernel policy on the
+            // direct-API tool loop too (complete mediation, I3). Empty policy →
+            // kernel abstains (passthrough).
+            let empty_policy: Vec<duduclaw_core::types::ToolPolicy> = Vec::new();
+            let policy = capabilities
+                .map(|c| c.policy.as_slice())
+                .unwrap_or(&empty_policy);
+            let guarded = duduclaw_llm::PolicyExecutor::new(reg, policy, agent_id);
+            // S2 argument-level provenance (PACT): policy comes from
+            // `config.toml [provenance]` — absent/off ⇒ ProvenanceConfig::default()
+            // and the loop below is byte-identical to the plain `run_tool_loop`.
+            // The user prompt is the channel input for this turn ⇒ seeded Tainted.
+            let (prov_policy, prov_sensitive) = {
+                let table =
+                    std::fs::read_to_string(duduclaw_core::duduclaw_home().join("config.toml"))
+                        .ok()
+                        .and_then(|s| s.parse::<toml::Table>().ok())
+                        .unwrap_or_default();
+                crate::channel_reply::parse_provenance_settings(&table)
+            };
+            let prov_cfg = crate::channel_reply::build_channel_provenance_config(
+                prov_policy,
+                &prov_sensitive,
+                prompt,
+            );
+            // WP-6E: Code Mode Phase 0 measurement gate
+            // (`commercial/docs/DESIGN-code-mode-2026-08.md` §8.1) — beneficiary
+            // #2 of the design's §2 list. Pure observation layered over
+            // `RecordingProvider`; forwards everything verbatim.
+            let probe = crate::tool_loop_probe::ToolLoopProbe::new(&provider);
+            let loop_result = duduclaw_llm::run_tool_loop_with_provenance(
+                &probe,
+                req,
+                &guarded,
+                duduclaw_llm::DEFAULT_MAX_TOOL_ITERS,
+                prov_cfg,
+            )
+            .await;
+            // Before the error is mapped away: a partially-run turn is still a
+            // truthful measurement.
+            probe.finish_and_record(
+                agent_id,
+                crate::tool_loop_probe::ProbePath::DirectApi,
+                model,
+            );
+            loop_result.map(|out| {
+                if !out.provenance_flags.is_empty() {
+                    tracing::warn!(
+                        agent = %agent_id,
+                        flags = out.provenance_flags.len(),
+                        "provenance: tainted-argument flags raised in tool loop"
+                    );
+                }
+                out.response
+            })
+        }
+        None => provider.complete(&req).await,
+    };
+
+    match outcome {
+        Ok(resp) => {
+            {
+                let span = tracing::Span::current();
+                span.record(
+                    crate::otel::attrs::USAGE_INPUT_TOKENS,
+                    resp.usage.input_tokens,
+                );
+                span.record(
+                    crate::otel::attrs::USAGE_OUTPUT_TOKENS,
+                    resp.usage.output_tokens + resp.usage.reasoning_tokens,
+                );
+            }
+            if let (Some(r), Some(id)) = (rotator, &account_id) {
+                r.on_success(id, cost_acc.load(std::sync::atomic::Ordering::Relaxed))
+                    .await;
+            }
+            Ok(resp.text())
+        }
+        Err(e) => {
+            let failover = llm_err_is_chain_failover(&e);
+            if let (Some(r), Some(id)) = (rotator, &account_id) {
+                match &e {
+                    duduclaw_llm::LlmError::Billing => r.on_billing_exhausted(id).await,
+                    duduclaw_llm::LlmError::RateLimited { .. } => r.on_rate_limited(id).await,
+                    _ => r.on_error(id).await,
+                }
+            }
+            Err(ChainError {
+                message: format!("{provider_id} direct API error: {e}"),
+                failover,
+            })
+        }
+    }
+}
+
+/// Single-shot Direct-API call through a duduclaw-llm provider (non-Anthropic),
+/// stringly-typed for the legacy call sites. Thin wrapper over
+/// [`run_llm_provider`] with rotation + tools.
+async fn try_llm_provider_api(
+    agent_id: &str,
+    prompt: &str,
+    model: &str,
+    system_prompt: &str,
+    dynamic_system_suffix: Option<&str>,
+    request_type: crate::cost_telemetry::RequestType,
+    provider_id: &str,
+    rotator: Option<&duduclaw_agent::account_rotator::AccountRotator>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Result<String, String> {
+    run_llm_provider(
+        agent_id,
+        prompt,
+        model,
+        system_prompt,
+        dynamic_system_suffix,
+        request_type,
+        provider_id,
+        rotator,
+        capabilities,
+    )
+    .await
+    .map_err(|ce| ce.message)
+}
+
+/// Try calling the model's provider API directly (bypassing Claude CLI).
+///
+/// Anthropic (and registry-unknown) models keep the original
+/// `crate::direct_api` path with its cache attribution; registry-known
+/// non-Anthropic models route through the matching duduclaw-llm provider
+/// (with rotation + MCP tools). Only works with API-key accounts (not OAuth for
+/// Anthropic). If no API key is available, returns an error so the caller can
+/// fall back to CLI.
+// OTel GenAI: `chat` span for one Anthropic Direct-API model call. The
+// LlmProvider route below nests its own `chat` span with the real provider.
+#[tracing::instrument(
+    name = "chat",
+    skip_all,
+    fields(
+        gen_ai.operation.name = "chat",
+        gen_ai.system = "anthropic",
+        gen_ai.provider.name = "anthropic",
+        gen_ai.agent.name = %agent_id,
+        gen_ai.request.model = %model,
+        gen_ai.usage.input_tokens = tracing::field::Empty,
+        gen_ai.usage.output_tokens = tracing::field::Empty,
+    )
+)]
+async fn try_direct_api(
+    home_dir: &Path,
+    agent_id: &str,
+    prompt: &str,
+    model: &str,
+    system_prompt: &str,
+    dynamic_system_suffix: Option<&str>,
+    request_type: crate::cost_telemetry::RequestType,
+    rotator: Option<&duduclaw_agent::account_rotator::AccountRotator>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Result<String, String> {
+    if let DirectApiRoute::LlmProvider(provider_id) = direct_api_route(model) {
+        return try_llm_provider_api(
+            agent_id,
+            prompt,
+            model,
+            system_prompt,
+            dynamic_system_suffix,
+            request_type,
+            &provider_id,
+            rotator,
+            capabilities,
+        )
+        .await;
+    }
+
+    let api_key = get_api_key(home_dir).await;
+    if api_key.is_empty() {
+        return Err(
+            "No API key available for Direct API (OAuth accounts require CLI path)".to_string(),
+        );
+    }
+
+    // TODO: pass conversation_history from the caller to enable multi-turn
+    // for the Direct API fallback path (currently stateless).
+    let scope = format!("{agent_id}:{model}");
+    let response = crate::direct_api::call_direct_api_attributed(
+        Some(&scope),
+        &api_key,
+        model,
+        system_prompt,
+        dynamic_system_suffix,
+        prompt,
+        &[],
+    )
+    .await?;
+
+    // Record telemetry
+    if let Some(ref usage) = response.usage {
+        // OTel: record usage on the `chat` span.
+        let span = tracing::Span::current();
+        span.record(crate::otel::attrs::USAGE_INPUT_TOKENS, usage.input_tokens);
+        span.record(crate::otel::attrs::USAGE_OUTPUT_TOKENS, usage.output_tokens);
+        if let Some(telemetry) = crate::cost_telemetry::get_telemetry() {
+            telemetry.record(agent_id, request_type, model, usage).await;
+        }
+    }
+
+    Ok(response.text)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Cross-provider Direct-API fallback chain (W3/G1)
+//
+// When an agent configures `[model] fallbacks = [...]`, a rate-limited/failed
+// provider on the Direct-API path fails over to the next candidate instead of
+// giving up. Absent/empty config ⇒ the single-shot `try_direct_api` path stays
+// byte-identical. Anthropic candidates keep the legacy `direct_api.rs` handler
+// (cache attribution); non-Anthropic candidates route through the duduclaw-llm
+// providers (rotation + MCP tools) via `run_llm_provider`.
+// ══════════════════════════════════════════════════════════════════════
+
+/// A dispatch failure classified for the fallback chain: `failover` means
+/// advance to the next candidate; otherwise the error is terminal (auth /
+/// invalid request) and short-circuits the whole chain.
+struct ChainError {
+    message: String,
+    failover: bool,
+}
+
+/// Classify a stringly Direct-API error (from the Anthropic legacy path) as
+/// failover-class (rate limit / billing / 5xx / timeout / overloaded) vs.
+/// terminal (auth / invalid). Terminal short-circuits the chain.
+fn is_chain_failover(err: &str) -> bool {
+    is_rate_limit_error(err) || is_billing_error(err) || is_llm_fallback_error(err)
+}
+
+/// Classify a typed [`duduclaw_llm::LlmError`] for the chain: rate-limit,
+/// billing, timeout, network, and 5xx are failover-class; auth, invalid
+/// request, content-filter, parse, and context-window are terminal.
+fn llm_err_is_chain_failover(e: &duduclaw_llm::LlmError) -> bool {
+    use duduclaw_llm::LlmError as E;
+    match e {
+        E::RateLimited { .. } | E::Timeout | E::Network(_) | E::Billing => true,
+        E::Http { status, .. } => *status >= 500,
+        _ => false,
+    }
+}
+
+/// Resolve `(provider_id, bare_model)` for a (possibly qualified, possibly
+/// `compat:`-prefixed) candidate model id. Registry-known models resolve to
+/// their true provider; otherwise a `provider/model` prefix is honoured; a bare
+/// id with no `compat:` hint defaults to `anthropic` (the pre-multi-provider
+/// assumption).
+fn provider_and_bare(model: &str) -> (String, String) {
+    let (is_compat_hint, rest) = match model.trim().strip_prefix("compat:") {
+        Some(r) => (true, r.trim()),
+        None => (false, model.trim()),
+    };
+    if let Some(info) = crate::cost_telemetry::model_registry().get(rest) {
+        let (_p, bare) = duduclaw_llm::split_model_id(rest);
+        return (info.provider.clone(), bare.to_string());
+    }
+    let (prov, bare) = duduclaw_llm::split_model_id(rest);
+    match prov {
+        Some(p) => (p.to_string(), bare.to_string()),
+        None if is_compat_hint => ("openai_compat".to_string(), bare.to_string()),
+        None => ("anthropic".to_string(), bare.to_string()),
+    }
+}
+
+/// Ordered viable Direct-API candidates (pure): the preferred model first, then
+/// the configured fallbacks (dedup, blanks dropped), skipping any candidate
+/// whose provider has no resolvable key. The key check is injected so this is
+/// unit-testable offline.
+fn order_direct_api_candidates(
+    preferred: &str,
+    fallbacks: &[String],
+    provider_has_key: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in std::iter::once(preferred).chain(fallbacks.iter().map(String::as_str)) {
+        let m = raw.trim();
+        if m.is_empty() || !seen.insert(m.to_string()) {
+            continue;
+        }
+        let (provider, _bare) = provider_and_bare(m);
+        if provider_has_key(&provider) {
+            out.push(m.to_string());
+        }
+    }
+    out
+}
+
+/// Drive the fallback chain: try each candidate via `dispatch`, advancing on a
+/// failover-class error and short-circuiting on a terminal one. Returns the
+/// first success, the terminal error, or (after exhausting the chain) the last
+/// failover error. Generic over the dispatch closure so it is unit-testable
+/// offline (no HTTP / process).
+async fn drive_direct_api_chain<F, Fut>(
+    candidates: &[String],
+    dispatch: F,
+) -> Result<String, String>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, ChainError>>,
+{
+    let mut last = String::new();
+    for model in candidates {
+        match dispatch(model.clone()).await {
+            Ok(text) => return Ok(text),
+            Err(ce) if ce.failover => {
+                warn!(model = %model, error = %ce.message, "Direct-API candidate failed over — advancing");
+                last = ce.message;
+            }
+            Err(ce) => return Err(ce.message),
+        }
+    }
+    if last.is_empty() {
+        last = "no viable Direct-API candidates".to_string();
+    }
+    Err(format!(
+        "all Direct-API fallback candidates exhausted; last error: {last}"
+    ))
+}
+
+/// Whether a provider has a resolvable Direct-API key right now. Anthropic uses
+/// the legacy key source (`get_api_key`: env or config); other providers use
+/// the rotator (which itself env-fallbacks).
+async fn candidate_provider_has_key(
+    provider: &str,
+    home_dir: &Path,
+    rotator: Option<&duduclaw_agent::account_rotator::AccountRotator>,
+) -> bool {
+    if provider == "anthropic" {
+        return !get_api_key(home_dir).await.is_empty();
+    }
+    resolve_provider_key(provider, rotator).await.is_ok()
+}
+
+/// Cross-provider Direct-API fallback chain (G1). Orders `preferred` + the
+/// configured `fallbacks`, then tries each — Anthropic via the legacy handler,
+/// others via `run_llm_provider` — advancing on failover and short-circuiting
+/// on terminal errors.
+#[allow(clippy::too_many_arguments)]
+async fn try_direct_api_chain(
+    home_dir: &Path,
+    agent_id: &str,
+    prompt: &str,
+    preferred_model: &str,
+    fallbacks: &[String],
+    system_prompt: &str,
+    dynamic_system_suffix: Option<&str>,
+    request_type: crate::cost_telemetry::RequestType,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Result<String, String> {
+    // Rotator is best-effort: if it can't be built we still resolve keys via env.
+    let rotator = get_rotator(home_dir).await.ok();
+
+    // Which providers among the candidates have a resolvable key? Computed async
+    // once, then candidate ordering is a pure sync filter.
+    let mut providers_with_keys = std::collections::HashSet::new();
+    for raw in std::iter::once(preferred_model).chain(fallbacks.iter().map(String::as_str)) {
+        let (provider, _bare) = provider_and_bare(raw.trim());
+        if providers_with_keys.contains(&provider) {
+            continue;
+        }
+        if candidate_provider_has_key(&provider, home_dir, rotator.as_deref()).await {
+            providers_with_keys.insert(provider);
+        }
+    }
+
+    let candidates = order_direct_api_candidates(preferred_model, fallbacks, |p| {
+        providers_with_keys.contains(p)
+    });
+    if candidates.is_empty() {
+        // Fail-safe: nothing resolvable — fall back to the single-shot legacy
+        // attempt on the preferred model so its own "no key" error surfaces.
+        return try_direct_api(
+            home_dir,
+            agent_id,
+            prompt,
+            preferred_model,
+            system_prompt,
+            dynamic_system_suffix,
+            request_type,
+            rotator.as_deref(),
+            capabilities,
+        )
+        .await;
+    }
+
+    let rotator_ref = rotator.as_deref();
+    drive_direct_api_chain(&candidates, |model| async move {
+        let (provider, bare) = provider_and_bare(&model);
+        if provider == "anthropic" {
+            match try_direct_api(
+                home_dir,
+                agent_id,
+                prompt,
+                &bare,
+                system_prompt,
+                dynamic_system_suffix,
+                request_type,
+                rotator_ref,
+                capabilities,
+            )
+            .await
+            {
+                Ok(t) => Ok(t),
+                Err(e) => {
+                    let failover = is_chain_failover(&e);
+                    Err(ChainError {
+                        message: e,
+                        failover,
+                    })
+                }
+            }
+        } else {
+            run_llm_provider(
+                agent_id,
+                prompt,
+                &bare,
+                system_prompt,
+                dynamic_system_suffix,
+                request_type,
+                &provider,
+                rotator_ref,
+                capabilities,
+            )
+            .await
+        }
+    })
+    .await
+}
+
+/// Cached inference_mode — avoids reading config.toml on every call (P1-3).
+static INFERENCE_MODE_CACHE: std::sync::OnceLock<
+    tokio::sync::RwLock<Option<(std::time::Instant, String)>>,
+> = std::sync::OnceLock::new();
+
+pub(crate) async fn get_inference_mode(home_dir: &Path) -> String {
+    let cache = INFERENCE_MODE_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
+    let ttl = std::time::Duration::from_secs(300); // 5 min
+
+    {
+        let guard = cache.read().await;
+        if let Some((created, mode)) = guard.as_ref() {
+            if created.elapsed() < ttl {
+                return mode.clone();
+            }
+        }
+    }
+
+    let config_path = home_dir.join("config.toml");
+    let content = tokio::fs::read_to_string(&config_path)
+        .await
+        .unwrap_or_default();
+    let table: toml::Table = content.parse().unwrap_or_default();
+    let mode = table
+        .get("general")
+        .and_then(|g| g.get("inference_mode"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("hybrid")
+        .to_string();
+
+    *cache.write().await = Some((std::time::Instant::now(), mode.clone()));
+    mode
+}
+
+/// Cached AccountRotator — avoids rebuilding (and re-running `claude auth
+/// status` for OAuth accounts) on every call (BE-H4).
+///
+/// Credentials doctrine P2 (WP-8A): invalidate-on-write is now the *primary*
+/// mechanism, not a timer. Every write path this process knows about
+/// (`accounts.add` / `accounts.update` / `accounts.update_budget`) calls
+/// [`invalidate_rotator_cache`] directly, so those edits are visible on the
+/// very next call instead of after up to five minutes — this is what the
+/// doctrine's §2.4 "callers must not cache a resolved value on their own
+/// schedule" is asking for, and what closes the design doc's §4.2 "rotator
+/// 5-minute TTL" incident class.
+///
+/// The `Instant` this cache still carries is deliberately **not** the same
+/// TTL that used to gate every read — it is a long backstop (see
+/// [`ROTATOR_CACHE_BACKSTOP_TTL`]) for the one write path invalidate-on-write
+/// structurally cannot reach: `duduclaw auth device` (and any other CLI
+/// subcommand that edits `config.toml [[accounts]]`) runs as its own
+/// process and has no way to call a `static` living in a *different*
+/// process's memory. Before this change, the flat 5-minute TTL was
+/// (accidentally) also this path's only safety net; a bare "cache forever
+/// until an in-process write invalidates it" would have silently regressed
+/// that case from "up to 5 minutes stale" to "stale until the gateway is
+/// restarted". The backstop keeps the eventual-consistency property for
+/// out-of-band writes while every write this process CAN see stays instant.
+static ROTATOR_CACHE: std::sync::OnceLock<
+    tokio::sync::RwLock<
+        Option<(
+            std::time::Instant,
+            std::sync::Arc<duduclaw_agent::account_rotator::AccountRotator>,
+        )>,
+    >,
+> = std::sync::OnceLock::new();
+
+/// Backstop-only TTL for [`ROTATOR_CACHE`] — long enough that it is never the
+/// mechanism a same-process credential edit relies on (those go through
+/// [`invalidate_rotator_cache`] and take effect immediately), short enough
+/// that an out-of-band `config.toml` edit (a separate `duduclaw` CLI
+/// invocation, or a hand edit) is still picked up within a bounded window
+/// rather than requiring a gateway restart.
+const ROTATOR_CACHE_BACKSTOP_TTL: std::time::Duration = std::time::Duration::from_secs(1800);
+
+/// Mutex protecting rotator rebuild — prevents concurrent `claude auth status` subprocesses.
+static ROTATOR_INIT_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+/// Cached InferenceEngine — singleton for local LLM inference.
+static INFERENCE_ENGINE: std::sync::OnceLock<
+    tokio::sync::RwLock<Option<std::sync::Arc<duduclaw_inference::InferenceEngine>>>,
+> = std::sync::OnceLock::new();
+
+/// Mutex protecting the one-time initialization of the inference engine.
+/// Prevents concurrent tasks from each loading a full GGUF model (OOM risk).
+static INFERENCE_INIT_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+/// Process-lifetime negative cache — set to `true` once
+/// `InferenceEngine::init` fails in a way that won't recover this run
+/// (e.g. the binary was built without `--features metal`/`cuda`/`vulkan`,
+/// so llama.cpp has no backend; or the router is disabled and there's
+/// no remote endpoint configured). Every later `get_inference_engine`
+/// call short-circuits silently to `None` instead of retrying init and
+/// re-emitting the same WARN. Reset is by restarting the gateway —
+/// which is also when the operator would have rebuilt with features.
+///
+/// Before this cache, every channel/dispatch call hit the init path and
+/// logged the same "Backend unavailable: llama.cpp — Build with
+/// --features metal, cuda, or vulkan" WARN, flooding the gateway log.
+static INFERENCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Get or create the inference engine singleton.
+///
+/// `pub(crate)`: also the entry point for `autopilot_screen::InferenceScreener`
+/// (resident sensing WP3), which must share THIS singleton rather than build a
+/// second engine — two engines would mean two GGUF loads and the OOM risk the
+/// init mutex below exists to prevent. Nothing here reaches a cloud API; the
+/// confidence router's cloud tier lives in `try_local_inference`, not in the
+/// engine itself.
+pub(crate) async fn get_inference_engine(
+    home_dir: &std::path::Path,
+) -> Option<std::sync::Arc<duduclaw_inference::InferenceEngine>> {
+    // Negative-cache fast path: a previous init attempt already failed
+    // in a way that won't recover without a gateway restart. Skip silently.
+    if INFERENCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+
+    let cache = INFERENCE_ENGINE.get_or_init(|| tokio::sync::RwLock::new(None));
+
+    // Fast path: engine already initialized
+    {
+        let guard = cache.read().await;
+        if let Some(engine) = guard.as_ref() {
+            return Some(engine.clone());
+        }
+    }
+
+    // Slow path: serialize initialization to prevent concurrent model loading
+    let init_lock = INFERENCE_INIT_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _init_guard = init_lock.lock().await;
+
+    // Double-check after acquiring lock (another task may have initialized
+    // or marked the engine permanently unavailable).
+    if INFERENCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    {
+        let guard = cache.read().await;
+        if let Some(engine) = guard.as_ref() {
+            return Some(engine.clone());
+        }
+    }
+
+    // Initialize engine
+    let engine = duduclaw_inference::InferenceEngine::new(home_dir).await;
+    if let Err(e) = engine.init().await {
+        // One-shot WARN: record the failure, latch the negative cache, and
+        // fall through to SDK for the rest of this process's lifetime.
+        warn!(
+            error = %e,
+            "Failed to initialize inference engine — disabling local offload for this process (build with --features metal/cuda/vulkan to enable llama.cpp, or configure [openai_compat] in inference.toml for a remote backend)"
+        );
+        INFERENCE_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    }
+    if !engine.is_available().await {
+        warn!(
+            "Inference engine initialized but reports no available backend — disabling local offload for this process"
+        );
+        INFERENCE_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    }
+    let arc = std::sync::Arc::new(engine);
+    *cache.write().await = Some(arc.clone());
+    Some(arc)
+}
+
+/// Call local inference engine instead of Claude CLI.
+///
+/// If the confidence router is enabled, it may decide to escalate to Cloud API
+/// (returns `Err` with a special marker so the caller knows to try Cloud).
+///
+/// Public wrapper for channel_reply fallback chain. `agent_id` + `capabilities`
+/// enable the MCP tool loop against tools-capable local backends (OpenAI-compat
+/// endpoints with `[router] local_tools` enabled) — pass `None` to force the
+/// legacy bare completion.
+pub async fn try_local_inference(
+    home_dir: &std::path::Path,
+    prompt: &str,
+    system_prompt: &str,
+    model_id: Option<&str>,
+    agent_id: Option<&str>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Result<String, String> {
+    call_local_inference(
+        home_dir,
+        prompt,
+        system_prompt,
+        model_id,
+        agent_id,
+        capabilities,
+    )
+    .await
+}
+
+async fn call_local_inference(
+    home_dir: &std::path::Path,
+    prompt: &str,
+    system_prompt: &str,
+    model_id: Option<&str>,
+    agent_id: Option<&str>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+) -> Result<String, String> {
+    let engine = get_inference_engine(home_dir)
+        .await
+        .ok_or_else(|| "Local inference engine not available".to_string())?;
+
+    // ── MCP tool loop (G2-local) ──────────────────────────────────
+    // When the active backend is an OpenAI-compatible HTTP endpoint and
+    // `[router] local_tools` allows it, drive the tool loop through the
+    // LocalChatProvider adapter so local replies gain the MCP tool surface.
+    // The ex-ante router check runs FIRST so complex queries still escalate
+    // to the SDK/cloud exactly as the bare path below would; any tool-loop
+    // failure falls through to the bare completion (fail-safe — the reply
+    // path never breaks because of tools).
+    if let Some(aid) = agent_id.filter(|a| !a.trim().is_empty()) {
+        let router_escalates = engine.router_enabled()
+            && engine.route(system_prompt, prompt).tier
+                == duduclaw_inference::router::RoutingTier::CloudApi;
+        if !router_escalates {
+            if let Some(text) = crate::local_llm::try_local_tool_loop(
+                &engine,
+                prompt,
+                system_prompt,
+                model_id,
+                aid,
+                capabilities,
+            )
+            .await
+            {
+                return Ok(text);
+            }
+        }
+    }
+
+    let request = duduclaw_inference::InferenceRequest {
+        system_prompt: system_prompt.to_string(),
+        user_prompt: prompt.to_string(),
+        params: engine.config().generation.clone(),
+        model_id: model_id.map(|s| s.to_string()),
+    };
+
+    // Use router if enabled — may escalate to Cloud API
+    if engine.router_enabled() {
+        match engine.route_and_generate(&request).await {
+            Ok(Some(response)) => {
+                info!(
+                    model = %response.model_id,
+                    tokens = response.tokens_generated,
+                    tps = format!("{:.1}", response.tokens_per_second),
+                    ms = response.generation_time_ms,
+                    "Local inference completed (routed)"
+                );
+                return Ok(response.text);
+            }
+            Ok(None) => {
+                // Router decided Cloud API is needed
+                return Err("ROUTER_ESCALATE_TO_CLOUD".to_string());
+            }
+            Err(e) => {
+                warn!(error = %e, "Routed local inference failed");
+                return Err(format!("Local inference error: {e}"));
+            }
+        }
+    }
+
+    // No router — direct generation
+    let response = engine
+        .generate(&request)
+        .await
+        .map_err(|e| format!("Local inference error: {e}"))?;
+
+    info!(
+        model = %response.model_id,
+        tokens = response.tokens_generated,
+        tps = format!("{:.1}", response.tokens_per_second),
+        ms = response.generation_time_ms,
+        "Local inference completed"
+    );
+
+    Ok(response.text)
+}
+
+/// Get or create a cached AccountRotator — valid until a credential write
+/// invalidates it (see [`invalidate_rotator_cache`]) or the long backstop TTL
+/// elapses, whichever comes first.
+/// Public accessor for the cached rotator — used by handlers.rs too.
+pub async fn get_rotator_cached(
+    home_dir: &Path,
+) -> Result<std::sync::Arc<duduclaw_agent::account_rotator::AccountRotator>, String> {
+    get_rotator(home_dir).await
+}
+
+/// Drop the cached `AccountRotator` so the next `get_rotator_cached` rebuilds
+/// from the current `config.toml`.
+///
+/// Credentials doctrine P2: this is the primary invalidation path — every
+/// write path *this process* can see (`accounts.add` / `accounts.update` /
+/// `accounts.update_budget`) MUST call this so the edit is visible on the
+/// very next call, not up to [`ROTATOR_CACHE_BACKSTOP_TTL`] later.
+pub async fn invalidate_rotator_cache() {
+    if let Some(cache) = ROTATOR_CACHE.get() {
+        *cache.write().await = None;
+    }
+}
+
+async fn get_rotator(
+    home_dir: &Path,
+) -> Result<std::sync::Arc<duduclaw_agent::account_rotator::AccountRotator>, String> {
+    let cache = ROTATOR_CACHE.get_or_init(|| tokio::sync::RwLock::new(None));
+
+    // Fast path: valid until invalidated, or until the backstop TTL elapses
+    // (out-of-band `config.toml` edits this process has no invalidate hook
+    // for — see the static's doc comment).
+    {
+        let guard = cache.read().await;
+        if let Some((created, rotator)) = guard.as_ref()
+            && created.elapsed() < ROTATOR_CACHE_BACKSTOP_TTL
+        {
+            return Ok(rotator.clone());
+        }
+    }
+
+    // Serialize rebuild to prevent concurrent `claude auth status` subprocesses
+    // (single-flight — the doctrine's mitigation for invalidate-triggered
+    // thundering herds, design §7 R3).
+    let init_lock = ROTATOR_INIT_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _init_guard = init_lock.lock().await;
+
+    // Double-check after acquiring lock (another task may have rebuilt)
+    {
+        let guard = cache.read().await;
+        if let Some((created, rotator)) = guard.as_ref()
+            && created.elapsed() < ROTATOR_CACHE_BACKSTOP_TTL
+        {
+            return Ok(rotator.clone());
+        }
+    }
+
+    // Rebuild
+    let config_content = tokio::fs::read_to_string(home_dir.join("config.toml"))
+        .await
+        .unwrap_or_default();
+    let config_table: toml::Table = config_content.parse().unwrap_or_default();
+    let rotator = duduclaw_agent::account_rotator::create_from_config(&config_table);
+    rotator.load_from_config(home_dir).await?;
+    let arc = std::sync::Arc::new(rotator);
+    *cache.write().await = Some((std::time::Instant::now(), arc.clone()));
+    Ok(arc)
+}
+
+/// Spawn a background task that periodically probes unhealthy accounts and
+/// restores them when they recover. This ensures that rate-limited or
+/// temporarily failed accounts are automatically brought back online
+/// according to their priority, without waiting for the next user request.
+///
+/// Runs every `interval_secs` (default: 60 seconds from config.toml
+/// `[rotation].health_check_interval_seconds`).
+pub fn spawn_health_probe(home_dir: PathBuf, interval_secs: u64) {
+    let interval = std::time::Duration::from_secs(interval_secs.max(10));
+    tokio::spawn(async move {
+        // Wait a bit before first probe — let the system fully boot
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
+        loop {
+            tokio::time::sleep(interval).await;
+
+            let rotator = match get_rotator(&home_dir).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let restored = rotator.probe_and_restore().await;
+            if restored > 0 {
+                info!(restored, "Health probe restored accounts");
+            }
+        }
+    });
+}
+
+/// Call Claude CLI with account rotation — tries next account on failure.
+///
+/// Records token usage telemetry when available.
+#[allow(clippy::too_many_arguments)] // one extra pass-through param (account_pool)
+async fn call_with_rotation(
+    home_dir: &Path,
+    agent_id: &str,
+    prompt: &str,
+    model: &str,
+    system_prompt: &str,
+    request_type: crate::cost_telemetry::RequestType,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+    work_dir: Option<&Path>,
+    bare_mode: bool,
+    // The dispatched agent's `agent.toml [model] account_pool`. Narrows the
+    // rotator candidate set (fail-open); empty ⇒ rotation unchanged.
+    account_pool: &[String],
+) -> Result<String, String> {
+    // HIGH-A defence-in-depth: a `moa:` virtual model can never be served by
+    // a CLI spawn. Reject BEFORE the rotator is even constructed so a
+    // misconfigured agent cannot degrade the shared account pool's health
+    // (`on_error` per account) over its own config error.
+    if let Some(msg) = crate::channel_reply::reject_moa_on_cli_path(model) {
+        return Err(msg);
+    }
+
+    // Pre-flight: check 200K price cliff
+    if let Some(estimated) = crate::cost_telemetry::check_price_cliff(system_prompt, prompt) {
+        warn!(
+            agent_id,
+            estimated_tokens = estimated,
+            "WARNING: Estimated input tokens near 200K price cliff — pricing will double"
+        );
+    }
+
+    let rotator = get_rotator(home_dir).await?;
+
+    // Fresh-install passthrough: no accounts configured → fall back to ambient
+    // env (user's default `claude auth login` session). Matches the same guard
+    // in `call_claude_cli_rotated` so both paths behave identically.
+    if rotator.count().await == 0 {
+        if bare_mode {
+            // `--bare` strips ambient OAuth, so a fresh install with no
+            // rotator accounts and bare_mode opted-in can't possibly work.
+            // Fail loud here rather than producing a "Not logged in"
+            // error from the subprocess.
+            return Err(format!(
+                "agent {agent_id} has `[prompt] cli_bare_mode = true` but no \
+                 accounts are configured in the rotator. Add an API-key \
+                 account or remove the bare_mode flag."
+            ));
+        }
+        info!(agent_id, "No rotator accounts — using ambient env fallback");
+        let empty: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let resp =
+            call_claude_with_env(prompt, model, system_prompt, &empty, capabilities, work_dir)
+                .await?;
+
+        if let Some(ref usage) = resp.usage {
+            if let Some(telemetry) = crate::cost_telemetry::get_telemetry() {
+                telemetry.record(agent_id, request_type, model, usage).await;
+            }
+        }
+        return Ok(resp.text);
+    }
+
+    let max_attempts = rotator.count().await.max(1);
+    let mut last_error = String::new();
+
+    for attempt in 0..max_attempts {
+        let selected = match rotator.select_with_pool(account_pool).await {
+            Some(s) => s,
+            None => break,
+        };
+
+        // #15 (2026-05-12): bare_mode requires ANTHROPIC_API_KEY auth.
+        // OAuth accounts can't supply that, so skip them with a hint
+        // rather than waste a subprocess on a guaranteed "Not logged in"
+        // failure. Falls through to the next account.
+        if bare_mode && selected.auth_method == duduclaw_agent::account_rotator::AuthMethod::OAuth {
+            warn!(
+                account = %selected.id,
+                "skipping OAuth account — agent requested cli_bare_mode \
+                 which requires ANTHROPIC_API_KEY auth"
+            );
+            continue;
+        }
+
+        info!(account = %selected.id, method = ?selected.auth_method, attempt, bare_mode, "Trying account");
+
+        let bare_scope = BARE_MODE.scope(
+            bare_mode,
+            call_claude_with_env(
+                prompt,
+                model,
+                system_prompt,
+                &selected.env_vars,
+                capabilities,
+                work_dir,
+            ),
+        );
+        match bare_scope.await {
+            Ok(response) => {
+                // Use telemetry-based cost if usage available, else rough estimate
+                let cost = if let Some(ref usage) = response.usage {
+                    if selected.auth_method == duduclaw_agent::account_rotator::AuthMethod::OAuth {
+                        0
+                    } else {
+                        // Registry-aware (falls back to legacy Sonnet rates for
+                        // unknown models) — same unit as monthly_budget_cents.
+                        crate::cost_telemetry::cost_for(model, usage)
+                    }
+                } else if selected.auth_method == duduclaw_agent::account_rotator::AuthMethod::OAuth
+                {
+                    0
+                } else {
+                    ((prompt.len() + response.text.len()) / 1000).max(1) as u64
+                };
+                rotator.on_success(&selected.id, cost).await;
+
+                // Record telemetry
+                if let Some(ref usage) = response.usage {
+                    if let Some(telemetry) = crate::cost_telemetry::get_telemetry() {
+                        telemetry.record(agent_id, request_type, model, usage).await;
+                    }
+                }
+
+                return Ok(response.text);
+            }
+            Err(e) => {
+                last_error = e.clone();
+                if is_billing_error(&e) {
+                    // Billing/credit exhaustion: long cooldown (24h), mark unhealthy immediately
+                    warn!(account = %selected.id, error = %e, "Account billing exhausted — 24h cooldown");
+                    rotator.on_billing_exhausted(&selected.id).await;
+                } else if is_rate_limit_error(&e) {
+                    rotator.on_rate_limited(&selected.id).await;
+                } else {
+                    rotator.on_error(&selected.id).await;
+                }
+                warn!(account = %selected.id, error = %e, "Account failed, trying next");
+            }
+        }
+    }
+
+    // All rotated accounts failed.
+    // Note: the AccountRotator already includes env-var and [api]-section keys
+    // as accounts, so retrying with get_api_key() here would be redundant.
+    Err(format!("All accounts exhausted. Last error: {last_error}"))
+}
+
+/// Public API key getter for use by other modules (e.g., sandbox dispatcher).
+pub async fn get_api_key_from_home(home_dir: &Path) -> String {
+    get_api_key(home_dir).await
+}
+
+/// Get the API key from env var or config.toml.
+async fn get_api_key(home_dir: &Path) -> String {
+    // Environment variable takes precedence
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            return key;
+        }
+    }
+    // Use shared encrypted config reader (tries _enc first, falls back to plaintext)
+    crate::config_crypto::read_encrypted_config_field(home_dir, "api", "anthropic_api_key")
+        .await
+        .unwrap_or_default()
+}
+
+/// Hard max timeout — absolute safety net to kill truly hung processes.
+const HARD_MAX_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
+
+/// Response from a Claude CLI call, including optional token usage telemetry.
+struct ClaudeResponse {
+    text: String,
+    usage: Option<crate::cost_telemetry::TokenUsage>,
+}
+
+/// WP-A4 (design commercial/docs/design-task-forward-model-2026-08-06.md
+/// §5.3/§9): pure per-event ingestion for the native-tool collector,
+/// extracted out of `call_claude_streaming`'s stream loop so it can be
+/// exercised with fixture stream-json lines without spawning a real `claude`
+/// subprocess. Handles ONE already-parsed stream-json event
+/// (`type: "assistant"` carrying `tool_use` blocks, `type: "user"` carrying
+/// `tool_result` blocks); any other event type is a no-op. Pairing mirrors
+/// `duduclaw-cli/src/eval/transcript.rs`'s tool_use/tool_result matching
+/// (match by block `id` when present, else fall back to the most recently
+/// opened call) — kept local rather than importing that CLI-crate module
+/// (this gateway crate does not depend on duduclaw-cli).
+pub(crate) fn ingest_stream_json_event_for_native_tools(
+    event: &serde_json::Value,
+    native_events: &mut Vec<crate::runtime::NativeToolEvent>,
+    open_native_calls: &mut Vec<(String, usize)>,
+) {
+    match event.get("type").and_then(|t| t.as_str()) {
+        Some("assistant") => {
+            let Some(content) = event.pointer("/message/content").and_then(|c| c.as_array()) else {
+                return;
+            };
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                    continue;
+                }
+                let name = block
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let id = block
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .map(String::from)
+                    .unwrap_or_default();
+                // R1: capture the call's own input (masked + capped) up
+                // front — the block carries it right now, unlike the result
+                // text which only arrives with the paired "user" event below.
+                let input_text = block
+                    .get("input")
+                    .and_then(crate::runtime::native_event_input_text_from_value);
+                let idx = native_events.len();
+                open_native_calls.push((id, idx));
+                // Provisional success — corrected by a paired `tool_result`
+                // ("user" event, below), if one arrives.
+                native_events.push(crate::runtime::NativeToolEvent {
+                    tool_name: name,
+                    success: true,
+                    result_text: None,
+                    input_text,
+                });
+            }
+        }
+        Some("user") => {
+            let Some(content) = event.pointer("/message/content").and_then(|c| c.as_array()) else {
+                return;
+            };
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                    continue;
+                }
+                let id = block.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or_default();
+                let popped = if !id.is_empty() {
+                    open_native_calls
+                        .iter()
+                        .rposition(|(oid, _)| oid == id)
+                        .map(|pos| open_native_calls.remove(pos))
+                } else {
+                    open_native_calls.pop()
+                }
+                .or_else(|| open_native_calls.pop());
+                if let Some((_, idx)) = popped {
+                    if let Some(ev) = native_events.get_mut(idx) {
+                        ev.success = !block.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                        // R1: the tool_result's `content` is either a bare
+                        // string, or (Claude's actual tool_result shape) an
+                        // array of content blocks — join every `text` block,
+                        // same convention as `duduclaw-cli/src/eval/transcript.rs`.
+                        if let Some(content_val) = block.get("content") {
+                            ev.result_text = claude_tool_result_content_text(content_val)
+                                .as_deref()
+                                .and_then(crate::runtime::native_event_result_text);
+                        }
+                    }
+                }
+                // No outstanding call to match — ignore; never panics on a
+                // reordered/malformed stream (same tolerance as
+                // `eval/transcript.rs`).
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract the plain-text form of a Claude `tool_result` block's `content`
+/// field — either a bare string, or an array of content blocks (only
+/// `{"type": "text", "text": ...}` blocks contribute; other block types,
+/// e.g. images, are skipped rather than guessed at). Multiple text blocks
+/// are newline-joined. `None` when there is nothing textual to extract
+/// (never fabricated).
+fn claude_tool_result_content_text(content: &serde_json::Value) -> Option<String> {
+    match content {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Array(blocks) => {
+            let parts: Vec<&str> = blocks
+                .iter()
+                .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Spawn a `claude` CLI process with streaming output and read the result.
+///
+/// Uses `--output-format stream-json --verbose`. No idle timeout — the process
+/// runs until it completes or hits the hard max timeout (30 min safety net).
+/// An optional `on_progress` callback receives `ProgressEvent`s for keepalive
+/// and tool-use progress (used by channel reply; cron/dispatch pass `None`).
+///
+/// Extracts `TokenUsage` from the `result` event's `usage` field when available.
+async fn call_claude_streaming(
+    cmd: &mut tokio::process::Command,
+    on_progress: Option<&crate::channel_reply::ProgressCallback>,
+) -> Result<ClaudeResponse, String> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("claude CLI spawn error: {e}"))?;
+    let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
+    let mut reader = BufReader::new(stdout).lines();
+
+    // Drain stderr asynchronously to prevent pipe buffer deadlock.
+    // Without this, if claude CLI writes >64KB to stderr (common in verbose
+    // mode), the pipe fills up and the child blocks forever.
+    let stderr = child.stderr.take();
+    tokio::spawn(async move {
+        if let Some(e) = stderr {
+            let mut lines = BufReader::new(e).lines();
+            while let Ok(Some(_)) = lines.next_line().await {}
+        }
+    });
+
+    // Split accumulators — same contract as the channel path: `assistant_text`
+    // appends (a reply is a sequence of text blocks, possibly across several
+    // `assistant` events), the terminal `result` event replaces. Overwriting per
+    // block kept only the last fragment of a long answer.
+    let mut assistant_text = String::new();
+    let mut result_text = String::new();
+    let mut token_usage: Option<crate::cost_telemetry::TokenUsage> = None;
+    let mut last_tool_reported: Option<String> = None;
+
+    // WP-A4: runtime-neutral native-tool collector (design
+    // commercial/docs/design-task-forward-model-2026-08-06.md §5.3/§9). This
+    // is the dispatcher-side stream-json loop (goal loop dispatch), distinct
+    // from `channel_reply`'s own parser — design §1 "更正一之一" confirmed
+    // this path had zero native-tool capture before WP-A4. Pairing mirrors
+    // `duduclaw-cli/src/eval/transcript.rs`'s tool_use/tool_result matching
+    // (by block `id` when present, else the most recently opened call) —
+    // kept local rather than importing that CLI-crate module (this gateway
+    // crate does not depend on duduclaw-cli). Flushed into
+    // `crate::runtime::NATIVE_TOOL_COLLECTOR` best-effort right before a
+    // successful return; never affects the primary CLI response (a
+    // collector failure/missing scope is always silent — see
+    // `extend_native_tool_events`'s doc comment).
+    let mut native_events: Vec<crate::runtime::NativeToolEvent> = Vec::new();
+    let mut open_native_calls: Vec<(String, usize)> = Vec::new();
+
+    // Keepalive timer (90s) — only meaningful when on_progress is Some
+    let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(
+        crate::channel_reply::KEEPALIVE_INTERVAL_SECS,
+    ));
+    keepalive.reset();
+
+    // Hard max timeout — absolute safety net
+    let hard_deadline = tokio::time::sleep(std::time::Duration::from_secs(HARD_MAX_TIMEOUT_SECS));
+    tokio::pin!(hard_deadline);
+
+    loop {
+        tokio::select! {
+            line_result = reader.next_line() => {
+                match line_result {
+                    Ok(None) => break,
+                    Err(e) => {
+                        let _ = child.kill().await;
+                        return Err(format!("claude CLI read error: {e}"));
+                    }
+                    Ok(Some(line)) => {
+                        keepalive.reset();
+                        if line.trim().is_empty() { continue; }
+
+                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                            match event.get("type").and_then(|t| t.as_str()) {
+                                Some("result") => {
+                                    // Terminal error from stream-json — promote to Err
+                                    // so the caller (rotator / classifier) can route it.
+                                    // Previously this embedded "[error] ..." into
+                                    // result_text which was then returned as Ok,
+                                    // silently surfacing CLI errors as the reply.
+                                    if event.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                        let err_text = event
+                                            .get("result")
+                                            .and_then(|r| r.as_str())
+                                            .or_else(|| event.get("error").and_then(|e| e.as_str()))
+                                            .unwrap_or("Unknown stream-json error");
+                                        let _ = child.kill().await;
+                                        return Err(format!(
+                                            "claude CLI stream error: {err_text}"
+                                        ));
+                                    }
+                                    if let Some(text) = event.get("result").and_then(|r| r.as_str()) {
+                                        if !text.is_empty() {
+                                            result_text = text.to_string();
+                                        }
+                                    }
+                                    if let Some(usage_val) = event.get("usage") {
+                                        token_usage = crate::cost_telemetry::TokenUsage::from_json(usage_val);
+                                    }
+                                }
+                                Some("assistant") => {
+                                    // Envelope-level error field (newer claude-code)
+                                    if let Some(err) = event.get("error").and_then(|e| e.as_str()) {
+                                        let _ = child.kill().await;
+                                        return Err(format!(
+                                            "claude CLI assistant error: {err}"
+                                        ));
+                                    }
+                                    // WP-A4: record every tool_use block in this event
+                                    // into the native-tool collector, independent of
+                                    // the on_progress callback below (native or MCP —
+                                    // classification happens downstream in
+                                    // `ToolClass::classify`).
+                                    ingest_stream_json_event_for_native_tools(
+                                        &event, &mut native_events, &mut open_native_calls,
+                                    );
+                                    if let Some(content) = event.pointer("/message/content").and_then(|c| c.as_array()) {
+                                        for block in content {
+                                            let block_type = block.get("type").and_then(|t| t.as_str());
+                                            match block_type {
+                                                Some("text") => {
+                                                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                                        assistant_text.push_str(text);
+                                                    }
+                                                }
+                                                Some("tool_use") => {
+                                                    // WP-A4 collector: handled once per
+                                                    // event (not per block) below via
+                                                    // `ingest_stream_json_event_for_native_tools`
+                                                    // — see the call right after the
+                                                    // envelope-error check above. Kept
+                                                    // separate from the on_progress
+                                                    // callback logic here so the
+                                                    // collector's tool_use/tool_result
+                                                    // pairing is independently
+                                                    // fixture-testable.
+                                                    if let Some(cb) = on_progress {
+                                                        let tool = block.get("name")
+                                                            .and_then(|n| n.as_str())
+                                                            .unwrap_or("unknown")
+                                                            .to_string();
+                                                        // TodoWrite carries the agent's live task
+                                                        // list — surface it as a progress board.
+                                                        if tool == "TodoWrite" {
+                                                            if let Some(todos) = block
+                                                                .get("input")
+                                                                .and_then(crate::channel_reply::parse_todo_write_input)
+                                                            {
+                                                                cb(crate::channel_reply::ProgressEvent::TodoUpdate { todos });
+                                                                last_tool_reported = Some(tool);
+                                                                continue;
+                                                            }
+                                                        }
+                                                        let detail = crate::channel_reply::extract_tool_detail(block);
+                                                        let dominated = last_tool_reported
+                                                            .as_ref()
+                                                            .is_some_and(|prev| *prev == tool && detail.is_none());
+                                                        if !dominated {
+                                                            cb(crate::channel_reply::ProgressEvent::ToolUse {
+                                                                tool: tool.clone(),
+                                                                detail,
+                                                            });
+                                                            last_tool_reported = Some(tool);
+                                                        }
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    if token_usage.is_none() {
+                                        if let Some(usage_val) = event.pointer("/message/usage") {
+                                            token_usage = crate::cost_telemetry::TokenUsage::from_json(usage_val);
+                                        }
+                                    }
+                                }
+                                Some("user") => {
+                                    // WP-A4: pair `tool_result` blocks back to their
+                                    // `tool_use` via the same fixture-testable
+                                    // ingestion function used for "assistant" events
+                                    // above.
+                                    ingest_stream_json_event_for_native_tools(
+                                        &event, &mut native_events, &mut open_native_calls,
+                                    );
+                                }
+                                Some("rate_limit_event") => {
+                                    // Quota advisory (`allowed_warning`) — telemetry,
+                                    // never a failure. Record and continue; the run's
+                                    // own `result` decides success.
+                                    crate::rate_limit_watch::record_frame(&event);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ = keepalive.tick() => {
+                if let Some(cb) = on_progress {
+                    cb(crate::channel_reply::ProgressEvent::Keepalive);
+                }
+            }
+
+            _ = &mut hard_deadline => {
+                warn!("claude CLI hard timeout ({HARD_MAX_TIMEOUT_SECS}s) — killing process");
+                let _ = child.kill().await;
+                return Err(format!(
+                    "claude CLI hard timeout ({HARD_MAX_TIMEOUT_SECS}s, partial output: {} chars)",
+                    result_text.len()
+                ));
+            }
+        }
+    }
+
+    let status = child.wait().await.map_err(|e| format!("wait error: {e}"))?;
+    // Any non-zero exit is now a hard failure. Previously we only errored
+    // when result_text was empty, which would surface CLI error text as
+    // the "reply" whenever the stream-json layer accidentally wrote it.
+    if !status.success() {
+        return Err(format!(
+            "claude CLI exit {} (stream tail: {:?})",
+            status.code().unwrap_or(-1),
+            result_text.chars().take(120).collect::<String>()
+        ));
+    }
+
+    // No authoritative `result` text (tool-use turn, or the CLI omitted it) —
+    // the accumulated assistant prose IS the reply.
+    let mut result_text = result_text;
+    if result_text.is_empty() && !assistant_text.is_empty() {
+        result_text = std::mem::take(&mut assistant_text);
+    }
+    let result_text = result_text.trim().to_string();
+    if result_text.is_empty() {
+        return Err("Empty response from claude CLI".to_string());
+    }
+
+    // OTel GenAI: post-hoc usage recording onto the active `invoke_agent`
+    // span (declared Empty at the instrumented dispatcher entry — see
+    // `crate::otel`). No-op when the span is disabled or lacks the fields.
+    if let Some(usage) = token_usage.as_ref() {
+        let span = tracing::Span::current();
+        span.record(crate::otel::attrs::USAGE_INPUT_TOKENS, usage.input_tokens);
+        span.record(crate::otel::attrs::USAGE_OUTPUT_TOKENS, usage.output_tokens);
+    }
+
+    // WP-A4: best-effort flush of this call's native-tool collector. A
+    // missing scope (every non-goal-loop caller) or a poisoned mutex
+    // degrades to a silent no-op inside `extend_native_tool_events` — never
+    // affects the response above.
+    crate::runtime::extend_native_tool_events(native_events);
+
+    Ok(ClaudeResponse {
+        text: result_text,
+        usage: token_usage,
+    })
+}
+
+// ── Delegation context (task-local) ──────────────────────────
+
+tokio::task_local! {
+    /// Delegation environment injected by the bus dispatcher before calling
+    /// Claude CLI.  `prepare_claude_cmd` reads this to set per-subprocess
+    /// env vars.  Thread-safe because each dispatch runs in its own
+    /// `tokio::spawn` task with its own task-local scope.
+    pub static DELEGATION_ENV: std::collections::HashMap<String, String>;
+
+    /// Channel context injected by channel handlers (Telegram, LINE, Discord, etc.)
+    /// before spawning a CLI session.  Format: `<channel_type>:<channel_id>[:<thread_id>]`.
+    /// The MCP `send_to_agent` tool reads this to register a delegation callback
+    /// so the dispatcher can forward sub-agent responses back to the originating channel.
+    pub static REPLY_CHANNEL: String;
+
+    /// RFC-22 P1-7: caller agent_id for cost_telemetry attribution along the
+    /// channel_reply path. Without this, `spawn_claude_cli_with_env` cannot
+    /// record per-agent token usage and `cost_telemetry.db` shows 0 entries
+    /// for whichever agent owned the channel reply (5/5 trace had agnes
+    /// running 23 minutes with no telemetry row).
+    pub static CHANNEL_REPLY_AGENT_ID: String;
+
+    /// WP6: end-user id for per-user cost attribution along the channel_reply
+    /// path. Empty when there is no human user (sub-agent / cron). Paired with
+    /// [`REPLY_CHANNEL`] for the channel dimension.
+    pub static CHANNEL_REPLY_USER_ID: String;
+
+    /// Worktree path override injected by the dispatcher when L0 worktree
+    /// isolation is enabled.  `prepare_claude_cmd` uses this as the working
+    /// directory instead of the agent's base directory.
+    pub static WORKTREE_PATH: Option<std::path::PathBuf>;
+
+    /// **#15 (2026-05-12)** — when set to `true`, `prepare_claude_cmd`
+    /// adds `--bare` to the spawned `claude` subprocess. This disables
+    /// CLAUDE.md auto-discovery (the leak documented in #15's spike)
+    /// at the cost of OAuth/keychain auth — the caller must arrange
+    /// for `ANTHROPIC_API_KEY` to be present in env_vars.
+    ///
+    /// Callers should only set this scope when:
+    ///   (a) the agent opted in via `[prompt] cli_bare_mode = true`, AND
+    ///   (b) an `AuthMethod::ApiKey` account is available in the rotator
+    ///       (or the call site otherwise provides an API key).
+    ///
+    /// Default value is `false`. Out-of-scope reads (i.e. no
+    /// `BARE_MODE.scope(...)` wrapping) safely return `false`.
+    pub static BARE_MODE: bool;
+}
+
+/// Prepare a `claude` CLI command with common args and env vars.
+///
+/// When `capabilities` is provided, high-risk tools not explicitly enabled
+/// are added to `--disallowedTools` (deny-by-default security posture).
+fn prepare_claude_cmd(
+    claude_path: &str,
+    prompt: &str,
+    model: &str,
+    system_prompt: &str,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+    work_dir: Option<&Path>,
+) -> (tokio::process::Command, Option<tempfile::TempPath>) {
+    let mut cmd = duduclaw_core::platform::async_command_for(claude_path);
+
+    // WP-8B (credentials doctrine P3, 2026-08): the child used to inherit the
+    // gateway's FULL environment (`tokio::process::Command` default), which
+    // meant every vendor `*_API_KEY` configured for ANY agent/provider on
+    // this gateway leaked into every `claude` CLI subprocess whether that
+    // agent used it or not. Clear the env and seed only the allowlisted
+    // base (PATH/HOME/locale/terminal/proxy — see
+    // `duduclaw_core::spawn_env` for the full list and rationale, mirrors
+    // the pattern already shipped in `worker_supervisor.rs`). The
+    // account-rotator-resolved credentials (`env_vars` in
+    // `call_claude_with_env`, applied further below) and every other
+    // explicit `cmd.env(...)` call in this function run AFTER this and
+    // always win.
+    //
+    // WP-10A (2026-08): `_for` additionally seeds
+    // `SSH_AUTH_SOCK`/`SSH_AGENT_PID`/`GPG_TTY`/`GNUPGHOME` when this
+    // agent's `agent.toml [capabilities] git_credentials = true` — default
+    // `false` ⇒ byte-identical to the call above. `work_dir` (when set) is
+    // the agent's own directory (`<home>/agents/<agent_id>`, same
+    // derivation as `capability_grants::scoped_disallow_for_agent_dir`), so
+    // the grant can be attributed to the actual owning agent; a `None`
+    // work_dir (agent-less system callers) still applies the capability
+    // gate correctly but attributes to "unknown" if it were ever non-empty
+    // — in practice those callers pass `capabilities = None`, so nothing is
+    // ever granted or logged for them.
+    let git_env_granted =
+        duduclaw_core::apply_agent_cli_env_allowlist_for(&mut cmd, capabilities);
+    if !git_env_granted.is_empty() {
+        let agent_id = work_dir
+            .and_then(|d| d.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let home_dir = work_dir
+            .and_then(|d| d.parent())
+            .and_then(|p| p.parent())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(duduclaw_core::platform::duduclaw_home);
+        duduclaw_security::audit::log_git_credentials_granted(&home_dir, agent_id, &git_env_granted);
+    }
+
+    // Set working directory so Claude CLI auto-discovers the agent's
+    // .mcp.json and .claude/settings.json from the project root.
+    if let Some(dir) = work_dir {
+        cmd.current_dir(dir);
+    }
+    // #15 (2026-05-12) — opt in to `--bare` when the calling site has
+    // wrapped this invocation in a `BARE_MODE.scope(true, ...)`. The
+    // flag disables CLAUDE.md auto-discovery (the leak from #15's
+    // spike) at the cost of OAuth — caller is responsible for setting
+    // `ANTHROPIC_API_KEY` in env_vars.
+    let bare_mode = BARE_MODE.try_with(|b| *b).unwrap_or(false);
+    if bare_mode {
+        cmd.arg("--bare");
+    }
+
+    cmd.args([
+        "-p",
+        prompt,
+        "--model",
+        model,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        // Subprocess has no TTY — auto-accept tool permissions.
+        // Security is enforced by DuDuClaw's CONTRACT.toml + container sandbox.
+        "--permission-mode",
+        "auto",
+        // Auto-approve all DuDuClaw MCP tools + a curated set of native Claude
+        // Code tools. When `--allowedTools` is specified, Claude Code treats
+        // it as the **only** auto-approved list — anything else would need
+        // interactive confirmation, which is impossible in `-p` subprocess
+        // mode and causes the tool to silently no-op / return empty.
+        //
+        // Prior to v1.8.30 only `mcp__duduclaw__*` was listed, which meant
+        // `WebSearch` / `WebFetch` (Anthropic server-side) silently returned
+        // 0 results for cron researcher agents even though they work fine in
+        // interactive Claude Code. The allowlist is applied below so a
+        // per-agent `allowed_tools` override (HS12) can narrow it.
+        // Allow enough agentic turns for complex tasks (read → think → write).
+        "--max-turns",
+        "50",
+    ]);
+
+    // Apply tool restrictions based on agent capabilities (deny-by-default)
+    let caps = capabilities.cloned().unwrap_or_default();
+
+    // HS12: honor a per-agent `allowed_tools` override. When configured, it
+    // becomes the ONLY auto-approved set (Claude Code allowlist mode), so an
+    // operator can pin a sub-agent to e.g. `["Read"]`. When unset, fall back to
+    // the curated default that restores WebSearch/WebFetch research capability.
+    const DEFAULT_ALLOWED_TOOLS: &str =
+        "mcp__duduclaw__*,WebSearch,WebFetch,Read,Write,Edit,Glob,Grep,Bash,TodoWrite";
+    let allowed = caps.allowed_tools();
+    let allowed_csv = if allowed.is_empty() {
+        DEFAULT_ALLOWED_TOOLS.to_string()
+    } else {
+        allowed.join(",")
+    };
+    cmd.args(["--allowedTools", &allowed_csv]);
+
+    let mut denied = caps.disallowed_tools();
+    // WP3 (PORTICO) auxiliary enforcement: fold in any `scoped_tools` that lack
+    // an active task-scoped grant. `work_dir` is the agent directory, from which
+    // the helper derives home + agent_id and reads the shared grant store
+    // (fail-closed: on any store error every scoped tool is disallowed). The MCP
+    // dispatch gate is the PRIMARY enforcement; this is defense-in-depth so a
+    // scoped tool is also absent from the CLI's own allow surface. `None`
+    // work_dir or a non-agent dir yields an empty list (zero effect).
+    if let Some(dir) = work_dir {
+        let scoped_disallow = crate::capability_grants::scoped_disallow_for_agent_dir(dir);
+        if !scoped_disallow.is_empty() {
+            denied.extend(scoped_disallow);
+            denied.sort();
+            denied.dedup();
+        }
+    }
+    if !denied.is_empty() {
+        let denied_csv = denied.join(",");
+        cmd.args(["--disallowedTools", &denied_csv]);
+    }
+
+    // WP-7A minimal-context: drop the operator's *user*-global settings/memory
+    // and expose only the built-in tools this allowlisted path can actually
+    // auto-approve. This path uses `--permission-mode auto` + an allowlist
+    // (DEFAULT_ALLOWED_TOOLS when unset), so `--tools` defaults to the built-in
+    // half of that allowlist (DISPATCH_DEFAULT_BUILTIN_TOOLS) — advertising a
+    // schema the allowlist would not auto-approve is pure token waste here.
+    // `project,local` keeps the agent's own `.claude/settings.json`. Default ON;
+    // env kill-switch / per-agent [runtime] minimal_context = false opts out.
+    if duduclaw_core::agent_toml::resolve_minimal_context(work_dir) {
+        cmd.args(["--setting-sources", "project,local"]);
+        let tools = caps.minimal_builtin_tools(&duduclaw_core::types::DISPATCH_DEFAULT_BUILTIN_TOOLS);
+        cmd.args(["--tools", &tools.join(",")]);
+    }
+
+    // Signal bash-gate.sh to allow browser automation commands
+    if caps.browser_via_bash {
+        cmd.env("DUDUCLAW_BROWSER_VIA_BASH", "1");
+    }
+
+    // CACHE_SPLIT_MARKER is a Direct-API-only layering hint — strip it here.
+    let system_prompt_cli: std::borrow::Cow<'_, str> = if system_prompt
+        .contains(crate::direct_api::CACHE_SPLIT_MARKER)
+    {
+        std::borrow::Cow::Owned(system_prompt.replace(crate::direct_api::CACHE_SPLIT_MARKER, ""))
+    } else {
+        std::borrow::Cow::Borrowed(system_prompt)
+    };
+    let system_prompt = system_prompt_cli.as_ref();
+    let prompt_guard = if !system_prompt.is_empty() {
+        match tempfile::NamedTempFile::new() {
+            Ok(mut f) => {
+                use std::io::Write;
+                match f.write_all(system_prompt.as_bytes()) {
+                    Ok(()) => {
+                        let path = f.into_temp_path();
+                        cmd.args(["--system-prompt-file", &path.to_string_lossy()]);
+                        Some(path)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to write system prompt tempfile, using arg fallback");
+                        cmd.args(["--system-prompt", system_prompt]);
+                        None
+                    }
+                }
+            }
+            Err(_) => {
+                cmd.args(["--system-prompt", system_prompt]);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Prevent "nested session" error when gateway was launched from a Claude Code session
+    cmd.env_remove("CLAUDECODE");
+
+    // Inject delegation context if running inside a dispatcher/cron task.
+    // These env vars propagate to the MCP server subprocess so it can
+    // enforce depth limits without trusting LLM-supplied tool params.
+    match DELEGATION_ENV.try_with(|env| {
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+    }) {
+        Ok(()) => { /* delegation context injected */ }
+        Err(_) => {
+            // Task-local not set — this is normal for regular chat (non-delegation).
+            // Delegation depth tracking is not needed for direct user→agent chat.
+            debug!("No DELEGATION_ENV task-local — delegation depth tracking inactive");
+        }
+    }
+
+    // Inject channel reply context so `send_to_agent` MCP tool can register
+    // delegation callbacks for sub-agent response forwarding.
+    if let Ok(channel) = REPLY_CHANNEL.try_with(|ch| ch.clone()) {
+        cmd.env(duduclaw_core::ENV_REPLY_CHANNEL, &channel);
+    }
+
+    // v1.10: Inject wiki RL trust feedback context so the MCP server can
+    // attach turn_id / session_id to sub-agent dispatch BusMessages.
+    // Same pattern as REPLY_CHANNEL — task_local set in channel_reply path,
+    // read here, propagated to subprocess via env var.
+    if let Ok(Some(turn_id)) = duduclaw_memory::feedback::CURRENT_TURN_ID.try_with(|t| t.clone()) {
+        cmd.env(duduclaw_core::ENV_TRUST_TURN_ID, &turn_id);
+    }
+    if let Ok(Some(session_id)) =
+        duduclaw_memory::feedback::CURRENT_SESSION_ID.try_with(|s| s.clone())
+    {
+        cmd.env(duduclaw_core::ENV_TRUST_SESSION_ID, &session_id);
+    }
+
+    (cmd, prompt_guard)
+}
+
+/// Call claude CLI with custom env vars (supports both OAuth and API key).
+async fn call_claude_with_env(
+    prompt: &str,
+    model: &str,
+    system_prompt: &str,
+    env_vars: &std::collections::HashMap<String, String>,
+    capabilities: Option<&duduclaw_core::types::CapabilitiesConfig>,
+    work_dir: Option<&Path>,
+) -> Result<ClaudeResponse, String> {
+    let claude = duduclaw_core::which_claude().ok_or("Claude CLI not found")?;
+    let (mut cmd, _prompt_guard) = prepare_claude_cmd(
+        &claude,
+        prompt,
+        model,
+        system_prompt,
+        capabilities,
+        work_dir,
+    );
+
+    for (key, value) in env_vars {
+        if value.is_empty() {
+            cmd.env_remove(key);
+        } else {
+            cmd.env(key, value);
+        }
+    }
+
+    // Native OS sandbox (opt-in via `[capabilities] native_sandbox`). Layered on
+    // top of the `--allowedTools`/`--disallowedTools` restrictions; fail-closed
+    // if required but unavailable. NOTE: when enabled, the claude CLI is confined
+    // to write only within the agent workspace (+ temp) — operators enabling this
+    // for the claude runtime should ensure the agent does not need to write
+    // outside its workspace (e.g. `~/.claude`).
+    crate::runtime::apply_native_sandbox(&mut cmd, capabilities, work_dir, "claude")?;
+
+    call_claude_streaming(&mut cmd, None).await
+}
+
+// ---------------------------------------------------------------------------
+// Tests — WP-A4 native-tool collector (fixture stream-json lines)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod native_tool_collector_tests {
+    use super::*;
+
+    fn assistant_tool_use(id: &str, name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "id": id, "name": name, "input": {}}
+                ]
+            }
+        })
+    }
+
+    fn user_tool_result(id: &str, is_error: bool) -> serde_json::Value {
+        serde_json::json!({
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": id, "is_error": is_error, "content": "x"}
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn ingest_pairs_tool_use_with_success_result_by_id() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Bash"), &mut events, &mut open);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].success, "provisional success before pairing");
+        ingest_stream_json_event_for_native_tools(&user_tool_result("tu_1", false), &mut events, &mut open);
+        assert_eq!(events[0].tool_name, "Bash");
+        assert!(events[0].success);
+        assert!(open.is_empty());
+    }
+
+    #[test]
+    fn ingest_pairs_tool_use_with_error_result() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Bash"), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(&user_tool_result("tu_1", true), &mut events, &mut open);
+        assert!(!events[0].success);
+    }
+
+    #[test]
+    fn ingest_pairs_by_id_not_just_order() {
+        // Two outstanding calls; the result for the FIRST arrives after the
+        // second tool_use — id-based pairing must resolve correctly rather
+        // than assuming strict FIFO/LIFO order.
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("id-a", "Read"), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("id-b", "Write"), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(&user_tool_result("id-a", true), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(&user_tool_result("id-b", false), &mut events, &mut open);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].tool_name, "Read");
+        assert!(!events[0].success);
+        assert_eq!(events[1].tool_name, "Write");
+        assert!(events[1].success);
+    }
+
+    #[test]
+    fn ingest_unpaired_tool_use_stays_provisionally_successful() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Bash"), &mut events, &mut open);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].success);
+        assert_eq!(open.len(), 1, "still outstanding — no matching tool_result arrived");
+    }
+
+    #[test]
+    fn ingest_ignores_non_tool_use_blocks_and_other_event_types() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        let text_event = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "hello"}]}
+        });
+        ingest_stream_json_event_for_native_tools(&text_event, &mut events, &mut open);
+        assert!(events.is_empty());
+
+        let result_event = serde_json::json!({"type": "result", "result": "done"});
+        ingest_stream_json_event_for_native_tools(&result_event, &mut events, &mut open);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn ingest_unresolved_tool_result_id_is_ignored_not_panic() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        // A tool_result whose id matches nothing outstanding — must not
+        // panic, must not corrupt any other entry.
+        ingest_stream_json_event_for_native_tools(&user_tool_result("nonexistent", true), &mut events, &mut open);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn ingest_fallback_pairing_without_id_uses_most_recently_opened() {
+        let assistant_no_id = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {}}]}
+        });
+        let user_no_id = serde_json::json!({
+            "type": "user",
+            "message": {"content": [{"type": "tool_result", "is_error": true, "content": "x"}]}
+        });
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_no_id, &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(&user_no_id, &mut events, &mut open);
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].success);
+    }
+
+    // ── R1: result_text / input_text capture ─────────────────────────────
+
+    fn assistant_tool_use_with_input(id: &str, name: &str, input: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "id": id, "name": name, "input": input}
+                ]
+            }
+        })
+    }
+
+    fn user_tool_result_with_content(id: &str, is_error: bool, content: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": id, "is_error": is_error, "content": content}
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn ingest_captures_input_text_from_tool_use_block() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(
+            &assistant_tool_use_with_input("tu_1", "Bash", serde_json::json!({"command": "cat report.md"})),
+            &mut events,
+            &mut open,
+        );
+        assert!(events[0].input_text.as_deref().unwrap().contains("cat report.md"));
+    }
+
+    #[test]
+    fn ingest_captures_result_text_from_bare_string_content() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Read"), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(
+            &user_tool_result_with_content("tu_1", false, serde_json::json!("quarterly revenue: 1.2M")),
+            &mut events,
+            &mut open,
+        );
+        assert_eq!(events[0].result_text.as_deref(), Some("quarterly revenue: 1.2M"));
+    }
+
+    #[test]
+    fn ingest_joins_multiple_text_blocks_in_result_content() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Read"), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(
+            &user_tool_result_with_content(
+                "tu_1",
+                false,
+                serde_json::json!([
+                    {"type": "text", "text": "first line"},
+                    {"type": "text", "text": "second line"},
+                ]),
+            ),
+            &mut events,
+            &mut open,
+        );
+        assert_eq!(events[0].result_text.as_deref(), Some("first line\nsecond line"));
+    }
+
+    #[test]
+    fn ingest_masks_secret_in_result_text() {
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Bash"), &mut events, &mut open);
+        ingest_stream_json_event_for_native_tools(
+            &user_tool_result_with_content(
+                "tu_1",
+                false,
+                serde_json::json!("ANTHROPIC_API_KEY=sk-ant-api03-verysecretvalue1234567890"),
+            ),
+            &mut events,
+            &mut open,
+        );
+        let result_text = events[0].result_text.as_deref().unwrap();
+        assert!(
+            !result_text.contains("sk-ant-api03-verysecretvalue1234567890"),
+            "secret leaked into result_text: {result_text}"
+        );
+    }
+
+    #[test]
+    fn ingest_empty_input_object_yields_no_input_text() {
+        // `{}` from the fixture helper `assistant_tool_use` — an empty
+        // object still stringifies non-empty ("{}"), so this documents that
+        // "no meaningful input" and "no input at all" are not conflated at
+        // this layer; only a genuinely empty/whitespace string collapses to
+        // `None` (see `mask_and_cap`'s trim-then-empty-check).
+        let mut events = Vec::new();
+        let mut open = Vec::new();
+        ingest_stream_json_event_for_native_tools(&assistant_tool_use("tu_1", "Bash"), &mut events, &mut open);
+        assert_eq!(events[0].input_text.as_deref(), Some("{}"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Direct-API multi-provider routing (W2)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod rate_limit_classifier_tests {
+    use super::is_rate_limit_error;
+
+    /// The exact advisory frame from the 2026-08-17 field report: the run it
+    /// belonged to finished normally (`is_error: false`, result "PONG").
+    const ADVISORY_FRAME: &str = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.92,"resetsAt":1787083200,"isUsingOverage":false,"surpassedThreshold":0.75}}"#;
+
+    #[test]
+    fn advisory_frame_is_not_a_rate_limit_error() {
+        assert!(
+            !is_rate_limit_error(ADVISORY_FRAME),
+            "an allowed_warning advisory must never classify as a refusal"
+        );
+        // …including when it is embedded inside a larger diagnostic string.
+        let embedded = format!("claude CLI hard timeout — last_line={ADVISORY_FRAME:?}");
+        assert!(!is_rate_limit_error(&embedded));
+    }
+
+    #[test]
+    fn genuine_refusals_still_classify() {
+        assert!(is_rate_limit_error("HTTP 429 Too Many Requests"));
+        assert!(is_rate_limit_error("Rate limit exceeded, retry later"));
+        assert!(is_rate_limit_error("Claude AI usage limit reached"));
+        assert!(is_rate_limit_error("server overloaded"));
+        // A refusal that coexists with an embedded advisory must still match
+        // on its own words after the advisory tokens are neutralized.
+        let mixed = format!("usage limit reached; last frame: {ADVISORY_FRAME}");
+        assert!(is_rate_limit_error(&mixed));
+    }
+}
+
+#[cfg(test)]
+mod direct_api_routing_tests {
+    use super::*;
+    use duduclaw_llm::{CacheHint, ContentPart, Role};
+
+    #[test]
+    fn route_decision_table() {
+        // Anthropic models (registry-known) → legacy path.
+        assert_eq!(
+            direct_api_route("claude-sonnet-5"),
+            DirectApiRoute::LegacyAnthropic
+        );
+        assert_eq!(
+            direct_api_route("anthropic/claude-haiku-4-5"),
+            DirectApiRoute::LegacyAnthropic
+        );
+        // Registry-unknown claude id → legacy path (behavior-compatible).
+        assert_eq!(
+            direct_api_route("claude-sonnet-4-6"),
+            DirectApiRoute::LegacyAnthropic
+        );
+        // Known non-Anthropic models → their duduclaw-llm provider.
+        assert_eq!(
+            direct_api_route("gpt-5.4"),
+            DirectApiRoute::LlmProvider("openai".to_string())
+        );
+        assert_eq!(
+            direct_api_route("gemini-3.1-pro"),
+            DirectApiRoute::LlmProvider("gemini".to_string())
+        );
+        assert_eq!(
+            direct_api_route("deepseek-v3.2"),
+            DirectApiRoute::LlmProvider("deepseek".to_string())
+        );
+        assert_eq!(
+            direct_api_route("deepseek/deepseek-v3.2"),
+            DirectApiRoute::LlmProvider("deepseek".to_string())
+        );
+        // Unknown model → legacy path (fail-safe, unchanged failure mode).
+        assert_eq!(
+            direct_api_route("unknown-model"),
+            DirectApiRoute::LegacyAnthropic
+        );
+    }
+
+    /// The two marker constants MUST stay byte-identical — prompt assemblers
+    /// write the gateway constant, the llm path splits on the crate constant.
+    #[test]
+    fn cache_split_markers_stay_in_sync() {
+        assert_eq!(
+            duduclaw_llm::CACHE_SPLIT_MARKER,
+            crate::direct_api::CACHE_SPLIT_MARKER
+        );
+    }
+
+    // ── HIGH-A: `moa:` ids must never reach a CLI spawn / the rotator ────
+
+    #[tokio::test]
+    async fn call_with_rotation_rejects_moa_before_touching_rotator() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+
+        let err = call_with_rotation(
+            home,
+            "moa-test-agent",
+            "hi",
+            "moa:planner",
+            "system",
+            crate::cost_telemetry::RequestType::Dispatch,
+            None,
+            None,
+            false,
+            &[],
+        )
+        .await
+        .expect_err("moa id must be rejected on the CLI-rotation path");
+
+        // The zh-TW MoA rejection, NOT the rotation-exhaustion error — the
+        // guard fires before the rotator loop runs a single attempt.
+        assert!(err.contains("MoA"), "got: {err}");
+        assert!(err.contains("API 模式"), "got: {err}");
+        assert!(
+            !err.contains("All accounts exhausted"),
+            "rotator loop must never run for a moa id: {err}"
+        );
+        // Rotator health untouched: the guard returns before `get_rotator`,
+        // so no rotator state (accounts.json / rotation sidecars) is created
+        // in a fresh home.
+        assert!(
+            !home.join("accounts.json").exists(),
+            "rotator state must not be materialized by a rejected moa call"
+        );
+    }
+
+    #[test]
+    fn chat_request_splits_marker_into_cached_blocks_plus_uncached_suffix() {
+        let system = format!(
+            "# Static\nsoul\n{}\n# Semi\nwiki\n",
+            duduclaw_llm::CACHE_SPLIT_MARKER
+        );
+        let req = build_llm_chat_request(
+            "gemini-3.1-pro",
+            true,
+            &system,
+            Some("## Pending Tasks\n- t1"),
+            "hello",
+        );
+        assert_eq!(req.model, "gemini-3.1-pro");
+        assert_eq!(req.max_tokens, 4096);
+        // 2 split blocks (Explicit) + 1 uncached dynamic suffix.
+        assert_eq!(req.system.len(), 3);
+        assert_eq!(req.system[0].text, "# Static\nsoul");
+        assert_eq!(req.system[0].cache, CacheHint::Explicit);
+        assert_eq!(req.system[1].text, "# Semi\nwiki");
+        assert_eq!(req.system[1].cache, CacheHint::Explicit);
+        assert_eq!(req.system[2].text, "## Pending Tasks\n- t1");
+        assert_eq!(req.system[2].cache, CacheHint::None);
+        // The marker text never survives into any block.
+        assert!(req.system.iter().all(|b| !b.text.contains("cache-split")));
+        // Single user message carrying the prompt; no tools.
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, Role::User);
+        assert_eq!(
+            req.messages[0].parts,
+            vec![ContentPart::Text("hello".to_string())]
+        );
+        assert!(req.tools.is_empty());
+    }
+
+    #[test]
+    fn chat_request_without_caching_strips_marker_and_leaves_blocks_uncached() {
+        let system = format!("A{}B", duduclaw_llm::CACHE_SPLIT_MARKER);
+        let req = build_llm_chat_request("qwen3.7-max", false, &system, None, "hi");
+        assert_eq!(req.system.len(), 2);
+        assert!(req.system.iter().all(|b| b.cache == CacheHint::None));
+        assert!(req.system.iter().all(|b| !b.text.contains("cache-split")));
+    }
+
+    #[test]
+    fn chat_request_empty_system_and_blank_suffix_produce_no_blocks() {
+        let req = build_llm_chat_request("deepseek-v3.2", true, "", Some("   "), "hi");
+        assert!(req.system.is_empty());
+        assert_eq!(req.messages.len(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — cross-provider Direct-API fallback chain + tool/rotation wiring
+// (W3/G1/G2/G3). All offline: pure fns + a mock dispatch closure, no HTTP/proc.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod chain_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn td(name: &str) -> duduclaw_llm::ToolDef {
+        duduclaw_llm::ToolDef {
+            name: name.into(),
+            description: String::new(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        }
+    }
+
+    // ── G1: provider resolution + candidate ordering ────────────────────
+
+    #[test]
+    fn provider_and_bare_resolution() {
+        assert_eq!(
+            provider_and_bare("claude-haiku-4-5"),
+            ("anthropic".to_string(), "claude-haiku-4-5".to_string())
+        );
+        assert_eq!(
+            provider_and_bare("gpt-5.4"),
+            ("openai".to_string(), "gpt-5.4".to_string())
+        );
+        assert_eq!(
+            provider_and_bare("openai/gpt-5.4"),
+            ("openai".to_string(), "gpt-5.4".to_string())
+        );
+        // `compat:` hint + registry-known model resolves to its true provider.
+        assert_eq!(
+            provider_and_bare("compat:deepseek/deepseek-v3.2"),
+            ("deepseek".to_string(), "deepseek-v3.2".to_string())
+        );
+        // Unknown bare id, no hint → anthropic default (pre-multi-provider).
+        assert_eq!(
+            provider_and_bare("some-unknown-model"),
+            ("anthropic".to_string(), "some-unknown-model".to_string())
+        );
+        // Unknown qualified compat provider is honoured by prefix.
+        assert_eq!(
+            provider_and_bare("compat:myproxy/foo"),
+            ("myproxy".to_string(), "foo".to_string())
+        );
+        // `compat:` bare (no slash) → openai_compat family.
+        assert_eq!(
+            provider_and_bare("compat:foo"),
+            ("openai_compat".to_string(), "foo".to_string())
+        );
+    }
+
+    #[test]
+    fn order_candidates_preferred_first_dedup_skip_keyless() {
+        let fallbacks = vec![
+            "openai/gpt-5.4".to_string(),
+            "claude-sonnet-5".to_string(),
+            "gemini/gemini-3.1-pro".to_string(), // no key → skipped
+            "openai/gpt-5.4".to_string(),        // exact dup → dropped
+            "  ".to_string(),                    // blank → dropped
+        ];
+        let has_key = |p: &str| matches!(p, "anthropic" | "openai");
+        let out = order_direct_api_candidates("claude-haiku-4-5", &fallbacks, has_key);
+        assert_eq!(
+            out,
+            vec![
+                "claude-haiku-4-5".to_string(),
+                "openai/gpt-5.4".to_string(),
+                "claude-sonnet-5".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn order_candidates_all_keyless_is_empty() {
+        let out =
+            order_direct_api_candidates("gpt-5.4", &["gemini/gemini-3.1-pro".to_string()], |_| {
+                false
+            });
+        assert!(out.is_empty());
+    }
+
+    // ── G1: failover classification ─────────────────────────────────────
+
+    #[test]
+    fn chain_failover_classification_strings() {
+        assert!(is_chain_failover("HTTP 429 rate limit"));
+        assert!(is_chain_failover("insufficient credit balance"));
+        assert!(is_chain_failover("service unavailable http 503"));
+        assert!(is_chain_failover("model overloaded"));
+        // Terminal — auth / invalid never fail over.
+        assert!(!is_chain_failover("authentication failed: invalid api key"));
+        assert!(!is_chain_failover("invalid request: bad schema"));
+    }
+
+    #[test]
+    fn chain_failover_classification_typed() {
+        use duduclaw_llm::LlmError as E;
+        assert!(llm_err_is_chain_failover(&E::RateLimited {
+            retry_after: None
+        }));
+        assert!(llm_err_is_chain_failover(&E::Billing));
+        assert!(llm_err_is_chain_failover(&E::Timeout));
+        assert!(llm_err_is_chain_failover(&E::Network("reset".into())));
+        assert!(llm_err_is_chain_failover(&E::Http {
+            status: 503,
+            body_snippet: "x".into()
+        }));
+        // Terminal.
+        assert!(!llm_err_is_chain_failover(&E::Auth));
+        assert!(!llm_err_is_chain_failover(&E::InvalidRequest("bad".into())));
+        assert!(!llm_err_is_chain_failover(&E::ContentFilter));
+        assert!(!llm_err_is_chain_failover(&E::ContextWindowExceeded));
+        assert!(!llm_err_is_chain_failover(&E::Http {
+            status: 400,
+            body_snippet: "x".into()
+        }));
+    }
+
+    // ── G1: chain driver (failover advances / terminal short-circuits) ──
+
+    #[tokio::test]
+    async fn chain_failover_advances_then_succeeds() {
+        let candidates = vec!["a".to_string(), "b".to_string()];
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let result = drive_direct_api_chain(&candidates, move |m| {
+            let calls = seen.clone();
+            async move {
+                calls.lock().unwrap().push(m.clone());
+                if m == "a" {
+                    Err(ChainError {
+                        message: "rate limit".into(),
+                        failover: true,
+                    })
+                } else {
+                    Ok("answer from b".to_string())
+                }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), "answer from b");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_terminal_short_circuits() {
+        let candidates = vec!["a".to_string(), "b".to_string()];
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let result = drive_direct_api_chain(&candidates, move |m| {
+            let calls = seen.clone();
+            async move {
+                calls.lock().unwrap().push(m.clone());
+                Err(ChainError {
+                    message: format!("auth error on {m}"),
+                    failover: false,
+                })
+            }
+        })
+        .await;
+        assert!(result.unwrap_err().contains("auth error on a"));
+        // The second candidate must never be tried.
+        assert_eq!(*calls.lock().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn chain_exhaustion_returns_last_failover() {
+        let candidates = vec!["a".to_string(), "b".to_string()];
+        let result = drive_direct_api_chain(&candidates, |m| async move {
+            Err::<String, _>(ChainError {
+                message: format!("timeout {m}"),
+                failover: true,
+            })
+        })
+        .await;
+        let err = result.unwrap_err();
+        assert!(err.contains("exhausted"), "got: {err}");
+        assert!(err.contains("timeout b"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn chain_first_candidate_success_short_circuits() {
+        let candidates = vec!["a".to_string(), "b".to_string()];
+        let calls = Arc::new(Mutex::new(0usize));
+        let seen = calls.clone();
+        let result = drive_direct_api_chain(&candidates, move |_m| {
+            let calls = seen.clone();
+            async move {
+                *calls.lock().unwrap() += 1;
+                Ok("ok".to_string())
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(*calls.lock().unwrap(), 1);
+    }
+
+    // ── G2: capability filtering + MCP env ──────────────────────────────
+
+    #[test]
+    fn tool_defs_filtered_by_capabilities() {
+        use duduclaw_core::types::CapabilitiesConfig;
+        let defs = vec![td("memory_search"), td("tasks_list"), td("computer")];
+
+        // No capabilities → all offered.
+        assert_eq!(filter_tool_defs(defs.clone(), None).len(), 3);
+
+        // Deny-by-default: computer_use=false bare-denies "computer".
+        let caps = CapabilitiesConfig::default();
+        let out = filter_tool_defs(defs.clone(), Some(&caps));
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|d| d.name != "computer"));
+
+        // Explicit denylist excludes a named MCP tool.
+        let caps2 = CapabilitiesConfig {
+            denied_tools: vec!["tasks_list".into()],
+            ..Default::default()
+        };
+        let out = filter_tool_defs(defs.clone(), Some(&caps2));
+        assert!(out
+            .iter()
+            .all(|d| d.name != "tasks_list" && d.name != "computer"));
+
+        // Allowlist mode: only listed tools survive (fail-closed).
+        let caps3 = CapabilitiesConfig {
+            allowed_tools: vec!["memory_search".into()],
+            ..Default::default()
+        };
+        let out = filter_tool_defs(defs, Some(&caps3));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "memory_search");
+    }
+
+    #[test]
+    fn mcp_envs_carry_agent_id() {
+        let envs = mcp_client_envs("agnes");
+        assert!(envs
+            .iter()
+            .any(|(k, v)| k == duduclaw_core::ENV_AGENT_ID && v == "agnes"));
+    }
+
+    // ── G3: rotation-vs-env key selection ───────────────────────────────
+
+    #[test]
+    fn key_source_prefers_rotator_then_env() {
+        // Rotator account with a real key → Rotator.
+        assert_eq!(
+            choose_key_source(
+                Some(("acct-1".into(), Some("sk-1".into()))),
+                Some("env-key".into())
+            ),
+            Some(KeySource::Rotator {
+                account_id: "acct-1".into(),
+                key: "sk-1".into()
+            })
+        );
+        // Rotator OAuth account (no raw key) → env fallback.
+        assert_eq!(
+            choose_key_source(Some(("oauth-1".into(), None)), Some("env-key".into())),
+            Some(KeySource::Env {
+                key: "env-key".into()
+            })
+        );
+        // No rotator pick + env present → Env.
+        assert_eq!(
+            choose_key_source(None, Some("env-key".into())),
+            Some(KeySource::Env {
+                key: "env-key".into()
+            })
+        );
+        // Nothing usable → None.
+        assert_eq!(choose_key_source(None, None), None);
+        assert_eq!(choose_key_source(Some(("oauth".into(), None)), None), None);
+    }
+}

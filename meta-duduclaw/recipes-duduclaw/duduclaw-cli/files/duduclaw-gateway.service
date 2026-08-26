@@ -25,6 +25,39 @@
 # `run` is its gateway-server subcommand (see crates/duduclaw-cli/src/bin/
 # duduclaw.rs) -- this is the concrete evidence that "gateway" and "cli" in
 # the Y2-1 task brief are the same artifact wearing two hats.
+#
+# Y5-4 (2026-08-26) real fix, caught by a live QEMU boot, not by re-reading
+# this file: the "the gateway binds 0.0.0.0" comment two paragraphs up was
+# WRONG for this unit specifically -- `crates/duduclaw-core/src/appliance.rs`
+# `pick_default_bind()` only defaults to `0.0.0.0` when `DUDUCLAW_APPLIANCE=1`
+# is set in the process environment; with no env and no `config.toml
+# [gateway] bind` (neither exists on this bring-up image, no firstboot-
+# provision-equivalent has been ported here yet per the comment above), the
+# code default is `127.0.0.1` -- confirmed live: `journalctl -u
+# duduclaw-gateway` showed "Gateway starting on 127.0.0.1:18789", and a host
+# -> guest connection (QEMU hostfwd, which relays to the guest's real NIC,
+# never its loopback) got "Connection reset by peer" every time. The Debian
+# appliance line never hits this because its own unit
+# (appliance/mkosi.extra/etc/systemd/system/duduclaw-gateway.service) sets
+# this exact env var already; this Yocto unit's own comment above just
+# asserted the resulting BEHAVIOR without asserting the CAUSE. Setting it
+# here is not a workaround for a security decision -- Yocto Y1-1/Y3-x bring-
+# up simply never carried it over, and a screenless appliance whose
+# dashboard cannot be reached from the LAN (or, for VM testing, from the
+# host) fails this whole image's stated purpose the same way a black kiosk
+# screen does.
+#
+# `DUDUCLAW_BIND=0.0.0.0` is ALSO set explicitly, not left to
+# `DUDUCLAW_APPLIANCE=1`'s default-tier side effect alone:
+# `resolve_gateway_bind`'s priority is `DUDUCLAW_BIND` env > `config.toml
+# [gateway] bind` > the `DUDUCLAW_APPLIANCE`-gated default, and the FIRST
+# `duduclaw run --yes` on a fresh image persists whatever it resolved into
+# `config.toml` -- so on any machine that already booted once before this
+# fix lands (e.g. a VM disk carried over from an earlier image build),
+# `config.toml` may already pin `bind = "127.0.0.1"` from that boot, which
+# would silently outrank `DUDUCLAW_APPLIANCE=1` from then on (reproduced
+# live on this exact VM). The explicit env var wins unconditionally and
+# needs no `config.toml` migration.
 [Unit]
 Description=DuDuClaw gateway (Yocto bring-up)
 After=duduclaw-sysd.service
@@ -35,6 +68,8 @@ StartLimitBurst=5
 [Service]
 Type=notify
 NotifyAccess=main
+Environment=DUDUCLAW_APPLIANCE=1
+Environment=DUDUCLAW_BIND=0.0.0.0
 ExecStart=/usr/bin/duduclaw run --yes
 Restart=on-failure
 RestartSec=5

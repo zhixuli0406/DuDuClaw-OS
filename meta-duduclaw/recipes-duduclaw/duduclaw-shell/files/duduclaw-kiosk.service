@@ -29,14 +29,31 @@
 # in any sense that should stop restart attempts. See
 # appliance/mkosi.extra/etc/systemd/system/duduclaw-kiosk.service's own
 # D9-bug8 comment for the full root-cause chain this generalizes from.
+#
+# StartLimitIntervalSec=0 (Y5-4, 2026-08-26, was 300/8): root-caused live on
+# a Yocto VM round -- a genuinely crashing kiosk session (in that instance,
+# QEMU TCG's AVX2 emulation crashing Mesa's llvmpipe/lavapipe JIT; see
+# appliance/run-vm-yocto.sh's own comment for that specific bug, which is
+# QEMU-only and does not need a recipe-level fix) burned through 8 restarts
+# inside the 300s window and systemd marked the unit permanently `failed` --
+# `SubState=failed`, zero further restart attempts, confirmed sitting dead
+# with `journalctl` showing nothing new. For a value-boxed appliance kiosk
+# there is no operator watching a systemd unit state to notice and manually
+# `systemctl reset-failed` it; "restart forever, 5s apart" (0 = unlimited
+# per systemd.unit(5)) is what "永遠嘗試自癒" actually requires for THIS
+# unit specifically -- a kiosk session has no legitimate reason to ever stop
+# retrying on its own (same reasoning `Restart=always` already encodes for
+# individual exits; this closes the same gap at the unit's overall retry
+# budget instead of a single exit's classification). RestartSec=5 below is
+# what keeps this from being a tight crash loop -- unlimited RETRIES, not
+# unlimited retry RATE.
 [Unit]
 Description=DuDuClaw kiosk session (duduclaw-comp + duduclaw-shell)
 After=seatd.service systemd-udev-settle.service duduclaw-gateway.service getty@tty1.service
 Requires=seatd.service
 Wants=duduclaw-gateway.service
 Conflicts=getty@tty1.service
-StartLimitIntervalSec=300
-StartLimitBurst=8
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

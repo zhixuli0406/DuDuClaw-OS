@@ -107,4 +107,30 @@ IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
 # a keysym (confirmed present as its own oe-core recipe,
 # recipes-graphics/xorg-lib/xkeyboard-config_2.47.bb -- not a guessed
 # package name).
-IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers libegl-mesa xkeyboard-config"
+#
+# Y5-4 (2026-08-26) real boot failure fix, same class of bug as the Y3-8
+# libEGL fix above -- caught live on a Yocto VM boot, not by re-reading the
+# recipe: duduclaw-shell panicked cleanly (exit 101, "SingleFullscreen
+# fallback must always be able to open a plain toplevel window: No GPU
+# adapter found that can configure the display surface") because gpui's
+# Linux renderer (`blade`, via the `ash` crate) is Vulkan-only per
+# duduclaw-shell's own BUILD-LINUX.md ("gpui's blade renderer needs a
+# Vulkan device; cage's own GL stack is not enough") and `libvulkan.so.1`
+# -- the actual Khronos Vulkan LOADER, not any of the per-vendor ICD driver
+# .so's -- was entirely absent from the image. `mesa-vulkan-drivers`
+# (already listed above) only ships `libvulkan_*.so` (the ICD backends,
+# including lavapipe's `libvulkan_lvp.so`) and the `icd.d/*.json`
+# manifests the loader reads to find them (verified against
+# openembedded-core/meta/recipes-graphics/mesa/mesa.inc's own
+# `FILES:mesa-vulkan-drivers` line) -- the loader itself is a separate
+# recipe (`recipes-graphics/vulkan/vulkan-loader_*.bb`) that mesa.inc only
+# pulls in as a build-time DEPENDS (`PACKAGECONFIG[vulkan]`), never as a
+# runtime RDEPENDS of `mesa-vulkan-drivers`. And because `ash`-based Rust
+# Vulkan code typically dlopens libvulkan.so.1 at runtime rather than
+# carrying an ELF NEEDED entry for it, this is invisible to automatic
+# shlib RDEPENDS resolution the same way libEGL.so.1 was -- confirmed live
+# by extracting the already-built `vulkan-loader` artifact out of this same
+# build's own sysroot-components and hand-installing it into a running VM,
+# after which duduclaw-shell got past the "no adapter" panic entirely and
+# started actually initializing lavapipe. `vulkan-loader` is the fix.
+IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers vulkan-loader libegl-mesa xkeyboard-config"

@@ -18,6 +18,7 @@
 #   Serial console: nc 127.0.0.1 47025      (or: telnet 127.0.0.1 47025)
 #   QMP control:    nc 127.0.0.1 47026      (send `{"execute":"qmp_capabilities"}` first)
 #   VNC display:    open vnc://127.0.0.1:5902   (Screen Sharing.app on macOS, or any VNC client)
+#   Dashboard:      http://127.0.0.1:18794   (hostfwd -> guest gateway :18789, Y5-4 2026-08-26)
 #
 # Stop it: pkill -f duduclaw-os-yocto-vm
 set -euo pipefail
@@ -49,16 +50,43 @@ SMP="${VM_SMP:-4}"
 SERIAL_PORT="${SERIAL_PORT:-47025}"
 QMP_PORT="${QMP_PORT:-47026}"
 VNC_DISPLAY="${VNC_DISPLAY:-2}"   # :2 -> TCP 5900+2 = 5902
+DASHBOARD_HOST_PORT="${DASHBOARD_HOST_PORT:-18794}"  # host -> guest gateway :18789
 
 MODE="${1:-bg}"
 
 ARGS=(
   -name duduclaw-os-yocto-vm
+  # DO NOT strip `avx2` from the CPU model here (tried and reverted, Y5-4
+  # 2026-08-26): this MACHINE's DEFAULTTUNE is `x86-64-v3`
+  # (openembedded-core/meta/conf/machine/qemux86-64.conf,
+  # meta-duduclaw/conf/machine/duduclaw-genericx86-64.conf) -- the entire
+  # image, not just Mesa, is compiled assuming AVX2 is unconditionally
+  # present (x86-64-v3 is defined by AVX2+BMI1+BMI2+FMA as baseline ISA, not
+  # a runtime-optional extra). `-cpu Skylake-Client,-avx2` was tried as a fix
+  # for the Mesa llvmpipe/lavapipe JIT crash below and made things
+  # categorically worse: the guest CPU-reset warnings in
+  # $VM_DIR/yocto-vm.log repeated every few seconds and the VM never reached
+  # an interactive shell -- consistent with x86-64-v3-compiled binaries
+  # (glibc, systemd, coreutils, the kernel itself) hitting SIGILL on their
+  # own AOT-compiled AVX2 instructions and the machine reset-looping. The
+  # JIT crash this was trying to fix (see the softpipe.conf drop-in
+  # documented below, and duduclaw-kiosk.service's StartLimitIntervalSec=0
+  # for how it self-heals) has to be solved inside Mesa's own JIT
+  # configuration (e.g. `LP_NATIVE_VECTOR_WIDTH`), never by hiding a CPU
+  # feature this build's baseline ISA requires to exist.
   -machine q35,i8042=off -accel tcg -cpu Skylake-Client -smp "$SMP" -m "$MEM"
   -drive if=pflash,format=raw,readonly=on,file="$CODE"
   -drive if=pflash,format=raw,file="$VARS"
   -drive file="$WIC",if=virtio,format=raw
-  -netdev user,id=net0
+  # hostfwd (Y5-4, 2026-08-26): the VM shipped by Y5-1 had NO hostfwd at
+  # all, so the dashboard (guest gateway, port 18789 -- see
+  # duduclaw-kiosk-launch.sh's own comment on that constant) was unreachable
+  # from the host, making this VM untestable even when the kiosk screen
+  # itself was black/crashing. Host 18794 was picked to match the sibling
+  # Debian/mkosi line's own dashboard-forwarding convention (appliance/
+  # run-vm.sh uses 18793 for ITS vm -- one port higher here to stay
+  # distinct and avoid a collision if both VMs are ever run at once).
+  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${DASHBOARD_HOST_PORT}-:18789
   -device virtio-net-pci,netdev=net0
   -object rng-random,filename=/dev/urandom,id=rng0
   -device virtio-rng-pci,rng=rng0

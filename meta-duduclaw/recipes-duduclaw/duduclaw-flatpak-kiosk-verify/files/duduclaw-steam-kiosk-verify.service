@@ -1,0 +1,67 @@
+[Unit]
+Description=DuDuClaw OS Y5-2 verification: Steam Flatpak reaching its login screen (real Wayland client of duduclaw-kiosk)
+# Wants=, NOT Requires= (real QEMU-verified correction, not the original
+# design): duduclaw-kiosk.service is independently known to crash-loop
+# under QEMU TCG software rendering (llvmpipe JIT SIGABRT, `fs_variant_
+# partial`, already flagged as its own tracked issue by Y4-2) -- a live run
+# hit `duduclaw-kiosk.service: Start request repeated too quickly` (its
+# StartLimitBurst=8/300s tripped) WHILE this unit's own start transaction
+# was in flight, and Requires= turned that into an immediate, unconditional
+# "A dependency job for duduclaw-steam-kiosk-verify.service failed" for
+# THIS unit too -- even though duduclaw-kiosk.service being rate-limited
+# for a few minutes has nothing to do with whether ITS OWN mechanism (dbus/
+# socket/install/launch) is correct. Wants= keeps the ordering (After=
+# below) without making this unit's own start job hostage to a sibling
+# unit's independent flakiness; the script's own bounded socket wait-loop
+# (see duduclaw-steam-kiosk-verify.sh) is the real gate on whether a socket
+# actually exists, and reports that as its own specific PASS/FAIL line
+# either way -- switching to Wants= took this unit from never running at
+# all to running its full mechanism end-to-end in the very next live test.
+After=network-online.target duduclaw-gateway.service duduclaw-kiosk.service
+Wants=network-online.target
+Wants=duduclaw-kiosk.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=duduclaw-flatpak-verify
+Group=duduclaw
+
+# XDG_RUNTIME_DIR, formalizing the Y4-2 manual fix as a declarative
+# systemd directive instead of a script-time `mkdir` -- this is the
+# "per-user runtime dir" mechanism the ticket asked to bake in. A
+# tmpfiles.d rule was considered and NOT used: this OS already expresses
+# every other XDG_RUNTIME_DIR-shaped directory (duduclaw-kiosk.service's
+# own /run/duduclaw-kiosk) as a systemd RuntimeDirectory=, and that
+# directive already gives everything XDG requires for free -- mode 0700,
+# correct User=/Group= ownership, tmpfs-backed /run, created before
+# ExecStart and cleaned up after the unit stops -- with no second,
+# redundant directory-lifecycle mechanism to keep in sync with this one.
+# Y4-2's own manual workaround (a `mkdir` under the persistent /var/lib
+# StateDirectory) was a deliberate stopgap specifically to avoid touching
+# this unit file mid-debugging-session; it is superseded here, not
+# preserved, because /run (volatile, spec-correct) is the right home for
+# this, not /var/lib (persistent, meant for actual flatpak/profile state).
+RuntimeDirectory=duduclaw-flatpak-verify
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/duduclaw-flatpak-verify
+Environment=XDG_SESSION_TYPE=wayland
+
+# Same StateDirectory as duduclaw-flatpak-kiosk-verify.service (Y3-2) --
+# deliberately shared, not duplicated: both units are the SAME verify
+# identity operating the SAME named flatpak installation
+# (Path=/var/lib/duduclaw-flatpak-verify, see verify.conf), just launching
+# different apps against it. systemd reference-counts StateDirectory=
+# across units sharing one name; this is supported, not a hack.
+StateDirectory=duduclaw-flatpak-verify
+Environment=HOME=/var/lib/duduclaw-flatpak-verify
+LogsDirectory=duduclaw-steam-kiosk-verify
+
+ExecStart=/usr/local/sbin/duduclaw-steam-kiosk-verify.sh
+# A cold Flathub Steam install + first-run bootstrap under QEMU TCG
+# software rendering is slow by design (task's own "軟渲染慢是預期") --
+# generous timeout, same reasoning as the Chromium verify unit's own.
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

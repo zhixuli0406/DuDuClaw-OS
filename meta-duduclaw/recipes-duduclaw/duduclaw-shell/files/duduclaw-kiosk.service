@@ -43,12 +43,25 @@ Type=simple
 User=duduclaw-kiosk
 Group=duduclaw-kiosk
 
-# RuntimeDirectory=/RuntimeDirectoryMode= create+own /run/duduclaw-kiosk
-# (mode 0700, the XDG Base Directory Specification's own requirement) --
+# RuntimeDirectory=/RuntimeDirectoryMode= create+own /run/duduclaw-kiosk --
 # this is a plain systemd SYSTEM service, not a PAM/logind login session,
 # so nothing else would ever create /run/user/<uid> for it.
+#
+# Mode 0750, not the XDG spec's bare 0700 (Y5-2, widened from Y3-1's
+# original value): a separate, unprivileged system user (e.g.
+# duduclaw-flatpak-verify, the identity Steam/Flatpak apps run as -- see
+# duduclaw-flatpak-kiosk-verify.bb) needs to `connect()` to this directory's
+# Wayland socket as a CLIENT of this compositor, without ever being able to
+# read/create/delete anything else in here itself. Y4-2 verified 0750 +
+# that client's own secondary membership in the `duduclaw-kiosk` group is
+# sufficient for the socket connect to succeed (the D-Bus ownership check
+# that ALSO blocked that same manual session is a completely separate
+# problem, solved on the client side by giving it its own XDG_RUNTIME_DIR
+# instead -- widening this directory's mode does not and should not try to
+# solve that one too). Directory-only exposure, not devices/files:
+# duduclaw-comp itself still owns and creates every file under here.
 RuntimeDirectory=duduclaw-kiosk
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=0750
 Environment=XDG_RUNTIME_DIR=/run/duduclaw-kiosk
 Environment=DUDUCLAW_APPLIANCE=1
 # $HOME comes from the duduclaw-kiosk user's own passwd entry

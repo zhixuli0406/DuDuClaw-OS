@@ -1,0 +1,59 @@
+#!/bin/sh
+# duduclaw-zenity-stub -- installed as .../duduclaw-steam-stubs/zenity.
+#
+# Ticket: Y5-2, layer 4 of the Steam-login-screen verification chain (see
+# duduclaw-steam-kiosk-verify.sh for the other three layers). This is a
+# REAL DECISION, made after reading the actual crashing code, not a guess:
+#
+# What Y4-2 observed: "(zenity:3): Gtk-WARNING: cannot open display:" ->
+# Python subprocess.CalledProcessError, and the whole Steam Flatpak wrapper
+# dying before ever exec'ing the real Steam binary.
+#
+# What this round one-hand-verified in flathub/com.valvesoftware.Steam's
+# actual steam_wrapper.py source: `Message.show()` is the ONLY zenity call
+# site in that wrapper, and it is a bare, hardcoded
+#   subprocess.run(["zenity", "--no-wrap", "--warning", ...], check=True)
+# resolved via PATH -- there is NO `STEAM_ZENITY` environment variable read
+# anywhere in this file. That variable IS real (steam-runtime's own
+# setup.sh/run.sh templates set it via `command -v zenity` for THEIR OWN
+# internal use), but it is not consulted by the specific crash site Y4-2
+# hit, so "just set STEAM_ZENITY" would have done nothing here -- confirmed
+# by reading the source, not assumed from the variable's name looking
+# plausible.
+#
+# Two paths were compared for fixing this for real:
+#   (a) Give zenity a real X11 backend via XWayland. Rejected: duduclaw-comp
+#       (crates/duduclaw-comp/src/main.rs, decor/paint.rs) explicitly
+#       documents "No XWayland support" as a standing architectural
+#       decision, not an oversight -- adding it means a new smithay
+#       Xwayland-server integration (XwmHandler, X11 socket/display
+#       allocation, an Xwayland binary + X11 client libraries in the image)
+#       for a GTK3 warning dialog nobody needs to see. Zero precedent for
+#       this either: even the Debian/appliance line's cage-based kiosk,
+#       which DOES link an xwayland-capable cage build, deliberately runs
+#       Chromium with `--ozone-platform=wayland` specifically to avoid ever
+#       exercising that path (that unit's own comment: "one fewer moving
+#       part"). Neither line has ever actually run an X11 client through
+#       XWayland once.
+#   (b) Since `zenity` is resolved via a bare, unqualified PATH lookup
+#       (execvp semantics) both here AND in steam-runtime's own
+#       `command -v zenity` auto-detection, controlling what "zenity"
+#       resolves to via PATH achieves the same effect the task's own
+#       STEAM_ZENITY hint was reaching for, just through the mechanism that
+#       is actually load-bearing. Chosen: zero image-size cost (a few bytes
+#       of shell script), zero new runtime surface (no Xwayland process,
+#       no X11 libraries), and it degrades safely -- if some OTHER, not-yet-
+#       seen code path inside the real Steam binary also shells out to
+#       "zenity" expecting a working dialog, this stub logs the attempt
+#       (visible via `journalctl`) and exits 0 instead of crashing the
+#       whole client, rather than silently doing nothing.
+#
+# Deliberately NOT installed as a system-wide `flatpak override` -- this
+# stub is only ever exposed into the sandbox via duduclaw-steam-kiosk-
+# verify.sh's own `--filesystem=.../duduclaw-steam-stubs:ro
+# --env=PATH=.../duduclaw-steam-stubs:$PATH` on that ONE `flatpak run`
+# invocation. Least blast radius: some other Flatpak app that legitimately
+# wants a working zenity dialog must never have it silently swallowed by
+# this stub just because it happens to also be installed on this OS.
+logger -t duduclaw-zenity-stub -- "zenity dialog suppressed (no X11/XWayland on this Wayland-only OS): $*" 2>/dev/null || true
+exit 0

@@ -11,19 +11,25 @@
 # Scope (map decision ③, research/native-os-2026-08/flatpak-carrier-2026-08.md):
 # proves the Flatpak/bubblewrap/ostree/polkit chain builds and boots under
 # Yocto, and that a dbus-run-session-wrapped Chromium flatpak run reaches
-# --kiosk under QEMU. It does NOT wire this into duduclaw-kiosk.service --
-# that service (and duduclaw-comp/duduclaw-shell themselves) have no Yocto
-# recipe yet (Y2-3 status table), so there is nothing to wire it into on
-# this line yet. See kas/duduclaw-os.yml's meta-openembedded pin-rationale
-# comment for the exact recipe versions this pulls in.
+# --kiosk under QEMU. As of Y3-2 this did NOT wire into duduclaw-kiosk.service
+# (that service, and duduclaw-comp/duduclaw-shell themselves, had no Yocto
+# recipe yet). STALE AS OF Y3-1/Y4-0/Y5-2: duduclaw-image.bb (required
+# below) now pulls in duduclaw-comp + duduclaw-shell, duduclaw-kiosk.service
+# is real and auto-enabled, and duduclaw-flatpak-kiosk-verify.bb's own
+# duduclaw-steam-kiosk-verify.service (Y5-2) IS a real Wayland client of
+# that kiosk service -- see this recipe's IMAGE_INSTALL comment below and
+# duduclaw-flatpak-kiosk-verify.bb for the up-to-date picture. See
+# kas/duduclaw-os.yml's meta-openembedded pin-rationale comment for the
+# exact recipe versions this pulls in.
 
-SUMMARY = "DuDuClaw OS Flatpak-carriage image (Y3-2) -- Flatpak/bubblewrap/ostree/polkit"
+SUMMARY = "DuDuClaw OS Flatpak-carriage image (Y3-2, extended Y5-2 with Steam/kiosk verification) -- Flatpak/bubblewrap/ostree/polkit"
 DESCRIPTION = "${SUMMARY}. Built on the Y2-3 product image; adds the \
 Flatpak app-carriage chain (decision ③) plus the duduclaw-polkit-flatpak \
-OS-side permission rule, but does not yet include duduclaw-comp/-shell \
-(no Yocto recipe as of Y2-3) or the production duduclaw-kiosk.service \
-wiring -- see meta-duduclaw/recipes-duduclaw/duduclaw-polkit-flatpak/ and \
-the Y3-2 TODO row for exact scope and known follow-up work."
+OS-side permission rule and (Y5-2) the duduclaw-steam-devices udev rule. \
+duduclaw-image.bb (required below) already carries duduclaw-comp/-shell \
+and duduclaw-kiosk.service as of Y3-1/Y4-0 -- see \
+meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-kiosk-verify/ for the \
+Steam-reaches-its-login-screen verification this image now also carries."
 LICENSE = "MIT"
 
 require recipes-core/images/duduclaw-image.bb
@@ -56,6 +62,10 @@ require recipes-core/images/duduclaw-image.bb
 # duduclaw-polkit-flatpak: this layer's own OS-side permission rule (item 4
 # of the Y3-2 ticket) -- see that recipe for the full reasoning on why it
 # does not just reuse flatpak's stock wheel-group rule unchanged.
+#
+# duduclaw-steam-devices (Y5-2): host-side udev rule Steam's Flatpak
+# wrapper's check_device_perms() actually requires (/dev/uinput
+# group=input) -- see that recipe for the full one-hand-verified reasoning.
 IMAGE_INSTALL:append = " \
     dbus \
     flatpak \
@@ -63,6 +73,7 @@ IMAGE_INSTALL:append = " \
     ostree \
     duduclaw-polkit-flatpak \
     duduclaw-flatpak-kiosk-verify \
+    duduclaw-steam-devices \
 "
 
 # IMAGE_FEATURES already carries serial-autologin-root + empty-root-password

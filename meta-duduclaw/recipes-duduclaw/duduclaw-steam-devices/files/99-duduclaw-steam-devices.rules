@@ -1,0 +1,67 @@
+# DuDuClaw OS — Steam/game-controller device access rules.
+#
+# Ticket: Y5-2, formalizing a manual QEMU-session workaround from Y4-2 into
+# a real image mechanism. Y4-2 traced Steam's Flatpak wrapper crash to
+# `steam_wrapper.py`'s `check_device_perms()` (one-hand-verified against
+# flathub/com.valvesoftware.Steam's actual source this round):
+#
+#   uinput_path = Path("/dev/uinput")
+#   has_perms = os.access(uinput_path, os.R_OK | os.W_OK)
+#   if not has_perms: MSG_NO_INPUT_DEV_PERMS.show()   # -> zenity, see below
+#
+# This is a REAL os.access() check, not a "is the steam-devices package
+# installed" heuristic — without a rule that changes /dev/uinput's group
+# ownership, the device stays whatever the kernel's default is (root:root,
+# mode 0600 on a stock `uinput` misc-device registration) regardless of
+# which supplementary groups the calling user has, which is exactly the dead
+# end Y4-2 hit ("即使把 verify 使用者加進 input 群組...也沒有解掉" — true,
+# because nothing had yet told udev to put the DEVICE itself in that group).
+#
+# Upstream reference, one-hand-verified this round:
+# https://github.com/ValveSoftware/steam-devices/blob/master/60-steam-input.rules
+# (the actual content Debian's real `steam-devices` package ships — ~130
+# rules for every controller vendor Valve has ever special-cased). That
+# upstream file uses `TAG+="uaccess"` almost everywhere: udev's builtin ACL
+# mechanism that grants access to whichever user systemd-logind currently
+# has as the ACTIVE SEAT SESSION. THIS distro's kiosk model (duduclaw-
+# kiosk.service, duduclaw-flatpak-kiosk-verify.service) never creates a
+# logind session at all — both are plain systemd system services with a
+# static User=, no PAM/logind login ever happens — so `uaccess` alone would
+# silently grant nobody anything here, the same class of gap
+# duduclaw-polkit-flatpak's own rule file already had to work around for
+# polkit's `subject.active` check. Batocera (Buildroot, same "fixed system
+# user, no seat session" shape as this OS) independently reaches the same
+# conclusion in production: its `99-steam-controller.rules` uses
+# `GROUP="input"` instead of `TAG+="uaccess"` for exactly this reason
+# (research/native-os-2026-08/flatpak-carrier-2026-08.md §4.3, one-hand
+# verified against Batocera's own master branch).
+#
+# Scope decision (deliberately NOT vendoring the full ~130-line upstream
+# list): this milestone's judgment criterion is "Steam client reaches a
+# login screen", which needs exactly ONE rule — /dev/uinput, the one
+# check_device_perms() actually tests. The Valve USB/hidraw vendor rules
+# below cover Valve's own controllers (Steam Controller, Steam Deck, Steam
+# Link) since they are literally what the package is named for and cost
+# nothing extra to carry. Third-party controller support (Xbox/PlayStation/
+# Nintendo/Razer/etc., the bulk of upstream's list) is explicitly OUT of
+# scope here and left as a follow-up for whenever real controller support
+# is a judgment criterion — see the TODO doc's Y5-2 row. Every rule below
+# additionally sets GROUP="input" (not just TAG+="uaccess") so it actually
+# does something under this OS's no-logind kiosk model; the uaccess tag is
+# kept alongside it at zero cost, in case a future logind/seat-based
+# interactive-login mode is ever added to this OS.
+
+# Steam Controller / any uinput-backed virtual gamepad Steam itself creates
+# (SteamInput's "Steam Controller" is a uinput virtual device, not a real
+# USB one) — this is the SPECIFIC device check_device_perms() tests.
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess", OPTIONS+="static_node=uinput"
+
+# Valve USB devices (Steam Controller wireless receiver, Steam Deck, Steam
+# Link, etc. — idVendor 28de is Valve's USB-IF vendor ID).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="28de", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# Valve HID devices over USB hidraw.
+KERNEL=="hidraw*", ATTRS{idVendor}=="28de", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# Valve HID devices over Bluetooth evdev.
+SUBSYSTEM=="input", ATTRS{id/vendor}=="28de", MODE="0660", GROUP="input", TAG+="uaccess"

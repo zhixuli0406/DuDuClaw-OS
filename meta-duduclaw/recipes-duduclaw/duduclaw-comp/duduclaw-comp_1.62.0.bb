@@ -24,9 +24,31 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=87e8e4a396af46e141a08fbc9f1b0455"
 # Rust crate's C library) via its own PACKAGECONFIG[libseat-builtin] split,
 # not a separate recipe. No meta-oe layer addition needed for THIS crate,
 # unlike what was originally suspected before checking.
-DEPENDS = "wayland wayland-protocols-native libinput seatd libdrm mesa libxkbcommon"
+#
+# Y3-1 (2026-08-26) TWO real gaps found by cross-checking this list against
+# crates/duduclaw-comp/BUILD.md's own verified Linux apt dependency list for
+# the full udev/DRM backend ("A4-1: udev/DRM backend" section): `apt-get
+# install pkg-config libwayland-dev libxkbcommon-dev libinput-dev
+# libudev-dev libseat-dev libgbm-dev libdrm-dev`.
+#   (1) `libudev-dev` has no equivalent in the DEPENDS list above at all --
+#       comp's Cargo.lock pulls `udev`/`input`/`input-sys`/`libudev-sys`
+#       (smithay's backend_udev + backend_libinput), all of which need
+#       libudev.h/.pc at build time. On oe-core, libudev ships as a
+#       PACKAGES_DYNAMIC split OF THE `systemd` RECIPE itself (verified:
+#       systemd_259.5.bb's `PACKAGES_DYNAMIC += "^lib(udev|systemd|nss).*"`
+#       -- there is no separate standalone `udev`/`eudev` recipe pulled into
+#       this build), so the fix is `DEPENDS += "systemd"`, not a
+#       udev-named package.
+#   (2) `inherit pkgconfig` was entirely missing. Without it, cross-compile
+#       PKG_CONFIG_PATH/pkgconfig-native wiring isn't set up the standard OE
+#       way, and every one of comp's *-sys build.rs scripts that shells out
+#       to `pkg-config` (wayland-sys, xkbcommon-dl, libseat-sys,
+#       libudev-sys, gbm-sys, drm-sys) would fail the same way
+#       duduclaw-cli_1.62.0.bb's own comment documents openssl-sys failing
+#       for the identical reason ("pkg-config command could not be found").
+DEPENDS = "wayland wayland-protocols-native libinput seatd libdrm mesa libxkbcommon systemd"
 
-inherit cargo cargo-update-recipe-crates
+inherit cargo cargo-update-recipe-crates pkgconfig
 
 # See duduclaw-sysd's recipe for why S is UNPACKDIR- not WORKDIR-relative.
 SRC_URI = "file://duduclaw-comp-src"

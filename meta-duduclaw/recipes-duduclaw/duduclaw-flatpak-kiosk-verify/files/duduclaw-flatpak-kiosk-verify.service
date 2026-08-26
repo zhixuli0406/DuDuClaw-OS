@@ -1,0 +1,49 @@
+[Unit]
+Description=DuDuClaw OS Y3-2 verification: Flatpak Chromium kiosk (dbus-run-session, no logind)
+# Best-effort ordering only: the script itself tolerates the gateway not
+# being up yet at the --dump-dom step (that specific case is caught and
+# reported as a distinct FAIL line, not silently misread as a different
+# failure) -- After=/Wants= just make the common case not race for nothing.
+#
+# NOT auto-started at boot (SYSTEMD_AUTO_ENABLE = "disable" in the recipe,
+# same convention polkit's own .service uses) -- this is a one-shot
+# diagnostic an operator runs on demand (`systemctl start
+# duduclaw-flatpak-kiosk-verify.service`), not a permanent boot-time gate.
+# A live multi-GB Flathub download does not belong on the critical path to
+# multi-user.target on every single boot.
+After=network-online.target duduclaw-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Runs as an UNPRIVILEGED member of the "duduclaw" group, not root -- this
+# is deliberate and load-bearing, not an oversight: the whole point of this
+# unit is to exercise duduclaw-polkit-flatpak's `subject.isInGroup
+# ("duduclaw")` polkit rule for real. A root-run test would not touch that
+# code path the same way (root's own privilege can shadow whether the
+# polkit rule is doing anything at all) and would prove nothing about
+# "agent 裝 app 操作面" (Y3-2 ticket item 4). See the recipe's own
+# useradd comment for why this identity, not the real gateway account,
+# exists on this image today.
+User=duduclaw-flatpak-verify
+Group=duduclaw
+# systemd creates/chowns this before ExecStart runs (mode 0700, owned by
+# User=/Group= above) -- avoids any do_install-time ownership ordering
+# question against a user that useradd.bbclass creates at rootfs
+# construction time, not recipe do_install time. Expands to
+# /var/lib/duduclaw-flatpak-verify, matching files/verify.conf's
+# Path= and the script's INSTALL_PATH.
+StateDirectory=duduclaw-flatpak-verify
+# Same reasoning as StateDirectory -- plain /var/log is root:root 0755, an
+# unprivileged User= cannot write RESULT_FILE there. Expands to
+# /var/log/duduclaw-flatpak-kiosk-verify/, matching the script's
+# RESULT_FILE.
+LogsDirectory=duduclaw-flatpak-kiosk-verify
+ExecStart=/usr/local/sbin/duduclaw-flatpak-kiosk-verify.sh
+# Never blocks boot and never crash-loops: this is a diagnostic, not a
+# service other units depend on.
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

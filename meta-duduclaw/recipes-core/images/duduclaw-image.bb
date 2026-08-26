@@ -52,3 +52,35 @@ IMAGE_FEATURES += "serial-autologin-root empty-root-password"
 # no gateway binary in the image to begin with. Caught by actually trying
 # the boot verification, not by re-reading the recipe.
 IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
+
+# --- "開機即殼" (Y3-1, 2026-08-25) -------------------------------------
+# duduclaw-comp (compositor) + duduclaw-shell (its client, which also
+# carries duduclaw-kiosk.service/duduclaw-kiosk-launch.sh -- see that
+# recipe's own comment for why the systemd unit lives there and not on
+# duduclaw-comp: comp is a plain subprocess of the kiosk launch script, not
+# an independently systemd-managed unit, matching the Debian appliance
+# line's `run_comp_session` shape).
+#
+# mesa-megadriver / mesa-vulkan-drivers are explicit, not left to automatic
+# shlib RDEPENDS resolution: comp/shell link against libgbm.so/libEGL.so/
+# libvulkan.so (caught by the normal ELF NEEDED-based auto-RDEPENDS
+# mechanism), but the actual GPU/software-rendering backend drivers
+# (llvmpipe, virtio_gpu, the vulkan gfxstream ICD) are dlopen()'d at
+# runtime, not linked -- invisible to that mechanism entirely. mesa.inc
+# does RRECOMMENDS mesa-megadriver from libgl-mesa/libegl-mesa
+# automatically (verified: meta/recipes-graphics/mesa/mesa.inc's
+# `d.appendVar("RRECOMMENDS:" + fullp, " ${MLPREFIX}mesa-megadriver" +
+# suffix)`), which would likely pull it in anyway, but this is listed
+# explicitly rather than depended on implicitly for the same reason this
+# repo's other image recipes prefer explicit installs over relying on
+# RRECOMMENDS being honored.
+#
+# xkeyboard-config is added explicitly too: libxkbcommon (comp/shell's
+# keymap compiler, DEPENDS'd at build time by both recipes) needs the
+# actual XKB rules/layouts data files under ${datadir}/X11/xkb at RUNTIME
+# to compile any keymap at all -- without this package the library itself
+# is present and links fine, but every keyboard event fails to resolve to
+# a keysym (confirmed present as its own oe-core recipe,
+# recipes-graphics/xorg-lib/xkeyboard-config_2.47.bb -- not a guessed
+# package name).
+IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers xkeyboard-config"

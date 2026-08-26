@@ -1,0 +1,81 @@
+/*
+ * DuDuClaw OS — Flatpak SystemHelper polkit rule for the duduclaw agent
+ * service account.
+ *
+ * Ticket: Y3-2 "Flatpak 承載實裝第一里程" — see
+ *   commercial/docs/MAP-agent-native-os-2026-08.md (decision ③)
+ *   research/native-os-2026-08/flatpak-carrier-2026-08.md §5
+ *
+ * WHY THIS EXISTS INSTEAD OF flatpak's OWN org.freedesktop.Flatpak.rules:
+ * flatpak ships its own default polkit rule (system-helper/
+ * org.freedesktop.Flatpak.rules.in, meson-configured with a
+ * `privileged_group` option that defaults to "wheel"). That upstream rule
+ * additionally requires `subject.active == true && subject.local == true`.
+ * Those two fields come from polkit's session-tracking backend (logind/
+ * ConsoleKit/elogind) resolving a login session for the calling PID.
+ * DuDuClaw OS's gateway/agent process runs as a plain systemd system
+ * service (User=duduclaw, appliance/postinst.d/20-users-and-units.sh),
+ * NOT through a logind login session — logind itself is masked for the
+ * kiosk session too (see the Flatpak-carrier research spike §2.1). This is
+ * the exact same shape of gap already hit and documented for
+ * NetworkManager's polkit rules in DESIGN-network-settings-2026-08.md
+ * ("NM 的 17 條細粒度 polkit 在我們無 logind session 的架構下用不到 —
+ * Debian 放行規則要求 subject.active").
+ *
+ * A rule keyed on subject.active/.local would silently never match our
+ * agent account. Per this project's "security gates fail closed"
+ * convention (CLAUDE.md #4), a rule that silently never grants isn't a
+ * safe default EITHER — it would make even flatpak's own documented
+ * "updates are free" claim (org.freedesktop.Flatpak.policy's
+ * <allow_active>yes</allow_active> on app-update/runtime-update/
+ * update-remote/...) silently fall back to auth_admin, breaking
+ * unattended updates in exactly the way flatpak's own upstream comment
+ * warns against ("changing this to anything other than yes will break
+ * unattended updates"). So this rule drops the active/local check
+ * entirely and gates purely on group membership — the same shape as
+ * meta-oe's own example, meta-oe/recipes-extended/polkit/
+ * polkit-group-rule-network.bb's 50-org.freedesktop.NetworkManager.rules
+ * (`subject.isInGroup("network")`, no session check at all). That is the
+ * OFFICIAL alternate pattern meta-oe ships for exactly this situation —
+ * not an invented workaround.
+ *
+ * GROUP CHOICE: "duduclaw" is the EXISTING primary group of the gateway/
+ * agent service account (`useradd -r -g duduclaw -G netdev -u 1000 ...
+ * duduclaw`, appliance/postinst.d/20-users-and-units.sh) — reused here
+ * rather than inventing a new group, matching the task instruction "wheel
+ * 免密碼範例改寫給 duduclaw 使用者". No other local account shares this
+ * group (duduclaw-kiosk, the display-session user, has its own separate
+ * group), so this rule's blast radius is exactly the gateway process.
+ *
+ * SCOPE (honest, not silently narrowed): this is OS-side permission
+ * plumbing only — it makes `flatpak install/update/uninstall` *callable*
+ * without an interactive polkit-agent password prompt for processes
+ * running as the duduclaw group (there is no polkit authentication agent
+ * registered in this headless architecture anyway, so auth_admin actions
+ * would otherwise be permanently uncallable, not just inconvenient). It
+ * does NOT implement any DuDuClaw-side approval gate (ApprovalBroker /
+ * capability_request) in front of *when* the agent decides to call it —
+ * that is explicitly out of scope for this ticket ("不做 MCP 工具，只鋪
+ * OS 側權限地基") and is tracked as follow-up work; the intended shape is
+ * an MCP tool wrapping flatpak invocations behind capability_request,
+ * analogous to the existing PORTICO task-scoped grants pattern.
+ */
+
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.Flatpak.") != 0) {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    // Never touch the one action flatpak's own policy.in hard-codes to
+    // AUTH_ADMIN unconditionally (parental-controls override) — leave that
+    // to upstream's own stricter default instead of re-deciding it here.
+    if (action.id == "org.freedesktop.Flatpak.override-parental-controls") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    if (subject.isInGroup("duduclaw")) {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

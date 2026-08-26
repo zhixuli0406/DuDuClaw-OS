@@ -1,0 +1,67 @@
+# DuDuClaw OS kiosk session -- duduclaw-comp (Wayland compositor) +
+# duduclaw-shell (its sole client). Y3-1 "開機即殼" MVP: unlike the Debian
+# `appliance/` line's duduclaw-kiosk.service (mkosi.extra/etc/systemd/
+# system/duduclaw-kiosk.service), this unit is deliberately narrower --
+# no ExecCondition= display-detection gate (QEMU's virtio-gpu is always
+# "attached", and real-hardware headless-vs-display handling is not this
+# milestone's judgment criterion), no cage/Chromium fallback ladder (no cage
+# or chromium recipe exists in this image), no fcitx5/D-Bus-session-bus/
+# PipeWire wiring (all explicit Y3-1 gaps, see meta-duduclaw/README.md and
+# the TODO doc's Y3-1 entry -- comp+shell only, matching the judgment①②
+# scope: "Yocto image 開機直接進 duduclaw-comp+duduclaw-shell 的原生桌面").
+#
+# Device access chain -- verified against THIS distro's actual seatd
+# package, not copied from the Debian line's assumptions: oe-core's
+# seatd_0.9.3.bb installs seatd's UPSTREAM systemd unit + `GROUPADD_PARAM =
+# "-r seat"` (Debian patches this to `-g video`; upstream does not) -- see
+# duduclaw-shell_1.62.0.bb's own USERADD_PARAM comment for the group
+# divergence this drives. seatd opens the DRM "card" device as root and
+# hands the fd to duduclaw-comp over its libseat control socket; comp/shell
+# never need direct filesystem permission on /dev/dri/card*. `render` group
+# membership is separately required for direct /dev/dri/renderD* opens
+# (wgpu's GPU process path, same reasoning as the Debian line's Chromium
+# GPU process).
+#
+# Restart=always, not on-failure -- W5-1/D9-bug8 lesson from the Debian
+# line, carried forward deliberately: a kiosk session that exits 0 because
+# its Wayland connection was torn down from underneath it (comp crash, comp
+# forcibly disconnecting a misbehaving client) is not a "successful" exit
+# in any sense that should stop restart attempts. See
+# appliance/mkosi.extra/etc/systemd/system/duduclaw-kiosk.service's own
+# D9-bug8 comment for the full root-cause chain this generalizes from.
+[Unit]
+Description=DuDuClaw kiosk session (duduclaw-comp + duduclaw-shell)
+After=seatd.service systemd-udev-settle.service duduclaw-gateway.service getty@tty1.service
+Requires=seatd.service
+Wants=duduclaw-gateway.service
+Conflicts=getty@tty1.service
+StartLimitIntervalSec=300
+StartLimitBurst=8
+
+[Service]
+Type=simple
+User=duduclaw-kiosk
+Group=duduclaw-kiosk
+
+# RuntimeDirectory=/RuntimeDirectoryMode= create+own /run/duduclaw-kiosk
+# (mode 0700, the XDG Base Directory Specification's own requirement) --
+# this is a plain systemd SYSTEM service, not a PAM/logind login session,
+# so nothing else would ever create /run/user/<uid> for it.
+RuntimeDirectory=duduclaw-kiosk
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/duduclaw-kiosk
+Environment=DUDUCLAW_APPLIANCE=1
+# $HOME comes from the duduclaw-kiosk user's own passwd entry
+# (-d /data/duduclaw-kiosk, set via USERADD_PARAM in duduclaw-shell's own
+# recipe) -- one source of truth, same convention the Debian line's unit
+# uses.
+
+ExecStart=/usr/sbin/duduclaw-kiosk-launch.sh
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

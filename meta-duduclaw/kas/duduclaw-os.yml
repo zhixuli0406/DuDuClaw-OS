@@ -48,6 +48,63 @@
 # meta-duduclaw/README.md "UKI 接通紀錄" for the exact config this class
 # needs (lifted directly from oe-core's own CI selftest,
 # meta/lib/oeqa/selftest/cases/uki.py, not guessed).
+#
+# --- meta-openembedded/meta-oe pin (Y3-2, 2026-08-25) ----------------------
+# Added for Flatpak app carriage (map decision ③) — flatpak / bubblewrap /
+# ostree / (base) xdg-desktop-portal all live in meta-oe, confirmed by
+# directly walking git.openembedded.org/meta-openembedded's cgit tree at the
+# commit pinned below, not by trusting the research doc's table blind:
+#   meta-oe/recipes-extended/flatpak/flatpak_1.17.6.bb
+#   meta-oe/recipes-security/bubblewrap/bubblewrap_0.11.2.bb
+#   meta-oe/recipes-extended/ostree/ostree_2026.1.bb
+#   meta-oe/recipes-support/xdg-desktop-portal/xdg-desktop-portal_1.20.4.bb
+#   meta-oe/recipes-extended/polkit/polkit_127.bb
+# No other meta-openembedded sublayer (meta-gnome/meta-filesystems/...) is
+# needed for this set — meta-oe/conf/layer.conf declares
+# `LAYERDEPENDS_openembedded-layer = "core"` only, and all five recipes
+# above resolve inside meta-oe itself. meta-gnome only carries the
+# xdg-desktop-portal-gtk/-gnome *backend* implementations, which the
+# research spike (flatpak-carrier-2026-08.md §2.2) proved are NOT required
+# for the kiosk path — Chromium ran with zero portal backends installed.
+#
+# CORRECTION found by actually running `bitbake -e` (Y3-2, same day): the
+# xdg-desktop-portal RECIPE resolves fine from meta-oe as listed above, but
+# it does NOT build with meta-oe alone — its DEPENDS is unconditionally
+# "... libportal geoclue pipewire fuse3 ..." (no PACKAGECONFIG to drop
+# pipewire), and `pipewire` itself lives in meta-multimedia, a sublayer
+# this pin deliberately does NOT add. duduclaw-image-flatpak.bb therefore
+# does NOT install xdg-desktop-portal for now — see that recipe's own
+# comment (same reasoning: the research spike already proved it's not
+# needed for the kiosk path this milestone cares about). meta-oe having
+# the recipe was never wrong; "meta-oe alone is sufficient to BUILD it" was
+# the assumption this correction narrows.
+#
+# Branch choice: "wrynose", NOT "master". This is a real correction to the
+# research doc's own table (which read flatpak's version off master —
+# 1.18.0 — without checking whether master is safe to mix with our
+# wrynose-pinned oe-core/meta-yocto). Direct check: meta-oe's wrynose-branch
+# layer.conf declares `LAYERSERIES_COMPAT_openembedded-layer = "whinlatter
+# wrynose"` — it does NOT list whatever series master currently targets, so
+# pulling meta-oe from master alongside an oe-core pinned to the wrynose
+# release tag risks exactly the kind of "poky combo repo" version-skew trap
+# Y1-1 already got burned by once (see this file's header above). wrynose
+# only has flatpak 1.17.6, not 1.18.0 — but that is NOT a security
+# regression: flatpak_1.17.6.bb's own CVE_STATUS lines read
+# `CVE-2026-34078/34079 = "fixed-version: fixed in v1.17.4"` — both CVEs
+# the research doc credited to 1.18.0 were already fixed two point-releases
+# earlier. Staying on the LAYERSERIES-matched branch costs nothing here.
+#
+# Commit (not a floating branch pin, matching this file's own convention):
+# HEAD of meta-openembedded's wrynose branch as of 2026-08-25, cross-checked
+# two ways — cgit `/commit/?id=...` returned HTTP 200 with a real commit
+# (not a 404 typo), AND all five recipe paths above were independently
+# fetched (HTTP 200, `?id=<this commit>`) at this exact commit, not just at
+# a floating `?h=wrynose` that could have moved between the two checks.
+#   meta-openembedded  6bf0d8ad57b33950bab4c7f6c037e1ccb6f6e2eb
+#
+# DISTRO_FEATURES "polkit" is turned on in duduclaw-os.conf to satisfy
+# flatpak/xdg-desktop-portal/polkit's own REQUIRED_DISTRO_FEATURES gates —
+# see that file's comment for why "wayland"/"pam" stay off for now.
 
 header:
   version: 14
@@ -80,6 +137,15 @@ repos:
     layers:
       meta-poky:
       meta-yocto-bsp:
+
+  meta-openembedded:
+    url: https://git.openembedded.org/meta-openembedded
+    commit: 6bf0d8ad57b33950bab4c7f6c037e1ccb6f6e2eb
+    # Only meta-oe is needed (see the pin-rationale comment above) — the
+    # other sublayers (meta-gnome/meta-filesystems/meta-python/...) are
+    # deliberately NOT added, keeping BBFILE_COLLECTIONS/parse time down.
+    layers:
+      meta-oe:
 
   # This layer. No url — kas treats a repo with no `url` as already checked
   # out at `path` relative to $KAS_WORK_DIR (repo root when kas is invoked

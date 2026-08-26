@@ -81,39 +81,91 @@ if ! flatpak --installation="$INSTALLATION" remotes >/dev/null 2>&1; then
 fi
 record "PASS named-installation-registered"
 
-# ── Flathub remote (network path — the ticket explicitly allows 側載或網路
-# for this milestone; the offline-sideload replacement path is a SEPARATE,
-# already-answered question, see the Y3-2 handoff notes for the sideload-
-# repos finding) ──────────────────────────────────────────────────────────
-if ! flatpak --installation="$INSTALLATION" remote-list | grep -qw flathub; then
-    log "adding flathub remote"
-    if ! flatpak --installation="$INSTALLATION" remote-add --if-not-exists \
-        flathub https://flathub.org/repo/flathub.flatpakrepo 2>&1 | tee -a "$RESULT_FILE" >&2; then
-        record "FAIL remote-add-flathub"
-        exit 1
+# ── Offline preload repo (Y6-3) ──────────────────────────────────────────
+# meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-offline-repo/ bakes a
+# pre-normalized OSTree repo into this fixed path at IMAGE BUILD time (see
+# that recipe + its own gen-flatpak-offline-repo.sh, sitting next to the
+# .bb file, for how it is produced: a real Flathub pull, ref-promoted from
+# `<remote>:<ref>` remote-tracking form to real head refs, then
+# `flatpak build-update-repo` — the exact replacement validated in
+# research/native-os-2026-08/flatpak-carrier-2026-08.md §2.3/§2.4 for the
+# (confirmed still-broken as of flatpak 1.16.6 AND 1.18.1, see the Y3-2
+# handoff notes' "sid-test" spike) sideload-repos mechanism, which never
+# actually falls back to local content — it always tries summary.idx over
+# the network first and gives up instead of looking at sideload dirs).
+# This is tried BEFORE the network flathub remote below, as an ordinary
+# second `file://` remote on the SAME named installation — a real machine
+# with zero network at first boot still gets a working Chromium kiosk
+# fallback out of this. `gpg-verify-summary=false` because this repo's
+# summary is regenerated locally (unsigned); individual commit objects are
+# still whatever GPG state they carried from the original Flathub pull —
+# see the offline-repo recipe's own header for the honest "not positively
+# verified" caveat carried over from the research doc's §6 item 3.
+OFFLINE_REPO_DIR=/opt/duduclaw-flatpak-offline-repo
+offline_used=0
+if [[ -d "$OFFLINE_REPO_DIR/objects" ]]; then
+    if ! flatpak --installation="$INSTALLATION" remote-list | grep -qw flathub-offline; then
+        log "adding flathub-offline remote ($OFFLINE_REPO_DIR)"
+        flatpak --installation="$INSTALLATION" remote-add --if-not-exists \
+            --gpg-verify-summary=false \
+            flathub-offline "file://$OFFLINE_REPO_DIR" 2>&1 | tee -a "$RESULT_FILE" >&2
     fi
-fi
-record "PASS flathub-remote-present"
-
-# ── Disk-safety gate before a multi-GB live download ────────────────────
-free_kb=$(df -Pk "$INSTALL_PATH" | awk 'NR==2 {print $4}')
-if [[ -z "$free_kb" || "$free_kb" -lt "$MIN_FREE_KB_FOR_CHROMIUM" ]]; then
-    record "SKIP chromium-install-disk-budget free_kb=${free_kb:-unknown} floor_kb=$MIN_FREE_KB_FOR_CHROMIUM"
-    record "PARTIAL — see result file: mechanism (D-Bus + named install + remote) verified, live Chromium fetch skipped for disk safety"
-    exit 0
-fi
-record "PASS disk-budget free_kb=$free_kb"
-
-# ── Install (or reuse) the app ───────────────────────────────────────────
-if ! flatpak --installation="$INSTALLATION" info "$APP_ID" >/dev/null 2>&1; then
-    log "installing $APP_ID (this downloads real content — see disk-budget gate above)"
-    if ! flatpak --installation="$INSTALLATION" install -y --noninteractive \
-        flathub "$APP_ID" 2>&1 | tee -a "$RESULT_FILE" >&2; then
-        record "FAIL flatpak-install $APP_ID"
-        exit 1
+    if flatpak --installation="$INSTALLATION" remote-list | grep -qw flathub-offline; then
+        record "PASS flathub-offline-remote-present"
+        if flatpak --installation="$INSTALLATION" info "$APP_ID" >/dev/null 2>&1; then
+            record "PASS flatpak-install-offline $APP_ID (already present)"
+            offline_used=1
+        else
+            log "installing $APP_ID from offline repo (zero network, local copy only)"
+            if flatpak --installation="$INSTALLATION" install -y --noninteractive \
+                flathub-offline "$APP_ID" 2>&1 | tee -a "$RESULT_FILE" >&2; then
+                record "PASS flatpak-install-offline $APP_ID"
+                offline_used=1
+            else
+                record "FAIL flatpak-install-offline $APP_ID (falling back to network path below)"
+            fi
+        fi
+    else
+        record "FAIL remote-add-flathub-offline (falling back to network path below)"
     fi
+else
+    record "SKIP flathub-offline-repo-absent path=$OFFLINE_REPO_DIR"
 fi
-record "PASS flatpak-install $APP_ID"
+
+if [[ "$offline_used" -ne 1 ]]; then
+    # ── Flathub remote (network path — the ticket explicitly allows 側載或網路
+    # for this milestone; only reached when the offline repo above is absent
+    # or failed) ─────────────────────────────────────────────────────────
+    if ! flatpak --installation="$INSTALLATION" remote-list | grep -qw flathub; then
+        log "adding flathub remote"
+        if ! flatpak --installation="$INSTALLATION" remote-add --if-not-exists \
+            flathub https://flathub.org/repo/flathub.flatpakrepo 2>&1 | tee -a "$RESULT_FILE" >&2; then
+            record "FAIL remote-add-flathub"
+            exit 1
+        fi
+    fi
+    record "PASS flathub-remote-present"
+
+    # ── Disk-safety gate before a multi-GB live download ────────────────
+    free_kb=$(df -Pk "$INSTALL_PATH" | awk 'NR==2 {print $4}')
+    if [[ -z "$free_kb" || "$free_kb" -lt "$MIN_FREE_KB_FOR_CHROMIUM" ]]; then
+        record "SKIP chromium-install-disk-budget free_kb=${free_kb:-unknown} floor_kb=$MIN_FREE_KB_FOR_CHROMIUM"
+        record "PARTIAL — see result file: mechanism (D-Bus + named install + remote) verified, live Chromium fetch skipped for disk safety"
+        exit 0
+    fi
+    record "PASS disk-budget free_kb=$free_kb"
+
+    # ── Install (or reuse) the app ───────────────────────────────────────
+    if ! flatpak --installation="$INSTALLATION" info "$APP_ID" >/dev/null 2>&1; then
+        log "installing $APP_ID (this downloads real content — see disk-budget gate above)"
+        if ! flatpak --installation="$INSTALLATION" install -y --noninteractive \
+            flathub "$APP_ID" 2>&1 | tee -a "$RESULT_FILE" >&2; then
+            record "FAIL flatpak-install $APP_ID"
+            exit 1
+        fi
+    fi
+    record "PASS flatpak-install $APP_ID"
+fi
 
 # ── --kiosk launch against the real dashboard ────────────────────────────
 # --headless=new/--disable-gpu/--no-sandbox: this milestone has no

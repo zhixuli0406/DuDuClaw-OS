@@ -1,0 +1,104 @@
+==> [1/6] apt-get install flatpak/ostree/gnupg/curl
+Flatpak 1.16.6
+libostree:
+==> [2/6] named installation + flathub remote
+flathub	Flathub	https://dl.flathub.org/repo/	-	-	-	1		Central repository of Flatpak applications	Central repository of Flatpak applications	https://flathub.org/	https://dl.flathub.org/repo/logo.svg
+==> [3/6] flatpak install (real network fetch, this is the ONLY step that needs network)
+Installing runtime/org.chromium.Chromium.Codecs/x86_64/stable
+Installing runtime/org.chromium.Chromium.Locale/x86_64/stable
+Installing runtime/org.freedesktop.Platform.GL.default/x86_64/25.08
+Installing runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra
+Installing runtime/org.freedesktop.Platform.Locale/x86_64/25.08
+Installing runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra
+Installing runtime/org.freedesktop.Platform/x86_64/25.08
+Installing app/org.chromium.Chromium/x86_64/stable
+bwrap: Creating new namespace failed: Operation not permitted
+bwrap: Creating new namespace failed: Operation not permitted
+bwrap: Creating new namespace failed: Operation not permitted
+
+real	0m37.712s
+user	0m19.027s
+sys	0m12.727s
+Chromium Web Browser	The web browser from Chromium project	org.chromium.Chromium	151.0.7922.169	stable	x86_64	flathub	system (gen)	org.chromium.Chromium/x86_64/stable	4041dfe264e3	-	461.7?MB	current
+Codecs		org.chromium.Chromium.Codecs		stable	x86_64	flathub	system (gen)	org.chromium.Chromium.Codecs/x86_64/stable	fabba0fd43f1	-	2.7?MB	runtime
+Freedesktop Platform	Runtime platform for applications	org.freedesktop.Platform	freedesktop-sdk-25.08.16	25.08	x86_64	flathub	system (gen)	org.freedesktop.Platform/x86_64/25.08	bd44a6230581	-	659.9?MB	runtime
+Mesa	Mesa - The 3D Graphics Library	org.freedesktop.Platform.GL.default	26.1.6	25.08	x86_64	flathub	system (gen)	org.freedesktop.Platform.GL.default/x86_64/25.08	bcfd828b0c47	-	457.0?MB	runtime
+Mesa (Extra)	Mesa - The 3D Graphics Library	org.freedesktop.Platform.GL.default	26.1.6	25.08-extra	x86_64	flathub	system (gen)	org.freedesktop.Platform.GL.default/x86_64/25.08-extra	37b03bfd8827	-	457.1?MB	runtime
+Codecs Extra Extension	This extension contains patent-restricted codecs not shipped in Platform	org.freedesktop.Platform.codecs-extra		25.08-extra	x86_64	flathub	system (gen)	org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra	3f422b5306e0	-	43.4?MB	runtime
+==> [4/6] ref normalization: remote-tracking refs -> real head refs
+deploy/app/org.chromium.Chromium/x86_64/stable
+deploy/runtime/org.chromium.Chromium.Codecs/x86_64/stable
+deploy/runtime/org.chromium.Chromium.Locale/x86_64/stable
+deploy/runtime/org.freedesktop.Platform.GL.default/x86_64/25.08
+deploy/runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra
+deploy/runtime/org.freedesktop.Platform.Locale/x86_64/25.08
+deploy/runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra
+deploy/runtime/org.freedesktop.Platform/x86_64/25.08
+flathub:app/org.chromium.Chromium/x86_64/stable
+flathub:runtime/org.chromium.Chromium.Codecs/x86_64/stable
+flathub:runtime/org.chromium.Chromium.Locale/x86_64/stable
+flathub:runtime/org.freedesktop.Platform.GL.default/x86_64/25.08
+flathub:runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra
+flathub:runtime/org.freedesktop.Platform.Locale/x86_64/25.08
+flathub:runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra
+flathub:runtime/org.freedesktop.Platform/x86_64/25.08
+    create app/org.chromium.Chromium/x86_64/stable -> 4041dfe264e3ee0c8b774c7a73580c88ae211d134d29845685806439812e7ce1
+    create runtime/org.chromium.Chromium.Codecs/x86_64/stable -> fabba0fd43f18a727c74cc7bb0247b72ff136ac361f5bdf66573571481885f6d
+    create runtime/org.chromium.Chromium.Locale/x86_64/stable -> dac4fa98a1b2f6cd54c8c98fcccffa6906a8da912b7c59c717cef5e51ef522b3
+    create runtime/org.freedesktop.Platform.GL.default/x86_64/25.08 -> bcfd828b0c4739753cadb31964f8c1b0f90c8d2bed79bda2c2760438eb48c4b3
+    create runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra -> 37b03bfd88271f49ba6eaa00c07155716870497c66759972bc81d67153e35138
+    create runtime/org.freedesktop.Platform.Locale/x86_64/25.08 -> 084eff7344f995ade230f234d74e3ee0af227eacff65f2d72cec25078783b03f
+    create runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra -> 3f422b5306e0c1a1c6855fb36eeff26237d9d9c9a0abcb6d35bd9555ea75efed
+    create runtime/org.freedesktop.Platform/x86_64/25.08 -> bd44a6230581917d04f89812a4c21090c304d390edb73995af1c2f9fd8abf4e8
+-- refs after normalization --
+app/org.chromium.Chromium/x86_64/stable
+deploy/app/org.chromium.Chromium/x86_64/stable
+deploy/runtime/org.chromium.Chromium.Codecs/x86_64/stable
+deploy/runtime/org.chromium.Chromium.Locale/x86_64/stable
+deploy/runtime/org.freedesktop.Platform.GL.default/x86_64/25.08
+deploy/runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra
+deploy/runtime/org.freedesktop.Platform.Locale/x86_64/25.08
+deploy/runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra
+deploy/runtime/org.freedesktop.Platform/x86_64/25.08
+flathub:app/org.chromium.Chromium/x86_64/stable
+flathub:runtime/org.chromium.Chromium.Codecs/x86_64/stable
+flathub:runtime/org.chromium.Chromium.Locale/x86_64/stable
+flathub:runtime/org.freedesktop.Platform.GL.default/x86_64/25.08
+flathub:runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra
+flathub:runtime/org.freedesktop.Platform.Locale/x86_64/25.08
+flathub:runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra
+flathub:runtime/org.freedesktop.Platform/x86_64/25.08
+runtime/org.chromium.Chromium.Codecs/x86_64/stable
+runtime/org.chromium.Chromium.Locale/x86_64/stable
+runtime/org.freedesktop.Platform.GL.default/x86_64/25.08
+runtime/org.freedesktop.Platform.GL.default/x86_64/25.08-extra
+runtime/org.freedesktop.Platform.Locale/x86_64/25.08
+runtime/org.freedesktop.Platform.codecs-extra/x86_64/25.08-extra
+runtime/org.freedesktop.Platform/x86_64/25.08
+==> [5/6] flatpak build-update-repo (generates servable summary, no GPG sign)
+Updating appstream branch
+Updating summary
+-rw-r--r-- 1 root root 9443 Aug 26 08:44 /srv/flatpak-gen/repo/summary
+==> [6/6] size measurement + package
+-- repo dir size (uncompressed, this is the real 'Chromium runtime' disk cost) --
+2.4G	/srv/flatpak-gen/repo
+2.3G	/srv/flatpak-gen/repo/objects
+12M	/srv/flatpak-gen/repo/tmp
+340K	/srv/flatpak-gen/repo/refs
+20K	/srv/flatpak-gen/repo/summaries
+12K	/srv/flatpak-gen/repo/summary
+4.0K	/srv/flatpak-gen/repo/summary.idx
+4.0K	/srv/flatpak-gen/repo/state
+4.0K	/srv/flatpak-gen/repo/flathub.trustedkeys.gpg
+4.0K	/srv/flatpak-gen/repo/extensions
+4.0K	/srv/flatpak-gen/repo/config
+/srv/out/duduclaw-flatpak-offline-repo.tar : 24.72%   (  2.27 GiB =>    575 MiB, /srv/out/duduclaw-flatpak-offline-repo.tar.zst) 
+23dae56d4d360341e13fd85db57c7a92dbdbbac40facbc8245779a48631e76d3  /srv/out/duduclaw-flatpak-offline-repo.tar.zst
+total 589856
+drwxr-xr-x 5 root root       160 Aug 26 08:50 .
+drwxr-xr-x 1 root root      4096 Aug 26 08:43 ..
+-rw-r--r-- 1 root root 603249333 Aug 26 08:44 duduclaw-flatpak-offline-repo.tar.zst
+-rw-r--r-- 1 root root       113 Aug 26 08:50 duduclaw-flatpak-offline-repo.tar.zst.sha256
+-rw-r--r-- 1 root root      6851 Aug 26 08:50 gen.log
+==> DONE
+EXIT_CODE=0

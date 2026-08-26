@@ -1,0 +1,47 @@
+From: DuDuClaw OS Y6-1 (2026-08-26)
+Subject: log.cpp: fmt::localtime() was removed from fmt's public API
+
+Real do_compile failure caught building fcitx5 5.1.12 against oe-core's
+pinned fmt 12.1.0 (openembedded-core/meta/recipes-devtools/fmt/
+fmt_12.1.0.bb): "error: 'localtime' is not a member of 'fmt'". fcitx5
+5.1.12 predates fmt's removal of the fmt::localtime()/fmt::gmtime() public
+helpers -- confirmed by grepping the actual staged
+include/fmt/chrono.h that this build produces (no `localtime` symbol
+anywhere in it), not by trusting fmt's changelog alone. fmt still supports
+formatting a plain std::tm directly via its own
+`formatter<std::tm, Char>` specialization (same header, unchanged), so
+this computes the std::tm with the same POSIX thread-safe conversion
+(localtime_r) fmt::localtime used internally.
+
+Upstream-Status: Pending [not yet submitted to fcitx/fcitx5]
+Signed-off-by: DuDuClaw OS Y6-1
+
+--- a/src/lib/fcitx-utils/log.cpp
++++ b/src/lib/fcitx-utils/log.cpp
+@@ -23,6 +23,7 @@
+ 
+ #if FMT_VERSION >= 50300
+ #include <chrono>
++#include <ctime>
+ #include <fmt/chrono.h>
+ #endif
+ 
+@@ -222,7 +223,17 @@
+             auto floor = std::chrono::floor<std::chrono::seconds>(now);
+             auto micro = std::chrono::duration_cast<std::chrono::microseconds>(
+                 now - floor);
+-            auto t = fmt::localtime(std::chrono::system_clock::to_time_t(now));
++            // fmt::localtime() was removed from fmt's public API in
++            // newer fmt releases -- confirmed absent from fmt 12.1.0's
++            // actual staged include/fmt/chrono.h (oe-core's pinned fmt
++            // version), not inferred from a changelog. fmt still formats a
++            // plain std::tm directly via its own formatter<std::tm, Char>
++            // specialization (same header, still present in 12.1.0), so
++            // this computes the std::tm with the POSIX thread-safe
++            // conversion fmt::localtime used internally anyway.
++            std::time_t tt = std::chrono::system_clock::to_time_t(now);
++            std::tm t{};
++            localtime_r(&tt, &t);
+             auto timeString = fmt::format("{:%F %T}.{:06d}", t, micro.count());
+             out_ << timeString << " ";
+         } catch (...) {

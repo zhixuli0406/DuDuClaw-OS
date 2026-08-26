@@ -32,6 +32,18 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 # `input` group membership below is meaningless without.
 RDEPENDS:${PN} = "flatpak bubblewrap ostree dbus duduclaw-polkit-flatpak duduclaw-shell duduclaw-steam-devices"
 
+# duduclaw-flatpak-offline-repo (Y6-3): RRECOMMENDS, not RDEPENDS -- unlike
+# every dependency above, duduclaw-flatpak-kiosk-verify.sh's own "Offline
+# preload repo" section is written to gracefully SKIP (not FAIL) when
+# /opt/duduclaw-flatpak-offline-repo is absent and fall through to the
+# live network flathub path, so this is genuinely optional at the package
+# level too -- a hard RDEPENDS here would be dishonest about what actually
+# happens at runtime if it's missing. duduclaw-image-flatpak.bb still
+# lists it explicitly in IMAGE_INSTALL (belt-and-suspenders, same as every
+# other package in that list), so on THIS image it is always present in
+# practice.
+RRECOMMENDS:${PN} = "duduclaw-flatpak-offline-repo"
+
 inherit systemd useradd
 
 # --- Why this recipe creates a user, when duduclaw-cli/-sysd don't --------

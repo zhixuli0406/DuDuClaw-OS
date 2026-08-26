@@ -1,0 +1,63 @@
+From: DuDuClaw OS Y6-1 (2026-08-26)
+Subject: fix INSTALL_INTERFACE include dirs to be sysroot-relative, not baked absolute
+
+Real CMake Generate-step failure hit consuming Fcitx5::Core from
+fcitx5-chewing's cross-compiled build: "Imported target 'Fcitx5::Core'
+includes non-existent path '/usr/include/Fcitx5/Core' in its
+INTERFACE_INCLUDE_DIRECTORIES" -- CMake checks that
+$<INSTALL_INTERFACE:...> paths exist as part of generating a consumer's
+build files, and CMAKE_INSTALL_FULL_INCLUDEDIR is already an ABSOLUTE path
+baked in at fcitx5's OWN configure time (correct from that build's own
+host-filesystem view, meaningless/nonexistent from a DIFFERENT recipe's
+--sysroot cross-compile). CMAKE_INSTALL_INCLUDEDIR (relative, e.g. "include")
+is what CMake's own INSTALL_INTERFACE machinery is designed to combine with
+the *consuming* project's install prefix at import time -- using the
+relative form is the documented, portable way to write this, not a
+sysroot-specific hack.
+
+This exact three-file fix (fcitx-config/fcitx-utils/fcitx CMakeLists.txt)
+matches a real, independently-authored community fix already carried by
+the hyyoxhk/meta-fcitx5 Yocto layer (its own
+"0002-Use-CMAKE_INSTALL_INCLUDEDIR-instead-of-CMAKE_INSTAL...patch",
+dated 2021, Upstream-Status: Pending against fcitx/fcitx5 upstream) --
+confirms this is a known, recurring fcitx5 cross-compile gap and not
+something invented for this recipe; verified the pattern is still present
+unchanged in fcitx5 5.1.12's actual source before adapting it here (line
+numbers shifted slightly since 2021, content did not).
+
+Upstream-Status: Pending [not yet submitted to fcitx/fcitx5]
+Signed-off-by: DuDuClaw OS Y6-1
+
+--- a/src/lib/fcitx-config/CMakeLists.txt
++++ b/src/lib/fcitx-config/CMakeLists.txt
+@@ -37,7 +37,7 @@
+ target_include_directories(Fcitx5Config PUBLIC
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>
+-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_FULL_INCLUDEDIR}/Fcitx5/Config>)
++    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Fcitx5/Config>)
+ target_link_libraries(Fcitx5Config PUBLIC Fcitx5::Utils)
+ 
+ configure_file(Fcitx5Config.pc.in ${CMAKE_CURRENT_BINARY_DIR}/Fcitx5Config.pc @ONLY)
+--- a/src/lib/fcitx-utils/CMakeLists.txt
++++ b/src/lib/fcitx-utils/CMakeLists.txt
+@@ -128,7 +128,7 @@
+ target_include_directories(Fcitx5Utils PUBLIC
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>
+-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_FULL_INCLUDEDIR}/Fcitx5/Utils>)
++    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Fcitx5/Utils>)
+ target_link_libraries(Fcitx5Utils PRIVATE DL::DL LibIntl::LibIntl Pthread::Pthread ${FMT_TARGET})
+ if(LIBKVM_FOUND)
+     target_link_libraries(Fcitx5Utils PRIVATE LibKVM::LibKVM)
+--- a/src/lib/fcitx/CMakeLists.txt
++++ b/src/lib/fcitx/CMakeLists.txt
+@@ -74,7 +74,7 @@
+ target_include_directories(Fcitx5Core PUBLIC
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>
+-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_FULL_INCLUDEDIR}/Fcitx5/Core>)
++    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Fcitx5/Core>)
+ target_link_libraries(Fcitx5Core PUBLIC Fcitx5::Config Fcitx5::Utils PRIVATE LibIntl::LibIntl ${FMT_TARGET})
+ if (ENABLE_KEYBOARD)
+     target_link_libraries(Fcitx5Core PRIVATE XKBCommon::XKBCommon)

@@ -1,0 +1,36 @@
+From: DuDuClaw OS Y6-1 (2026-08-26)
+Subject: CMakeLists.txt: prefix the Fcitx5CompilerSettings include with CMAKE_SYSROOT
+
+Real do_configure failure caught cross-compiling against fcitx5's own
+exported CMake config: "CMake Error ... include could not find requested
+file: /usr/lib/cmake/Fcitx5Utils/Fcitx5CompilerSettings.cmake" -- the file
+genuinely exists (confirmed present in fcitx5's staged recipe-sysroot at
+that exact relative path), but CMake's `include()` command is a literal
+file-path operation, unlike `find_package()` -- it does NOT get redirected
+through CMAKE_SYSROOT/CMAKE_FIND_ROOT_PATH the way find_package() calls do.
+`FCITX_INSTALL_CMAKECONFIG_DIR` is set to the bare absolute path
+"/usr/lib/cmake" inside fcitx5's own generated Fcitx5UtilsConfig.cmake
+(correct from THAT project's own build perspective, wrong once consumed
+cross-compiled from a different recipe's sysroot). Same root-cause class as
+the upstream-adjacent community fcitx5 Yocto layer's own
+"0001-Tweak-include-directories-to-care-CMAKE_SYSROOT.patch" (a different
+absolute-path-without-sysroot-prefix spot in fcitx5 core itself,
+hyyoxhk/meta-fcitx5) -- confirms this is a known, recurring category of gap
+in fcitx5's cross-compile story, not a one-off invented here. Prefixing
+with ${CMAKE_SYSROOT} is a no-op on a native (non-cross) build (empty
+string), matching that same reference patch's safety property.
+
+Upstream-Status: Pending [not yet submitted to fcitx/fcitx5-chewing]
+Signed-off-by: DuDuClaw OS Y6-1
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,7 +22,7 @@
+     set(CHEWING_TARGET PkgConfig::Chewing)
+ endif()
+ 
+-include("${FCITX_INSTALL_CMAKECONFIG_DIR}/Fcitx5Utils/Fcitx5CompilerSettings.cmake")
++include("${CMAKE_SYSROOT}${FCITX_INSTALL_CMAKECONFIG_DIR}/Fcitx5Utils/Fcitx5CompilerSettings.cmake")
+ 
+ add_subdirectory(src)
+ add_subdirectory(data)

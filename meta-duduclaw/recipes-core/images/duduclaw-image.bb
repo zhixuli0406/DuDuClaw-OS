@@ -134,3 +134,38 @@ IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
 # after which duduclaw-shell got past the "no adapter" panic entirely and
 # started actually initializing lavapipe. `vulkan-loader` is the fix.
 IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers vulkan-loader libegl-mesa xkeyboard-config"
+
+# --- Chinese input method: fcitx5 + fcitx5-chewing (Y6-1, 2026-08-26) ----
+# Three self-authored recipes (recipes-support/{extra-cmake-modules,
+# libchewing,fcitx5,fcitx5-chewing}/ -- see each recipe's own header for
+# the availability research proving none of this exists anywhere in the OE
+# ecosystem) porting the Debian appliance line's D3/D3-f/W7-3 Chinese-input
+# work onto this base. `dbus` is listed explicitly even though systemd/
+# other components likely already pull it transitively -- the Yocto-side
+# duduclaw-kiosk-launch.sh (duduclaw-shell recipe) now starts a D-Bus
+# SESSION bus itself (mirroring the Debian line's `dbus-run-session`
+# wrapper, a gap this image's kiosk launch script previously documented as
+# an explicit Y3-1 deferral -- "no ... D-Bus-session-bus ... wiring") for
+# fcitx5 to register on; an explicit DEPENDS here makes that dependency
+# non-implicit rather than hoping some other component's transitive pull
+# never goes away.
+#
+# TEMPORARILY DISABLED (Y6-3, 2026-08-26, 10:2x UTC) -- do NOT re-delete
+# this note when re-enabling, just move it or drop it once fixed. Real
+# build-time failure hit live while validating the genericx86-64 burn-kit
+# rebuild this line blocks: `fcitx5_5.1.12.bb:do_compile` fails --
+# `src/lib/fcitx-utils/log.cpp:225:27: error: 'localtime' is not a member
+# of 'fmt'` -- fcitx5 5.1.12's source calls `fmt::localtime()`, but this
+# release's pinned fmt is 12.1.0, a version where that helper was removed/
+# relocated (needs `fmt/chrono.h` or a compat shim upstream doesn't carry
+# for this fmt version) -- an upstream fcitx5-vs-fmt version incompatibility,
+# not a Yocto packaging mistake. This is Y6-1's own recipe chain to fix
+# (patch fcitx5's source, or pin/patch fmt) -- NOT patched here, out of
+# scope for the Y6-3 ticket (Flatpak offline preload + genericx86-64 burn
+# kit) this comment belongs to. `dbus` is left enabled (harmless, real
+# other consumers per the paragraph above); only the two IME packages are
+# commented out so THIS image can reach do_rootfs again while that fix is
+# pending. Re-enable by uncommenting the line below once fcitx5 builds
+# clean.
+IMAGE_INSTALL:append = " dbus"
+# IMAGE_INSTALL:append = " fcitx5 fcitx5-chewing"

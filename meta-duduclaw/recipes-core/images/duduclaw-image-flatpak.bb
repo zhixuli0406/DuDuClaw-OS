@@ -66,6 +66,15 @@ require recipes-core/images/duduclaw-image.bb
 # duduclaw-steam-devices (Y5-2): host-side udev rule Steam's Flatpak
 # wrapper's check_device_perms() actually requires (/dev/uinput
 # group=input) -- see that recipe for the full one-hand-verified reasoning.
+#
+# duduclaw-flatpak-offline-repo (Y6-3): bakes a pre-normalized 2.4G
+# OSTree/Flatpak repo (Chromium + its 7 runtime/extension deps) into
+# /opt/duduclaw-flatpak-offline-repo at IMAGE BUILD time, so a real machine
+# with zero network at first boot still has a working Chromium kiosk
+# fallback -- see that recipe's own header for why this exists (the
+# official sideload-repos mechanism does not work, confirmed on two
+# separate flatpak versions) and duduclaw-flatpak-kiosk-verify.sh's
+# "Offline preload repo" section for the consumer side.
 IMAGE_INSTALL:append = " \
     dbus \
     flatpak \
@@ -74,6 +83,7 @@ IMAGE_INSTALL:append = " \
     duduclaw-polkit-flatpak \
     duduclaw-flatpak-kiosk-verify \
     duduclaw-steam-devices \
+    duduclaw-flatpak-offline-repo \
 "
 
 # IMAGE_FEATURES already carries serial-autologin-root + empty-root-password
@@ -82,18 +92,26 @@ IMAGE_INSTALL:append = " \
 # is run as an interactive shell over that same serial console, no separate
 # feature needed here.
 
-# --- Disk headroom for a LIVE Flathub Chromium install at runtime --------
+# --- Disk headroom on top of the baked-in offline repo --------------------
 # wic's efi-uki-bootdisk.wks.in has no fixed --size on the root partition
 # (`part / --source rootfs ...`) -- it auto-sizes off IMAGE_ROOTFS_SIZE,
 # which is computed from what IMAGE_INSTALL actually bakes in at BUILD
-# time. Flatpak apps are fetched at RUNTIME (they are not Yocto packages),
-# so without this the built image would boot with only a few hundred MB of
-# free space and duduclaw-flatpak-kiosk-verify.sh's own disk-safety gate
-# would just SKIP the live Chromium fetch every time -- silently defeating
-# the point of shipping this verification unit at all. Research spike
-# measured Chromium's Flatpak install footprint at 2.4GB; 4GB (KB units,
-# OE convention) leaves margin for ostree/flatpak's own working set plus
-# the profile directory on top of that. This is a QEMU dev-image-only
-# concern -- see the recipe's own header comment for why this entire image
-# is scoped to prove the mechanism, not to ship a production kiosk.
+# time. Y6-3 update: duduclaw-flatpak-offline-repo (added above) now bakes
+# ~2.4G of the Chromium/runtime OSTree content in as an ordinary package,
+# so that specific weight IS already counted by IMAGE_ROOTFS_SIZE's normal
+# auto-sizing -- this EXTRA_SPACE margin is no longer "the whole Chromium
+# download has zero build-time footprint" (that was the Y3-2-era
+# rationale, now stale) but headroom for: (a) `flatpak install`'s own
+# checkout of the offline repo into the named installation's app/ tree --
+# expected to mostly hardlink against the repo's own objects since both
+# live on the same rootfs, but not zero; (b) ostree/flatpak's tmp/staging
+# working set; (c) the profile directory Chromium writes into at runtime;
+# (d) the LIVE network flathub path (duduclaw-flatpak-kiosk-verify.sh
+# still falls back to it if the offline repo is absent/broken) still needs
+# room for a fresh 2.4G download on top of whatever's already on disk.
+# Kept at the same 4GB (KB units, OE convention) rather than tuned down,
+# since (a)+(d) together could plausibly approach it and this is a
+# disk-safety margin, not a tightly-budgeted allocation -- see the
+# recipe's own header comment for why this entire image is scoped to
+# prove the mechanism, not to ship a production kiosk.
 IMAGE_ROOTFS_EXTRA_SPACE = "4194304"

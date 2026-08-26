@@ -129,3 +129,25 @@ FILES:${PN}-dev += "${libdir}/cmake/Fcitx5*"
 # the main package by this recipe's own default packaging (it is a normal
 # ${bindir} executable target, no separate PACKAGES split for it upstream).
 RDEPENDS:${PN} += "iso-codes xkeyboard-config"
+
+# Y8-2 (2026-08-27) dependency-closure audit, same class of question as
+# Y7-3's kernel-modules umbrella gap: fcitx5-chewing's own RDEPENDS on
+# fcitx5 is auto-derived correctly (its libchewing.so addon links
+# libFcitx5Core.so/libFcitx5Utils.so, a real ELF NEEDED entry, not a
+# dlopen -- OE's shlibs pass catches this with zero manual FILES/RDEPENDS
+# needed), but there is NO dependency running the other direction: fcitx5
+# core has never required any specific input-method addon to exist, by
+# design (X11/waylandim-only "keyboard passthrough" is a fully valid
+# fcitx5 install on its own). That means an image that ever lists bare
+# "fcitx5" in IMAGE_INSTALL without ALSO explicitly listing
+# "fcitx5-chewing" (today only enforced by duduclaw-image.bb's own
+# hand-written two-name IMAGE_INSTALL:append line, not by any recipe-level
+# dependency) would build and boot fine with zero Chinese input engine and
+# zero error -- a silent capability loss, not a build failure, exactly the
+# shape of gap Y7-3's kernel-modules umbrella closed for a different
+# subsystem. RRECOMMENDS is the correct strength here (soft pull-in,
+# mirrors Debian's own fcitx5 package Recommends: fcitx5-chinese-addons
+# convention) -- it must never be RDEPENDS, which would make fcitx5 fail
+# to build/install without an engine at all and break the
+# X11/waylandim-only use case this framework is also meant to serve.
+RRECOMMENDS:${PN} += "fcitx5-chewing"

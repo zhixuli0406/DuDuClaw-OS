@@ -1,0 +1,37 @@
+# DuDuClaw OS boot health gate — Yocto port (Y8-1, 2026-08-27) of the
+# Debian appliance line's
+# appliance/mkosi.extra/etc/systemd/system/duduclaw-health-check.service.
+# Unit content is unchanged except for one line (see below); the wiring
+# mechanism, the ordering reasoning, and everything it deliberately does
+# NOT gate on are all identical — see that file's own header comment and
+# commercial/docs/DESIGN-ab-update-rollback-2026-08.md §3 for the full
+# argument, which is distro-agnostic (systemd.special(7) +
+# systemd-bless-boot.service(8) behavior, not a Debian- or Yocto-specific
+# mechanism).
+#
+# THE ONE LINE THAT DIFFERS: no `--allowed-uid` is configured on this
+# line's duduclaw-sysd.service yet (see that unit's own comment — this
+# Yocto product line has not provisioned a non-root `duduclaw` service
+# user), so duduclaw-health-check.sh's probe_sysd() gets a fail-closed
+# "unauthorized" JSON reply rather than a real answer — which the script
+# already treats as positive proof of liveness (same reasoning the Debian
+# line's own script comment gives for its own root-vs-configured-uid case;
+# this is the SAME script, unmodified, see that file's own note).
+[Unit]
+Description=DuDuClaw OS boot health gate
+Documentation=man:systemd.special(7) man:systemd-bless-boot.service(8)
+Documentation=file:///usr/local/sbin/duduclaw-health-check.sh
+Before=boot-complete.target
+After=duduclaw-gateway.service duduclaw-sysd.service
+Requires=duduclaw-gateway.service duduclaw-sysd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DUDUCLAW_HEALTH_TIMEOUT=180
+Environment=DUDUCLAW_HOME=/data/duduclaw
+ExecStart=/usr/local/sbin/duduclaw-health-check.sh
+TimeoutStartSec=240
+
+[Install]
+RequiredBy=boot-complete.target

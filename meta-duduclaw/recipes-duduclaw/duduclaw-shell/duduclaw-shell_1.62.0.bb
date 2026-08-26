@@ -234,15 +234,46 @@ do_install:append() {
     install -m 0644 ${UNPACKDIR}/duduclaw-kiosk.service ${D}${systemd_system_unitdir}/duduclaw-kiosk.service
     install -d ${D}${sbindir}
     install -m 0755 ${UNPACKDIR}/duduclaw-kiosk-launch.sh ${D}${sbindir}/duduclaw-kiosk-launch.sh
+
+    # Y8-2 (2026-08-27): build-time-baked fcitx5 XDG_CONFIG_DIRS system
+    # default -- see duduclaw-kiosk-launch.sh's own seed_fcitx5_config()
+    # comment for the full story. Content is byte-identical to that
+    # function's per-user heredoc seed (keyboard-us/chewing order, 開機即
+    # 中文, Ctrl+Space only, 直式候選字); the only difference is WHERE it
+    # lands and WHEN it is written. root:root 0644 here (a normal
+    # do_install, not a runtime write by the unprivileged duduclaw-kiosk
+    # user) sidesteps the exact "$HOME=/data/duduclaw-kiosk unwritable"
+    # problem entirely -- fcitx5 only needs to READ this tier, and
+    # ${sysconfdir}/xdg is root-owned same as `/` on this image regardless
+    # of whether /data ever gets mounted, which is precisely why this
+    # layer can never be seeded at runtime by that user and must be a
+    # build artifact instead.
+    install -d ${D}${sysconfdir}/xdg/fcitx5/conf
+    install -m 0644 ${UNPACKDIR}/duduclaw-fcitx5-xdg-profile ${D}${sysconfdir}/xdg/fcitx5/profile
+    install -m 0644 ${UNPACKDIR}/duduclaw-fcitx5-xdg-config ${D}${sysconfdir}/xdg/fcitx5/config
+    install -m 0644 ${UNPACKDIR}/duduclaw-fcitx5-xdg-classicui.conf ${D}${sysconfdir}/xdg/fcitx5/conf/classicui.conf
+    install -m 0644 ${UNPACKDIR}/duduclaw-fcitx5-xdg-chewing.conf ${D}${sysconfdir}/xdg/fcitx5/conf/chewing.conf
 }
 
-SRC_URI += "file://duduclaw-kiosk.service file://duduclaw-kiosk-launch.sh"
+SRC_URI += "file://duduclaw-kiosk.service file://duduclaw-kiosk-launch.sh \
+    file://duduclaw-fcitx5-xdg-profile file://duduclaw-fcitx5-xdg-config \
+    file://duduclaw-fcitx5-xdg-classicui.conf file://duduclaw-fcitx5-xdg-chewing.conf \
+"
 
 inherit systemd useradd
 SYSTEMD_SERVICE:${PN} = "duduclaw-kiosk.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
-FILES:${PN} += "${systemd_system_unitdir}/duduclaw-kiosk.service ${sbindir}/duduclaw-kiosk-launch.sh"
+FILES:${PN} += "${systemd_system_unitdir}/duduclaw-kiosk.service ${sbindir}/duduclaw-kiosk-launch.sh ${sysconfdir}/xdg/fcitx5"
+
+# This package now ships fcitx5 policy config even though it does not
+# RDEPENDS on fcitx5 itself (duduclaw-image.bb's own IMAGE_INSTALL list is
+# what actually pulls fcitx5/fcitx5-chewing in, same reasoning as
+# fcitx5_5.1.12.bb's Y8-2 RRECOMMENDS comment on why that link is
+# deliberately soft) -- ${sysconfdir}/xdg/fcitx5 is inert, harmless dead
+# weight on any build that omits fcitx5 from IMAGE_INSTALL, so no
+# RRECOMMENDS is added here to avoid pulling ~30MB of fcitx5/libchewing
+# into image variants that never asked for Chinese input.
 
 # duduclaw-kiosk system user -- mirrors appliance/postinst.d/
 # 20-users-and-units.sh's `useradd -d /data/duduclaw-kiosk -G video,render,

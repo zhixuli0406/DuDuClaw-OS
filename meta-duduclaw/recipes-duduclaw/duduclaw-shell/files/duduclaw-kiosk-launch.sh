@@ -199,7 +199,42 @@ seed_fcitx5_config() {
     if [[ -r "$marker" ]] && [[ "$(cat "$marker" 2>/dev/null)" == "$FCITX5_SEED_VERSION" ]]; then
         return 0
     fi
-    mkdir -p "$conf_dir/conf" || { log "note: could not create $conf_dir -- 中文輸入設定維持 fcitx5 預設"; return 0; }
+    if ! mkdir -p "$conf_dir/conf" 2>/dev/null; then
+        # Y8-2 (2026-08-27): this Yocto line has no /data provisioning at
+        # all today -- grep-confirmed zero .mount unit, zero systemd-repart
+        # config, zero tmpfiles.d entry for /data anywhere in
+        # meta-duduclaw, and `/` itself is root:root 0755 -- so
+        # $HOME=/data/duduclaw-kiosk (this package's own USERADD_PARAM
+        # --home-dir) is not a race that sometimes wins, it is a
+        # permanently unwritable path for the unprivileged duduclaw-kiosk
+        # user on every current boot (live-reproduced: `mkdir -p
+        # /data/duduclaw-kiosk/.config/fcitx5/conf` as that user fails with
+        # "Permission denied", not ENOENT-then-retry).
+        #
+        # A first attempt at this fix tried writing a *runtime* fallback
+        # seed to /etc/xdg/fcitx5 (fcitx5's own XDG_CONFIG_DIRS
+        # system-default tier) right here -- WRONG, caught by re-testing
+        # as the actual duduclaw-kiosk user rather than trusting an
+        # earlier root-shell test: `/etc/xdg` is root:root 0755 same as
+        # `/`, so that mkdir fails with the exact same Permission denied,
+        # it would have been silent dead code repeating the bug one
+        # directory over. The actual fix has to live at BUILD time, not
+        # here: duduclaw-shell_1.62.0.bb's do_install now ships this same
+        # profile/config/conf content pre-baked, root-owned 0644, at
+        # ${sysconfdir}/xdg/fcitx5/ -- files fcitx5 already reads via the
+        # standard XDG_CONFIG_DIRS cascade with zero runtime write
+        # required (read-only access is all "other" needs). Live-verified
+        # on a QEMU clone with $HOME left deliberately unwritable:
+        # fcitx5-remote -n reports "chewing" as the active default engine
+        # immediately after fcitx5 starts. The moment /data really is
+        # mounted on some future boot, this function's branch above
+        # starts succeeding again and reseeds the per-user tier, which
+        # then wins over that baked-in system default per ordinary XDG
+        # precedence -- no special-case migration code needed, and
+        # nothing left to do here except log the honest degraded state.
+        log "note: could not create $conf_dir -- 中文輸入設定使用建置期烤入的 /etc/xdg/fcitx5 系統預設（開機即中文/直式候選字仍生效，僅使用者個人化設定無法持久化）"
+        return 0
+    fi
 
     cat > "$conf_dir/profile" <<'FCITX5_PROFILE'
 [Groups/0]

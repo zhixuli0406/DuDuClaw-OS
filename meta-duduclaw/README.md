@@ -292,6 +292,116 @@ docker exec -u 1000 duduclaw-yocto bash -c \
     "cd /workspace && kas shell meta-duduclaw/kas/duduclaw-os.yml"
 ```
 
+## 中文輸入（fcitx5-chewing）依賴閉包
+
+四包遞迴自建（OE 生態系完全沒有現成 recipe，逐一驗證過 OpenEmbedded Layer
+Index 與 meta-openembedded 皆為零命中）：
+
+```
+extra-cmake-modules-native (KDE ECM, 純建置期 CMake find-module 集合，無執行期產物)
+        │  find_package(ECM REQUIRED 1.0.0) — fcitx5、fcitx5-chewing 兩者的
+        │  頂層 CMakeLists.txt 皆無條件呼叫
+        ▼
+     fcitx5 (核心框架，DEPENDS: extra-cmake-modules-native fmt gettext-native
+     │        zlib dbus util-linux libxkbcommon wayland wayland-native
+     │        wayland-protocols iso-codes xkeyboard-config expat cairo
+     │        pango gdk-pixbuf json-c；RDEPENDS: iso-codes xkeyboard-config
+     │        ——純資料檔案，auto-shlibs 抓不到，手動宣告；Y8-2 新增
+     │        RRECOMMENDS: fcitx5-chewing，見下)
+        │
+        │  DEPENDS（fcitx5-chewing 透過 pkg-config `chewing>=0.5.0` 找
+        │  libchewing，NOT CMake find_package——見 libchewing_0.9.1.bb
+        │  header comment 的完整調查）
+        ▼
+   libchewing (Rust cargo crate `chewing_capi`，target 只產生 .so；native
+   │           變體額外 DEPENDS sqlite3-native 供 chewing-cli 的
+   │           rusqlite feature；target 端 DEPENDS libchewing-native 供
+   │           do_install 呼叫 chewing-cli 產生 tsi.dat/word.dat 詞庫)
+        │
+        ▼
+   fcitx5-chewing (fcitx5 addon 外殼；DEPENDS extra-cmake-modules-native
+                   fcitx5 libchewing gettext-native；無手動 RDEPENDS——
+                   對 fcitx5/libchewing 的 RDEPENDS 皆由 OE shlibs 自動
+                   偵測，因為 libchewing.so 這個 addon 真的用一般 ELF
+                   NEEDED 連結 libFcitx5Core.so/libFcitx5Utils.so/
+                   libchewing.so.3，不是 dlopen，auto-RDEPENDS 抓得到)
+```
+
+**image 層黏合（不是 recipe 層依賴）**：`duduclaw-image.bb` 的
+`IMAGE_INSTALL:append = " fcitx5 fcitx5-chewing"` 是唯一把兩者綁在一起的地方。
+`fcitx5-chewing` 會自動 RDEPENDS 回 `fcitx5`（上圖已標註），但反方向從來沒有
+——fcitx5 核心對任何特定輸入法引擎都無強制依賴（純 X11/waylandim 直通鍵盤
+是完全合法的 fcitx5 安裝形態，例如日/韓/其他語系）。這代表過去只要有人把
+`duduclaw-image.bb` 的 IMAGE_INSTALL 改成單獨列 `fcitx5`、漏了
+`fcitx5-chewing`，image 會建置成功、開機也正常，但**零中文輸入引擎、零錯誤
+訊息**——與 Y7-3 抓到的 kernel-modules umbrella 同一種「靜默能力遺失」坑。
+Y8-2（2026-08-27）已在 `fcitx5_5.1.12.bb` 補上
+`RRECOMMENDS:${PN} += "fcitx5-chewing"`（軟依賴，刻意不用 RDEPENDS——那會讓
+fcitx5 在沒有任何引擎的合法安裝形態下建置失敗）作為第二道防線。
+
+**外圍、非直接依賴、易混淆的鄰近票**：Y7-1 同一輪順手修掉的
+`pipewire_%.bbappend` `sndfile` PACKAGECONFIG 缺漏（讓 `pw-cat` 能建置）
+與 fcitx5 本身**沒有依賴關係**——純粹是同一份 `duduclaw-image.bb` 共用建置
+路徑上，先卡住的人先修。不要因為兩者常在同一輪 log 出現就誤植成 fcitx5 的
+依賴鏈。
+
+**RRECOMMENDS/隱藏 module 稽核結論（Y8-2）**：仿 Y7-3 對 kernel-modules
+umbrella 的稽核手法，逐一讀四包 recipe 原始碼（非只看 build log）——除了
+上述「fcitx5 → fcitx5-chewing」這一條軟依賴缺口外，其餘鏈路（ECM 建置期
+find_package、libchewing 的 cargo/sqlite3-native/libchewing-native 三段
+DEPENDS、fcitx5-chewing 對 fcitx5/libchewing 的 auto-shlibs RDEPENDS）
+皆已由既有機制正確覆蓋，未發現第二個同類缺口。
+
+**Seed 設定的兩層架構（Y6-1 設計，Y8-2 補上系統預設層）**：
+`duduclaw-kiosk-launch.sh` 的 `seed_fcitx5_config()` 寫入
+`$HOME/.config/fcitx5`（per-user 層，鍵盤配置：keyboard-us/chewing 順序、
+`ActiveByDefault=True` 開機即中文、Ctrl+Space 切換、直式候選字）——但這台
+Yocto 線的 `duduclaw-kiosk` 系統使用者 `$HOME=/data/duduclaw-kiosk`
+（`duduclaw-shell_1.62.0.bb` 的 `USERADD_PARAM`）目前**永遠不可寫**：
+grep 全 `meta-duduclaw/` 確認零 `.mount` 單元、零 `systemd-repart` 設定、
+零 `tmpfiles.d` 條目為 `/data` 存在，且 `/` 本身是 `root:root 0755`，非
+特權使用者連 `mkdir /data` 都會 `Permission denied`（QEMU 上以
+`duduclaw-kiosk` 身分活測重現，非猜測）。Y8-2 因此在
+`duduclaw-shell_1.62.0.bb` 的 `do_install` 新增**建置期烤入**的
+`${sysconfdir}/xdg/fcitx5/{profile,config,conf/classicui.conf,conf/chewing.conf}`
+（root:root 0644，內容與 per-user 層完全一致）——fcitx5 本來就會用標準
+XDG_CONFIG_DIRS 層級掃描這個系統預設路徑，只需要「讀」的權限，完全繞開
+`/data` 不可寫的問題。兩層關係：`$HOME/.config/fcitx5`（若可寫）永遠贏過
+`/etc/xdg/fcitx5`，符合一般 XDG 疊層語意；一旦未來 `/data` 真的掛載成功，
+`seed_fcitx5_config()` 的主分支會自動重新開始成功寫入 per-user 層，無需
+額外遷移程式碼。**踩坑記錄**：第一版曾嘗試在 `seed_fcitx5_config()`
+「執行期」寫入 `/etc/xdg/fcitx5` 作為 fallback，以 `duduclaw-kiosk` 身分
+重新活測後發現 `/etc/xdg` 與 `/` 同樣是 root-only、同一個
+`Permission denied`——那個修法是死碼，跟原本的坑一樣不會生效。真正的修法
+必須是建置期產物，不能是執行期以非特權使用者寫入，這個教訓值得下一棒
+牢記：**任何「以 duduclaw-kiosk 身分修 fallback」的方案，套用前務必用
+`su -s /bin/sh duduclaw-kiosk -c '...'` 實測寫入權限，不能只用 root shell
+測過就當作驗證完成**。
+
+**QEMU headless IME 引擎驗證手法（Y8-2，繞開殼黑屏／AVX2 崩潰迴圈）**：
+不啟動 `duduclaw-kiosk.service`（`systemctl mask` 掉），改以
+`su -s /bin/sh duduclaw-kiosk -c 'dbus-run-session -- fcitx5 -D ...'`
+手動起一個獨立 D-Bus session bus + fcitx5 daemon，完全不需要
+comp/wayland/顯示裝置。活測證實：`fcitx5-remote -n` 開機後立即回報
+`chewing`（系統預設層生效）、`-s keyboard-us`/`-s chewing` 反覆切換皆
+`rc=0` 且狀態正確、`/etc/xdg/fcitx5/conf/{classicui,chewing}.conf` 的
+直式候選字設定確認落地。**已知限制（誠實列，未完全達成）**：
+`org.fcitx.Fcitx.InputMethod1.CreateInputContext`／`InputContext1.
+ProcessKeyEvent` 這組真正的按鍵注入 D-Bus API（`busctl introspect` 已
+拿到完整簽章：`CreateInputContext(a(ss)) -> (o,ay)`、
+`ProcessKeyEvent(uuubu) -> b`）是**per-connection 生命週期**——fcitx5
+會在建立 IC 的那個 D-Bus 連線斷線時銷毀該 IC，而 `busctl call`/
+`dbus-send` 每次呼叫都是全新連線，導致「建立→FocusIn→送鍵」這種需要
+同一條連線的多步驟流程無法用這台機器上現有的 CLI 工具（無 python3、
+無 socat、無 gdbus、busctl 無 batch 模式）直接串起來完整驗證
+「su3cl3→你好」的委托組字。曾嘗試起一個 ANONYMOUS 認證的 TCP D-Bus bus
+讓 host 端 Python（`dbus_next`）常駐連線驅動，但 fcitx5 的 `dbus` 模組
+在這個自建 TCP bus 上穩定回報
+`Unable to request dbus name`（連線本身先於此已成功，RequestName 這步
+失敗，根因未深入到 libdbus vs sd-bus 傳輸層），列為下一棒可選跟進項
+（見 TODO 文件 Y8-2 段落）；`fcitx5-remote` 狀態層級的引擎啟用/切換驗證
+已經比 Y7-1（AVX2 崩潰迴圈下連一次穩定查詢都拿不到）更進一步。
+
 ## Status
 
 See `commercial/docs/TODO-agent-first-os-2026-08.md` "Y 線" section for the

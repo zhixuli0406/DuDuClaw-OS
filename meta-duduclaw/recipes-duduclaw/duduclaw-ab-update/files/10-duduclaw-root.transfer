@@ -1,0 +1,103 @@
+# A/B root partition update transfer (systemd-sysupdate) — Yocto port
+# (Y8-1, 2026-08-27) of the Debian appliance line's
+# appliance/mkosi.extra/etc/sysupdate.d/10-duduclaw-root.transfer. Content
+# is byte-for-byte the same DIRECTIVES as that file; only the comments below
+# note what actually differs on this line and why nothing else needed to
+# change.
+#
+# Source is a local staging directory, not a remote URL: sysupdate does NO
+# integrity or authenticity checking at all for `Type=regular-file` sources
+# (systemd's own sysupdate.d(5): "When updating no integrity or
+# authentication verification is done for resources of this type", true in
+# both the Debian line's 257.13 and this line's 259.5 — verified against the
+# real pinned v259 man source, not assumed to still hold across the version
+# gap). That job is `crates/duduclaw-gateway/src/os_update.rs`, unchanged
+# from the Debian line — it is the same Rust crate on both lines (vendored
+# verbatim into meta-duduclaw/recipes-duduclaw/duduclaw-cli/files/
+# duduclaw-cli-src/crates/duduclaw-gateway/, confirmed identical except for
+# an unrelated later feature by a file-level diff against crates/ during
+# this ticket).
+#
+# STAGING PATH: /data/duduclaw/updates — SAME path as the Debian line, for
+# the SAME reason (a multi-GB root payload cannot fit on a few-GB root
+# slot). On THIS line /data did not exist before this ticket at all (the
+# Yocto image was single-partition); it is added by this same ticket's
+# files/wic/duduclaw-ab-bootdisk.wks.in, and the gateway is pointed at it by
+# this recipe's own duduclaw-gateway-ab-home.conf systemd drop-in
+# (Environment=DUDUCLAW_HOME=/data/duduclaw) — without that drop-in this
+# path and the gateway's actual `config.toml [os_update] staging_dir`
+# default (<DUDUCLAW_HOME>/updates) would silently diverge, since this
+# Yocto line's duduclaw-gateway.service currently runs as root with no
+# DUDUCLAW_HOME set at all (see that unit's own header comment), which would
+# resolve to /root/.duduclaw/updates instead.
+#
+# FILE EXTENSION: `.transfer`, not `.conf` — v259's search path is
+# `<dir>/*.transfer` same as v257's (verified: systemd's sysupdate.d(5)
+# source at this line's pinned SRCREV still documents the same directory/
+# glob).
+#
+# InstancesMax=2 matches the fixed two-slot layout in
+# files/wic/duduclaw-ab-bootdisk.wks.in (root-A / root-B) — same reasoning
+# as the Debian line's mkosi.repart pair.
+[Transfer]
+# %A is the running image's IMAGE_VERSION from /usr/lib/os-release. This
+# Yocto line bakes that from DISTRO_VERSION
+# (meta-duduclaw/conf/distro/duduclaw-os.conf), which is
+# `${DUDUCLAW_PLATFORM_VERSION}-y1-bringup` — NOT the bare
+# DUDUCLAW_PLATFORM_VERSION this ticket's own root-A GPT label uses. This is
+# a real, currently-unresolved mismatch (flagged, not silently carried):
+# ProtectVersion=%A protects whatever os-release's IMAGE_VERSION= actually
+# says, while the wks bakes the partition LABEL from the bare platform
+# version with no "-y1-bringup" suffix. The two must be made to agree
+# (either drop the milestone suffix from DISTRO_VERSION once this line
+# leaves bring-up, or bake the same full DISTRO_VERSION string into the
+# label) before relying on ProtectVersion= actually protecting the running
+# slot on this line — tracked as a Y8-1 followup, not fixed in this wave.
+ProtectVersion=%A
+
+[Source]
+Type=regular-file
+Path=/data/duduclaw/updates
+# %a is the systemd architecture specifier. This line only ever builds for
+# x86_64 (duduclaw-genericx86-64 / duduclaw-qemux86-64), where %a expands to
+# "x86-64" — verified against systemd's own specifier table at this line's
+# pinned SRCREV, same table the Debian design doc's own %a comment cites.
+MatchPattern=duduclaw-os_@v.root-%a.raw
+
+[Target]
+Type=partition
+Path=auto
+# Matched against the partition LABEL, which is why root-A is labelled
+# `duduclaw-os_${DUDUCLAW_PLATFORM_VERSION}` and root-B `_empty` in
+# files/wic/duduclaw-ab-bootdisk.wks.in — same scheme as the Debian line,
+# chosen for the same reason (sysupdate's `_empty` sentinel and
+# strverscmp-based version comparison are upstream mechanisms, not
+# DuDuClaw-specific).
+MatchPattern=duduclaw-os_@v
+# Generic `root` alias, not `root-x86-64` — systemd resolves it to the
+# running machine's native root type. Matches this ticket's wks, which uses
+# the concrete SD_GPT_ROOT_X86_64 GUID
+# (4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709) on both root-A and root-B, verified
+# directly against the pinned systemd source's src/systemd/sd-gpt.h (see the
+# wks file's own header comment for why the Debian design doc's arm64 GUID
+# from its own forensic dump would have been the WRONG constant to copy
+# here).
+MatchPartitionType=root
+# Attribute handling for the slot just written — same four directives as
+# the Debian line's transfer, but PartitionGrowFileSystem=0 here (NOT 1):
+# unlike the Debian line's mkosi.repart, THIS wks does not set GrowFileSystem
+# on root-A/root-B at all (only /data gets that bit — see
+# files/wic/duduclaw-ab-bootdisk.wks.in and duduclaw-ab-partflags.bbclass),
+# since both root slots are fixed-size and growth on them would be a no-op
+# either way. PartitionNoAuto=0 clears the NoAuto bit
+# duduclaw-ab-partflags.bbclass set on the factory-empty slot B, so the
+# newly-written slot becomes gpt-auto-discoverable; the explicit
+# PartitionGrowFileSystem=0 keeps the written slot's attribute shape
+# identical to root-A's ACTUAL state (neither bit set), rather than
+# copy-pasting the Debian line's value without re-deriving it for this
+# line's different wks.
+PartitionFlags=0
+PartitionNoAuto=0
+ReadOnly=0
+PartitionGrowFileSystem=0
+InstancesMax=2

@@ -1,0 +1,7 @@
+[Behavior]
+ActiveByDefault=True
+ShareInputState=All
+
+[Hotkey]
+TogglePreedit=
+AltTriggerKeys=

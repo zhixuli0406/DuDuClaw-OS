@@ -1,0 +1,73 @@
+# Unified Kernel Image update transfer (systemd-sysupdate) — Yocto port
+# (Y8-1, 2026-08-27) of the Debian appliance line's
+# appliance/mkosi.extra/etc/sysupdate.d/20-duduclaw-uki.transfer. Directives
+# are byte-for-byte the same as that file (see this directory's
+# 10-duduclaw-root.transfer for what actually differs on this line and
+# why); only the ESP mount-point note below is line-specific.
+#
+# ORDER IS THE SAFETY PROPERTY: sysupdate runs transfers in filename order,
+# entry point last. `10-` root before `20-` UKI means the new root is fully
+# written before anything in the ESP references it.
+#
+# PER-SLOT UKIs: same H3d design as the Debian line — one UKI TEMPLATE per
+# release (baking whichever slot happened to be "A" on the BUILD host's
+# random systemd-repart seed), rewritten to the real destination slot's
+# PARTUUID by crates/duduclaw-gateway/src/uki_patch.rs at staging time, on
+# the DEVICE, never at build time. The reasoning is identical on this line:
+# wic seeds its own GPT UUIDs independently per build the same way mkosi
+# does (neither tool's UUID generation is under this ticket's control, and
+# nothing about switching build tools changes the underlying fact that two
+# builds of the same image produce different PARTUUIDs) — a UKI baked with
+# the release host's PARTUUID would boot a real device into an initrd
+# waiting forever for a partition it does not have, exactly the fault T3
+# exists to catch. uki_patch.rs itself needed ZERO changes for this line
+# (confirmed byte-identical against crates/ except for an unrelated later
+# feature, by direct diff during this ticket) — it operates on raw UKI
+# bytes and knows nothing about which build tool produced them.
+#
+# Staging path: /data/duduclaw/updates — see 10-duduclaw-root.transfer.
+[Transfer]
+ProtectVersion=%A
+
+[Source]
+Type=regular-file
+Path=/data/duduclaw/updates
+MatchPattern=duduclaw-os_@v.efi
+
+[Target]
+Type=regular-file
+# PathRelativeTo=esp anchors this to wherever the ESP is actually mounted.
+# On THIS line the ESP mounts at /boot (files/wic/duduclaw-ab-bootdisk.wks.in
+# reuses efi-uki-bootdisk.wks.in's `part /boot --source bootimg_efi ...`
+# verbatim) — same mount point the Debian line independently ended up at,
+# for the same reason (systemd-gpt-auto-generator's own ESP-discovery
+# convention, not a DuDuClaw choice on either line). `esp` resolves the
+# actual mount point at runtime regardless, so this line needed no change
+# even though it was worth re-deriving rather than assuming.
+Path=/EFI/Linux
+PathRelativeTo=esp
+# Three patterns for the three shapes a UKI's name takes across sd-boot's
+# Automatic Boot Assessment lifecycle — see the Debian line's own transfer
+# for the full explanation; unchanged here because the boot-counting
+# filename convention is systemd-boot's, not distro-specific.
+MatchPattern=duduclaw-os_@v+@l-@d.efi
+MatchPattern=duduclaw-os_@v+@l.efi
+MatchPattern=duduclaw-os_@v.efi
+Mode=0444
+# @l/@d wildcards are what make TriesLeft=/TriesDone= do anything at all —
+# without a target pattern that has somewhere to put the numbers, these two
+# directives are silently inert (verified against this line's own pinned
+# systemd source, same mechanism as v257).
+#
+# TriesLeft=3, never more than 9: sd-boot's tries-counter formatting has no
+# zero-padding in this line's pinned systemd source either — directly
+# verified (not assumed from the Debian design doc) by reading
+# src/boot/boot.c at SRCREV b3d8fc43e9cb531d958c17ef2cd93b374bc14e8a: the
+# rename target is built by
+# `xasprintf("%.*ls%" PRIu64 "-%" PRIu64 "%ls", ...)` — PRIu64 has no width
+# specifier, so a two-digit TriesLeft would still shrink the filename on
+# each rename, the exact non-atomic-rename-on-FAT32 hazard the Boot Loader
+# Specification warns about.
+TriesLeft=3
+TriesDone=0
+InstancesMax=2

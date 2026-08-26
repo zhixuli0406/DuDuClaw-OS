@@ -1,0 +1,119 @@
+# DuDuClaw OS — A/B GPT layout (Y8-1, 2026-08-27).
+#
+# Yocto port of the Debian appliance line's mkosi.repart/ four-partition
+# design (commercial/docs/DESIGN-ab-update-rollback-2026-08.md §1.1, §11):
+# ESP + root-A (populated, active) + root-B (empty, reserved update target)
+# + /data (grows to fill the real disk, hosts update staging). The MECHANISM
+# is ported verbatim (same partition roles, same GPT type GUID, same label
+# scheme, same three attribute bits); the FORM is Yocto-native because wic's
+# kickstart-style partitioning language is a different tool with a smaller
+# vocabulary than mkosi.repart's declarative `.conf` drop-ins — see
+# meta-duduclaw/classes/duduclaw-ab-partflags.bbclass for the one thing wic
+# cannot express in-line (raw GPT attribute bits) and how this build fills
+# that gap.
+#
+# p1 (ESP) is copied byte-for-byte from the already-QEMU-verified single-
+# partition efi-uki-bootdisk.wks.in (openembedded-core/meta/files/wic/) —
+# deliberately unchanged, so the UKI/systemd-boot discovery chain that
+# passed Y1-1 stays exactly as it was. Everything from p2 onward is new.
+#
+# WHY A SEPARATE FILE, NOT AN EDIT TO efi-uki-bootdisk.wks.in: this is a
+# structurally different, higher-risk partition table (four partitions
+# instead of one, GPT attribute post-processing required — see the
+# bbclass). Per this project's own established pattern for risky additions
+# on top of a verified baseline (duduclaw-image.bb `require`s
+# duduclaw-image-minimal.bb rather than editing it in place;
+# duduclaw-image-flatpak.bb does the same to duduclaw-image.bb), the A/B
+# layout is opted into by a NEW image recipe
+# (recipes-core/images/duduclaw-image-ab.bb) that overrides WKS_FILE to
+# point here, rather than mutating the wks every existing image recipe
+# already depends on and has QEMU evidence for.
+#
+# SIZES: `DUDUCLAW_AB_SLOT_SIZE_MB` / `DUDUCLAW_AB_DATA_SIZE_MB` are plain
+# bitbake variables (defaults set in duduclaw-ab-partflags.bbclass,
+# overridable per image recipe) — `.wks.in` files go through bitbake's own
+# `${VAR}` expansion before wic ever sees them
+# (image_types_wic.bbclass:do_write_wks_template, confirmed by reading that
+# class, not assumed from the `.in` suffix convention alone). Root-A and
+# root-B MUST stay the same size: systemd-sysupdate dd's a slot-A-sized
+# payload into slot B with no resize step (same "required for
+# systemd-sysupdate" invariant the Debian line's own 20-root-a.conf/
+# 21-root-b.conf comments state).
+#
+# ARCHITECTURE: this file is written for x86_64 only (the
+# duduclaw-genericx86-64 / duduclaw-qemux86-64 machines — this layer has no
+# arm64 target). The GPT type GUID below
+# (4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709) is systemd's
+# SD_GPT_ROOT_X86_64 — verified against the actual pinned systemd source
+# (src/systemd/sd-gpt.h at SRCREV b3d8fc43e9cb531d958c17ef2cd93b374bc14e8a),
+# not copied from the Debian design doc's own arm64-only build without
+# re-checking — the Debian design doc's §1.5 forensic dump was against an
+# arm64 mkosi artifact (`root-arm64`, GUID b921b045-...) and is NOT the
+# right constant to reuse here.
+
+bootloader --ptable gpt --timeout=5
+
+# p1: ESP — unchanged from efi-uki-bootdisk.wks.in.
+part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label boot --active --align 1024 --use-uuid --part-name="ESP" --part-type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B --overhead-factor=1
+
+# p2: root-A — the only partition with real content at build time. Label is
+# the version-string scheme systemd-sysupdate itself relies on for slot
+# selection (sd-boot / gpt-auto's `find_gpt_root()` picks the root partition
+# with the highest `strverscmp_improved()` label among non-no-auto,
+# native-root-typed partitions — this is NOT cosmetic, it is how "which slot
+# is active" is actually decided at runtime). `${DUDUCLAW_PLATFORM_VERSION}`
+# is the same single-source-of-truth version this layer already uses for
+# DISTRO_VERSION (conf/distro/include/duduclaw-platform-version.inc) — using
+# it here means a factory image's own root-A label always matches what
+# `os-release`'s `IMAGE_VERSION=` reports, which
+# `crates/duduclaw-gateway/src/os_update.rs`'s `ProtectVersion=%A` depends
+# on to protect the running slot from ever being treated as a free target.
+part / --source rootfs --fstype=ext4 --label "duduclaw-os_${DUDUCLAW_PLATFORM_VERSION}" --align 1024 --exclude-path boot/ --part-name="duduclaw-root-a" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
+
+# p3: root-B — the reserved, empty update target. `_empty` is the ONE label
+# string systemd-sysupdate's `Type=partition` target recognises as "free to
+# write into" (sysupdate.d(5) — this is not a DuDuClaw convention, it is the
+# literal string upstream's own partition-target code matches on). Formatted
+# ext4 here (unlike the Debian line's raw unformatted slot) purely because
+# wic's kickstart partitioning requires SOME --fstype for size/empty-
+# partition handling — this filesystem is irrelevant and gets completely
+# overwritten the moment sysupdate (or, in a manual test, `dd`) writes a real
+# root image into this partition; it carries no content that matters.
+# --no-fstab-update: this slot is never mounted at boot (no mountpoint
+# argument), so it must never get an /etc/fstab line — an unmountable UUID
+# left in fstab would fail the whole mount unit chain on generation.
+# GPT attribute bits (NoAuto + ReadOnly, matching the Debian line's
+# 21-root-b.conf `NoAuto=yes`/`ReadOnly=yes` factory state) are NOT settable
+# in wic's kickstart syntax at all (confirmed: `ksparser.py`'s `part`
+# argument list has no equivalent of mkosi.repart's `Flags=`/`NoAuto=`/
+# `ReadOnly=`/`GrowFileSystem=`) — set as a post-`do_image_wic` step by
+# duduclaw-ab-partflags.bbclass instead. Until that runs, this partition is
+# indistinguishable from an ordinary auto-discoverable root partition, which
+# would make gpt-auto-generator's tie-break (`strverscmp_improved` picks the
+# higher label) the ONLY thing preventing it from being mounted — correct by
+# luck (`_empty` sorts below any real version string, per Debian's own
+# §4.1 finding: `_` = 0x5F < `d` = 0x64), but the NoAuto bit is what makes it
+# correct on purpose, matching the design doc's own stated defense-in-depth
+# reasoning for why NoAuto exists at all (§1.1: "gpt-auto-generator 看到兩個
+# 候選 root 會歧義" was a REAL incident on the Debian line before that bit was
+# added).
+part --fstype=ext4 --label "_empty" --align 1024 --part-name="duduclaw-root-b" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB} --no-fstab-update
+
+# p4: /data — update staging + gateway state, grows to fill whatever is left
+# of the real disk (GPT attribute bit 59 / GrowFileSystem, same
+# post-processing mechanism as p3's NoAuto/ReadOnly — see the bbclass).
+# Setting the bit alone does NOT make growth happen automatically on real
+# hardware with a bigger disk than this factory image: that requires
+# systemd-repart to actually run against a `repart.d/` drop-in on the
+# target, which is NOT wired up yet (tracked as a Y8-1 followup, not done in
+# this wave — see PACKAGECONFIG[repart]'s own comment in
+# recipes-core/systemd/systemd_%.bbappend for why the binary is present
+# anyway). On THIS wks the size is simply fixed at
+# DUDUCLAW_AB_DATA_SIZE_MB — sized for QEMU dev/test disks, not for a real
+# mini-PC's full disk.
+#
+# GPT type is the generic `linux-generic` GUID (0FC63DAF-8483-4772-8E79-
+# 3D69D8477DE4), matching the Debian line's own `30-data.conf` (`Type=
+# linux-generic`) — /data is explicitly NOT a `root`-typed partition (it
+# must never be a gpt-auto root candidate).
+part /data --fstype=ext4 --label duduclaw-data --align 1024 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}

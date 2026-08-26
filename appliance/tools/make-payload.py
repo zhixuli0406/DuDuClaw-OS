@@ -60,6 +60,34 @@ Exit code is non-zero on any failed assertion or any tool failure (missing
 minisign, a signature that does not self-verify, a short read while
 extracting slot A, ...). A payload that cannot prove its own integrity on
 the build host must never reach a machine.
+
+YOCTO LINE REUSE (Y8-1, 2026-08-27): every byte-offset computation here is
+pure GPT arithmetic against whatever file `--raw` points at — it does not
+care whether that file was produced by mkosi (`duduclaw-os.raw`) or by
+Yocto's `wic` tool (a `.wic` file is a plain raw disk image with a GPT, same
+as mkosi's `.raw`). Slot selection reads the actual on-disk GPT root-type
+entries via uki_slots.GPT_ROOT_TYPES, which is already keyed by GUID, not by
+which build tool wrote it, so a Yocto `.wic` with SD_GPT_ROOT_X86_64-typed
+root-A/root-B partitions round-trips through select_slots()/
+extract_root_payload() unmodified. The ONE thing that could not be reused
+as-is is `image_version`, which this script's --version-less path derives
+by reading appliance/mkosi.version — a Debian-line-specific file that says
+nothing about a Yocto build's own version. `--image-version` (added by this
+change, optional, defaults to the old mkosi.version-reading behavior when
+omitted so the Debian line's own callers see zero behavior change) lets a
+Yocto caller supply meta-duduclaw's own version directly, e.g.:
+
+    python3 appliance/tools/make-payload.py \\
+        --raw meta-duduclaw/.build/<dir>/duduclaw-os-genericx86-64.wic \\
+        --uki <deploy dir>/uki.efi \\
+        --image-version "$(grep DUDUCLAW_PLATFORM_VERSION \\
+            meta-duduclaw/conf/distro/include/duduclaw-platform-version.inc \\
+            | sed -E 's/.*"(.*)".*/\\1/')" \\
+        --sign-key ~/.minisign/duduclaw-os-release.key
+
+This has NOT been run end to end against a real Yocto .wic in this session
+(see the Y8-1 handoff notes) — the reasoning above is a code-level
+compatibility argument, not a verified result.
 """
 
 from __future__ import annotations
@@ -398,6 +426,13 @@ def main() -> int:
                      help="payload version to publish under; defaults to appliance/mkosi.version's "
                           "content. May differ from the image's baked version to stage a test "
                           "upgrade payload from an unchanged image.")
+    ap.add_argument("--image-version", default=None,
+                     help="the raw image's OWN baked version, used to validate slot A's factory "
+                          "label (expected f'duduclaw-os_{image_version}'). Defaults to "
+                          "appliance/mkosi.version's content (the Debian mkosi line's convention) "
+                          "when omitted — pass this explicitly for a Yocto .wic input, whose "
+                          "version lives in meta-duduclaw/conf/distro/include/"
+                          "duduclaw-platform-version.inc instead, not appliance/mkosi.version.")
     ap.add_argument("--outdir", type=Path, default=_APPLIANCE / "mkosi.output" / "payload",
                      help="parent directory for the versioned payload subdirectory (default: %(default)s)")
     ap.add_argument("--sign-key", type=Path, default=Path.home() / ".minisign" / "duduclaw-os-release.key",
@@ -416,10 +451,15 @@ def main() -> int:
     if not uki_path.exists():
         raise uki_slots.Fail(f"{uki_path}: no such file (build the image first)")
 
-    version_file = _APPLIANCE / "mkosi.version"
-    image_version = version_file.read_text().strip()
-    if not image_version:
-        raise uki_slots.Fail(f"{version_file} is empty")
+    if args.image_version is not None:
+        image_version = args.image_version.strip()
+        if not image_version:
+            raise uki_slots.Fail("--image-version was given but empty")
+    else:
+        version_file = _APPLIANCE / "mkosi.version"
+        image_version = version_file.read_text().strip()
+        if not image_version:
+            raise uki_slots.Fail(f"{version_file} is empty")
     payload_version = args.version or image_version
 
     final_dir = outdir / f"duduclaw-os_{payload_version}"

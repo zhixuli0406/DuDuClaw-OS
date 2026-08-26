@@ -1,0 +1,68 @@
+# Wireless DHCP — Y7-3 (2026-08-26), porting appliance/mkosi.extra/etc/
+# systemd/network/25-wireless-dhcp.network (Debian line's D4a-1) onto this
+# Yocto image verbatim, with ONE numeric change (RouteMetric, see below).
+#
+# Division of labour: iwd owns the 802.11 association (scanning, WPA
+# handshake, credentials); systemd-networkd owns the IP layer. Upstream iwd
+# ships with EnableNetworkConfiguration=false by default (confirmed against
+# meta-oe/recipes-connectivity/iwd/iwd_3.12.bb — no PACKAGECONFIG flips this),
+# so iwd does no DHCP at all: without this file a joined network associates
+# and then sits with no address, which reads to an operator as "connected but
+# nothing works".
+#
+# Matched by link TYPE, not a name glob: iwd's own build installs
+# ${systemd_unitdir}/network/80-iwd.link (confirmed in iwd_3.12.bb's own
+# FILES:${PN} — "${systemd_unitdir}/network" — this is iwd's UPSTREAM
+# packaging, not a Debian-specific patch), which applies its own naming
+# policy to wireless interfaces. A Name=wl* glob here would be racing a
+# policy this file does not own — same reasoning the Debian-line file
+# documents.
+#
+# [Match] also offers WLANInterfaceType=station, which would narrow this to
+# client-mode interfaces only. Deliberately NOT used, same asymmetric-cost
+# reasoning as the Debian line: if this extra condition ever fails to match,
+# the box has no DHCP on Wi-Fi and is unreachable over it — worse than the
+# alternative of matching a hypothetical future AP-mode interface that finds
+# no DHCP server. This appliance is a client, never an access point.
+#
+# RouteMetric: HIGHER (worse) than the wired path's metric, so a plugged-in
+# cable wins while Wi-Fi stays associated and takes over the moment the
+# cable goes away — the same wired-beats-wireless convention the Debian line
+# established (D4b). The wired-side number is DIFFERENT on this line,
+# though, and that difference is deliberate, not copied blind: the Debian
+# appliance line ships its OWN hand-written 20-wired-dhcp.network with
+# RouteMetric=100 (mkosi.extra), but THIS Yocto image has no equivalent
+# hand-written wired .network file at all — wired DHCP already works out of
+# the box via oe-core's own systemd-conf package (openembedded-core/meta/
+# recipes-core/systemd/systemd-conf/wired.network, RRECOMMENDS'd
+# unconditionally by the `systemd` package itself, confirmed via
+# systemd_259.5.bb's own RRECOMMENDS:${PN} line — Yocto RRECOMMENDS are
+# installed by default, unlike apt's --no-install-recommends convention the
+# Debian line's mkosi.conf relies on), which pins RouteMetric=10. 600 is
+# comfortably higher than 10 either way; kept as the same literal value the
+# Debian line uses rather than re-deriving a new number, so an operator who
+# already knows "600 = Wi-Fi" from the other product line does not have to
+# learn a second convention.
+#
+# Kept strictly ASCII: a non-ASCII byte anywhere in a .network file (even in
+# a comment) has been observed on the Debian line to make systemd-networkd
+# skip the WHOLE file, leaving the interface unmanaged with no DHCP at all —
+# the exact "dashboard unreachable" failure class this file exists to
+# prevent. Not independently re-verified against THIS distro's systemd
+# 259.5 (vs. Debian trixie's systemd), so this stays ASCII-only out of
+# caution rather than assuming the bug was version-specific.
+[Match]
+Type=wlan
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCP]
+# Router-supplied NTP/DNS servers are merged with systemd-timesyncd's own
+# fallback list, they do not replace it — matches systemd-conf's own
+# wired.network default behaviour (UseMTU/ClientIdentifier are its own
+# additions this file does not need to duplicate for a client-only role).
+UseNTP=yes
+UseDNS=yes
+RouteMetric=600

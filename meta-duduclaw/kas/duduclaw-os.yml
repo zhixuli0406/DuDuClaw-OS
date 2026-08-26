@@ -141,11 +141,36 @@ repos:
   meta-openembedded:
     url: https://git.openembedded.org/meta-openembedded
     commit: 6bf0d8ad57b33950bab4c7f6c037e1ccb6f6e2eb
-    # Only meta-oe is needed (see the pin-rationale comment above) — the
-    # other sublayers (meta-gnome/meta-filesystems/meta-python/...) are
-    # deliberately NOT added, keeping BBFILE_COLLECTIONS/parse time down.
+    # meta-oe (flatpak/bubblewrap/ostree/xdg-desktop-portal/polkit AND, since
+    # Y7-3, iwd — recipes-connectivity/iwd/iwd_3.12.bb, one-hand verified
+    # by walking this exact commit's cgit tree, not guessed) — see the
+    # pin-rationale comment above.
+    #
+    # meta-multimedia + meta-python (Y7-3, 2026-08-26 — audio: pipewire +
+    # wireplumber): pipewire_1.6.8.bb and wireplumber_0.5.14.bb both live in
+    # meta-multimedia, a DIFFERENT meta-openembedded sublayer than meta-oe
+    # (same split the Y3-2 xdg-desktop-portal comment already found and
+    # deliberately did NOT cross at the time — this ticket is what crosses
+    # it). meta-multimedia's own layer.conf declares
+    # `LAYERDEPENDS_multimedia-layer = "core openembedded-layer meta-python"`
+    # — a hard bitbake-enforced layer dependency (bblayers must list
+    # meta-python or parsing fails outright with "layer ... depends on
+    # layer 'python-layer' which is not enabled"), so meta-python comes
+    # along even though this ticket's own recipes never reference a Python
+    # module directly. Both confirmed present at THIS EXACT pinned commit
+    # (not just on a floating wrynose branch) via the same cgit walk the
+    # Y3-2 comment already established the habit of doing, and both declare
+    # `LAYERSERIES_COMPAT = "whinlatter wrynose"` — safe to mix with this
+    # layer's own wrynose-pinned oe-core/meta-yocto, same reasoning as
+    # meta-oe. No new repo/commit pin needed: both are sibling directories
+    # inside the SAME meta-openembedded checkout already pinned above.
+    #
+    # iwd's own D-Bus policy — wireless-regdb lives in oe-core itself
+    # (meta/recipes-kernel/wireless-regdb), no extra layer needed for it.
     layers:
       meta-oe:
+      meta-multimedia:
+      meta-python:
 
   # This layer. No url — kas treats a repo with no `url` as already checked
   # out at `path` relative to $KAS_WORK_DIR (repo root when kas is invoked

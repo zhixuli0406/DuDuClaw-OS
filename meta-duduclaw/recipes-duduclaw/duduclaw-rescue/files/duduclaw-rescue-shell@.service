@@ -1,0 +1,42 @@
+# DuDuClaw OS — Entry B: diagnostic shell, templated by tty (%I).
+#
+# Autologs in the dedicated, non-root, locked-password `duduclaw-rescue`
+# account (identity-model decision recorded in duduclaw-rescue.bb's own
+# header — commercial/docs/DESIGN-maintenance-mode-2026-08.md §3.3 option
+# (a)). No password prompt anywhere in this path: physical presence is
+# already Entry B's own authorization factor (design doc's
+# "Authorization" section, "B（系統層）：實體接觸本身即憑證"), and the
+# account's shadow field is locked regardless (defense-in-depth, not the
+# primary control).
+#
+# Ordered strictly after the audit marker and the read-only remount so
+# BOTH have already run, unconditionally, before anyone gets an
+# interactive prompt — see those units' own comments.
+[Unit]
+Description=DuDuClaw rescue mode diagnostic shell on %I
+Documentation=man:agetty(8)
+DefaultDependencies=no
+Requisite=duduclaw-rescue.target
+After=duduclaw-rescue-root-lock.service duduclaw-rescue-audit.service
+Requires=duduclaw-rescue-root-lock.service duduclaw-rescue-audit.service
+Conflicts=rescue.service
+ConditionPathExists=/dev/%I
+
+[Service]
+# `${TERM}` (braces), matching upstream systemd's own serial-getty@.service.in
+# ExecStart line verbatim (WebFetch against raw.githubusercontent.com/
+# systemd/systemd, 2026-08-26) -- a first draft of this file used the
+# bare `$TERM` form, which systemd's exec-line environment-variable
+# expansion is not confirmed to recognize the same way; fixed to the
+# proven-correct upstream spelling rather than guessing the two are
+# equivalent.
+ExecStart=-/sbin/agetty --autologin duduclaw-rescue --noclear %I ${TERM}
+Type=idle
+Restart=always
+UtmpIdentifier=%I
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+KillMode=process
+IgnoreSIGPIPE=no
+SendSIGHUP=yes

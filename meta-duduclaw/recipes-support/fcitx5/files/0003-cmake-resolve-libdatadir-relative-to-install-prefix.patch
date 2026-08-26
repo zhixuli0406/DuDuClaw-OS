@@ -1,0 +1,58 @@
+From: DuDuClaw OS Y7-1 (2026-08-26)
+Subject: resolve CMAKE_INSTALL_FULL_LIBDATADIR relative to the install prefix, not CMAKE_CURRENT_SOURCE_DIR
+
+Real do_package_qa "buildpaths" failure hit by actually running
+`bitbake fcitx5` (Y6-1's 4th round, picked up by Y7-1): "File
+/usr/bin/fcitx5 in package fcitx5 contains reference to TMPDIR
+[buildpaths]" (also libFcitx5Utils.so.5.1.12, its .debug split, and the
+exported Fcitx5UtilsConfig.cmake -- see below). Root-caused by reading
+the actual generated build/config.h, not guessing from the QA string
+alone:
+
+    #define FCITX_INSTALL_LIBDATADIR "<TMPDIR>/work/.../fcitx5-5.1.12/lib"
+
+CMake's `get_filename_component(<out> <in> ABSOLUTE)` resolves a
+*relative* input path against CMAKE_CURRENT_SOURCE_DIR when no BASE_DIR
+is given (documented CMake behaviour, not a quirk). CMAKE_INSTALL_LIBDATADIR
+defaults to the *relative* value of CMAKE_INSTALL_LIBDIR ("lib"), so the
+call two lines below resolved "lib" against fcitx5's own source tree
+root instead of the install prefix -- unlike every sibling
+CMAKE_INSTALL_FULL_* variable here (LIBDIR/INCLUDEDIR/LIBEXECDIR/DATADIR/
+BINDIR), which all come from the standard GNUInstallDirs.cmake module and
+correctly resolve against CMAKE_INSTALL_PREFIX. This is fcitx5's own
+hand-rolled "libdata root (needed by bsd)" variable, introduced without
+the BASE_DIR CMake already supports for exactly this case (available
+since CMake 3.4, long predating this fcitx5 release -- confirmed by
+`cmake --version` in this build's native sysroot).
+
+FCITX_INSTALL_LIBDATADIR (set from this variable at CMakeLists.txt:211)
+feeds two consumers, both of which leaked the same TMPDIR-rooted source
+path:
+  1. config.h.in -> config.h -> compiled as a literal C string constant
+     wherever it's referenced (src/lib/fcitx-utils/standardpath.cpp),
+     landing in libFcitx5Utils.so.5.1.12 and, transitively, /usr/bin/fcitx5.
+  2. src/lib/fcitx-utils/Fcitx5UtilsConfig.cmake.in's
+     FCITX_INSTALL_USE_FCITX_SYS_PATHS branch (line 23) -> the
+     *exported* Fcitx5UtilsConfig.cmake that fcitx5-chewing's build
+     consumes -- explaining the QA hit on that file specifically.
+
+Fix: pass BASE_DIR "${CMAKE_INSTALL_PREFIX}" so the relative "lib" input
+resolves the same way CMAKE_INSTALL_FULL_LIBDIR already does, producing
+"${CMAKE_INSTALL_PREFIX}/lib" (e.g. /usr/lib on this target) instead of
+a source-tree path. Verified against the actual generated config.h after
+rebuilding -- see the Y line TODO entry for the pass evidence, not
+assumed from the patch alone.
+
+Upstream-Status: Pending [not yet submitted to fcitx/fcitx5]
+Signed-off-by: DuDuClaw OS Y7-1
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -199,7 +199,7 @@ if(NOT CMAKE_INSTALL_LIBDATADIR)
+   set(CMAKE_INSTALL_LIBDATADIR "${CMAKE_INSTALL_LIBDIR}" CACHE PATH "libdata root (LIBDIR)")
+ endif()
+
+-get_filename_component(CMAKE_INSTALL_FULL_LIBDATADIR "${CMAKE_INSTALL_LIBDATADIR}" ABSOLUTE)
++get_filename_component(CMAKE_INSTALL_FULL_LIBDATADIR "${CMAKE_INSTALL_LIBDATADIR}" ABSOLUTE BASE_DIR "${CMAKE_INSTALL_PREFIX}")
+ mark_as_advanced(CMAKE_INSTALL_LIBDATADIR)
+ mark_as_advanced(CMAKE_INSTALL_FULL_LIBDATADIR)

@@ -90,6 +90,19 @@ ARGS=(
   -device virtio-net-pci,netdev=net0
   -object rng-random,filename=/dev/urandom,id=rng0
   -device virtio-rng-pci,rng=rng0
+  # Audio (Y7-3, 2026-08-26): mirrors the Debian appliance line's own
+  # run-vm.sh convention (`-audiodev none` + `intel-hda` + `hda-duplex`) --
+  # REAL-HW-CHECKLIST.md §6 already documents this exact device shape as
+  # what a QEMU audio verification pass needs. `-audiodev none` means the
+  # HOST plays nothing (no real speaker needed on the build/CI machine),
+  # but the GUEST still sees a real, driver-bindable Intel HDA controller +
+  # codec -- PipeWire's SPA ALSA plugin opens /dev/snd/* against it exactly
+  # as it would against real hardware, which is what makes `wpctl status`
+  # showing a real "Built-in Audio" sink (not a synthetic/demo one) a
+  # meaningful verification signal rather than a fake pass.
+  -audiodev none,id=snd0
+  -device intel-hda
+  -device hda-duplex,audiodev=snd0
   # No explicit GPU device: q35's own default VGA-compatible adapter
   # (Linux driver name "bochs-drm") is what duduclaw-comp's smithay/udev
   # backend actually renders to and what QEMU's own VNC/screendump reads

@@ -1,0 +1,54 @@
+# DuDuClaw OS — Entry B rescue/maintenance target.
+#
+# Reached ONLY via the dedicated rescue UKI's own embedded kernel cmdline
+# (`systemd.unit=duduclaw-rescue.target`, see meta-duduclaw/classes/
+# duduclaw-rescue-boot.bbclass) — this target is NEVER pulled in by the
+# normal boot graph: nothing WantedBy=duduclaw-rescue.target exists, and it
+# has no [Install] WantedBy= of its own, so `systemctl enable` on it is a
+# no-op and there is no way to reach it from a running normal-mode system
+# either (short of already having root, which the normal boot graph never
+# grants — see duduclaw-image.bb's own root-lock TODO for the one existing,
+# separately-tracked bring-up exception).
+#
+# Deliberately does NOT pull in multi-user.target / graphical.target:
+# duduclaw-gateway.service / duduclaw-sysd.service / duduclaw-kiosk.service
+# are all WantedBy=multi-user.target (see each recipe's own .service file),
+# so booting straight into this target means none of them ever start.
+# Entry B's corridor is diagnostic-only, not a smaller copy of the product
+# runtime — commercial/docs/DESIGN-maintenance-mode-2026-08.md §2's "與入口
+# A 關係" question ("開機進 rescue 時 gateway 要不要知道?") resolves here:
+# gateway does not run during Entry B at all, so there is nothing for it to
+# know about in real time. The boot event itself is still recorded (see
+# duduclaw-rescue-audit.service) for gateway to pick up on a LATER normal
+# boot — deferred, not silent (see that service's own comment for the
+# current honest limit: this Yocto line has no `/data`-equivalent
+# persistent state partition yet, so the gateway-side read-back half is
+# tracked as a follow-up, not implemented by this ticket).
+[Unit]
+Description=DuDuClaw OS rescue mode (Entry B — 完全維修態)
+Documentation=man:systemd.special(7)
+Requires=basic.target
+After=basic.target
+# `Conflicts=getty.target` found necessary by a LIVE test (2026-08-26,
+# Y7-2): `systemctl isolate duduclaw-rescue.target` from an already-
+# running normal boot left the pre-existing `serial-getty@ttyS0.service`
+# (started earlier by the normal boot graph) still attached to ttyS0
+# alongside the new `duduclaw-rescue-shell@ttyS0.service` -- isolate's own
+# "stop anything not in the new target's closure" pass did not reach it
+# because `getty.target` itself was never explicitly conflicted, so
+# systemd had no reason to consider it "not needed" (only `multi-user.
+# target`, which transitively wants `getty.target`, was conflicted -- but
+# conflicting the parent does not retroactively stop a child that was
+# already independently active). Two gettys reading the same tty
+# interleaves keystrokes character-by-character between them -- confirmed
+# live by mangled command echoes during that same test. This conflict is
+# irrelevant to the REAL boot-time entry path (cmdline `systemd.unit=`
+# never starts `serial-getty@ttyS0.service` in the first place, since
+# `getty.target` is only pulled in via `multi-user.target`, which this
+# target never reaches) but hardens the ALTERNATE admin path (`systemctl
+# isolate` from a running normal system) against the exact race just
+# observed.
+Conflicts=rescue.target emergency.target graphical.target multi-user.target getty.target
+Before=shutdown.target
+Wants=duduclaw-rescue-audit.service duduclaw-rescue-root-lock.service duduclaw-rescue-shell@ttyS0.service duduclaw-rescue-shell@tty1.service
+AllowIsolate=yes

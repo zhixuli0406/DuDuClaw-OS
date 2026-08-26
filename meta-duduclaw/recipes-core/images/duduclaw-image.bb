@@ -150,22 +150,207 @@ IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulka
 # non-implicit rather than hoping some other component's transitive pull
 # never goes away.
 #
-# TEMPORARILY DISABLED (Y6-3, 2026-08-26, 10:2x UTC) -- do NOT re-delete
-# this note when re-enabling, just move it or drop it once fixed. Real
-# build-time failure hit live while validating the genericx86-64 burn-kit
-# rebuild this line blocks: `fcitx5_5.1.12.bb:do_compile` fails --
-# `src/lib/fcitx-utils/log.cpp:225:27: error: 'localtime' is not a member
-# of 'fmt'` -- fcitx5 5.1.12's source calls `fmt::localtime()`, but this
-# release's pinned fmt is 12.1.0, a version where that helper was removed/
-# relocated (needs `fmt/chrono.h` or a compat shim upstream doesn't carry
-# for this fmt version) -- an upstream fcitx5-vs-fmt version incompatibility,
-# not a Yocto packaging mistake. This is Y6-1's own recipe chain to fix
-# (patch fcitx5's source, or pin/patch fmt) -- NOT patched here, out of
-# scope for the Y6-3 ticket (Flatpak offline preload + genericx86-64 burn
-# kit) this comment belongs to. `dbus` is left enabled (harmless, real
-# other consumers per the paragraph above); only the two IME packages are
-# commented out so THIS image can reach do_rootfs again while that fix is
-# pending. Re-enable by uncommenting the line below once fcitx5 builds
-# clean.
-IMAGE_INSTALL:append = " dbus"
-# IMAGE_INSTALL:append = " fcitx5 fcitx5-chewing"
+# RE-ENABLED (Y7-1, 2026-08-26). Y6-3 had temporarily commented the two IME
+# packages out (see git history of this file for that note) after hitting
+# `fcitx5_5.1.12.bb:do_compile`'s `fmt::localtime()` removal — that was
+# ALREADY fixed by Y6-1's own patch 0001 before Y6-3 even hit it (Y6-3's
+# build ran concurrently against a stale checkout); the actual blocker Y7-1
+# found and fixed was two unrelated, LATER-stage `do_package_qa` failures
+# (buildpaths leak in fcitx5's own CMakeLists.txt `get_filename_component`
+# call + a cross-compile sysroot leak in its bundled FindIsoCodes.cmake —
+# see fcitx5_5.1.12.bb's own EXTRA_OECMAKE/patch comments — plus two missing
+# FILES entries on fcitx5-chewing). Both recipes now `bitbake` clean start
+# to finish (do_package_qa PASS, RPMs produced) — verified live, not
+# assumed from reading the fix alone.
+IMAGE_INSTALL:append = " dbus fcitx5 fcitx5-chewing"
+
+# --- Network: Wi-Fi via iwd + systemd-networkd (Y7-3, 2026-08-26) ---------
+# Closes REAL-HW-CHECKLIST.md §5's honest gap: this image previously had
+# firmware blobs (Y2-2's linux-firmware-iwlwifi/-mediatek/-rtl-nic, machine
+# .conf) and kernel drivers (Y2-2's duduclaw-{n305,8845hs}.cfg fragments)
+# but NO userspace connection-management stack at all -- a Wi-Fi-capable
+# kernel with nothing able to actually join a network. Ports the Debian
+# appliance line's D4a-1 decision (DESIGN-network-settings-2026-08.md §2,
+# decision A-①: iwd + systemd-networkd over NetworkManager + wpa_supplicant,
+# measured there at 12.6x less resident memory and 2 packages vs 12) onto
+# this Yocto image -- `iwd` resolves from meta-oe (recipes-connectivity/
+# iwd/iwd_3.12.bb, one-hand-verified present at the pinned meta-openembedded
+# commit, see kas/duduclaw-os.yml), no new layer needed for it.
+#
+# duduclaw-network-config (this layer's own small recipe, recipes-
+# connectivity/duduclaw-network-config/) carries the matching
+# 25-wireless-dhcp.network drop-in and RDEPENDS on iwd +
+# wireless-regdb-static -- see that recipe's own header for why
+# `wireless-regdb-static`, not bare `wireless-regdb`, is the package this
+# kernel actually needs (an OE package split with no Debian equivalent).
+#
+# gateway's D-Bus client for iwd (crates/duduclaw-gateway/src/network/
+# iwd.rs, from the Debian line's D4a-3) needs ZERO Yocto-side changes --
+# confirmed byte-identical between crates/ and this recipe's own vendored
+# duduclaw-cli-src/ snapshot before this ticket touched anything, so the
+# same binary that already speaks iwd's D-Bus API on the Debian line speaks
+# it here too, the moment iwd itself is actually on the image.
+#
+# NO netdev group / SupplementaryGroups wiring, and this is a REAL
+# divergence from the Debian line's D4a-1, not an oversight: the Debian
+# line needed `netdev` because ITS gateway runs as an unprivileged
+# `duduclaw` service user (appliance/mkosi.extra's gateway unit, `User=
+# duduclaw`) and iwd's D-Bus policy denies everyone except root/sudo/netdev
+# by default. THIS image's duduclaw-gateway.service (duduclaw-cli's own
+# recipe, files/duduclaw-gateway.service) has no `User=` line at all -- it
+# runs as root, per this Yocto product line's own Y2-1 bring-up decision
+# ("this Yocto image doesn't provision a non-root service user ... yet").
+# Root already clears any sane default-deny D-Bus policy's root/sudo hole
+# with no group membership needed, so the whole netdev mechanism the Debian
+# line built is currently a no-op HERE. NOT independently verified against
+# the exact D-Bus policy file iwd's upstream tarball installs (unlike the
+# Debian line's own iwd .deb, which is confirmed to patch in a `netdev`
+# policy stanza) -- flagged rather than assumed, and this comment is the
+# marker to revisit the moment this Yocto line's gateway ever moves to an
+# unprivileged service user (matching the Debian line's own architecture),
+# at which point the D4a-1 netdev machinery needs porting for real.
+#
+# Firmware is NOT repeated here -- already on the machine (duduclaw-
+# genericx86-64.conf's MACHINE_EXTRA_RRECOMMENDS, Y2-2) and does not need a
+# duduclaw-qemux86-64 equivalent (QEMU has no real Wi-Fi radio to load
+# firmware for at all; this ticket's own QEMU verification is therefore
+# necessarily limited to "iwd daemon runs + D-Bus service registers +
+# gateway's iwd.rs gets a real, non-error 'no adapter' answer instead of
+# erroring out", NOT "a real network associates" -- that half needs the
+# real N305/8845HS hardware, same honest limit REAL-HW-CHECKLIST.md already
+# states for the Debian line's own equivalent).
+IMAGE_INSTALL:append = " iwd wireless-regdb-static duduclaw-network-config"
+
+# --- Audio: PipeWire + WirePlumber (Y7-3, 2026-08-26) ---------------------
+# Closes REAL-HW-CHECKLIST.md §6's honest gap: duduclaw-shell already ships
+# a real wpctl-subprocess audio backend (crates/duduclaw-shell/src/audio/
+# wpctl.rs, confirmed byte-identical in this recipe's own vendored
+# duduclaw-shell-src/ snapshot before this ticket touched anything) and a
+# real settings-page UI, but neither `pipewire` nor `wireplumber` was ever
+# in this image's IMAGE_INSTALL -- `wpctl` almost certainly did not exist on
+# any Yocto image built to date, same diagnosis the Debian line's D5 round
+# made before it existed there either.
+#
+# `pipewire`/`wireplumber` resolve from meta-multimedia, a DIFFERENT
+# meta-openembedded sublayer than meta-oe -- added to kas/duduclaw-os.yml
+# for this ticket (that file's own comment has the full LAYERDEPENDS/
+# LAYERSERIES_COMPAT verification, including why meta-python comes along
+# for the ride). A `pipewire_%.bbappend` (recipes-multimedia/pipewire/, this
+# ticket) force-enables the SPA ALSA hardware backend PACKAGECONFIG that
+# would otherwise silently build DISABLED on this distro (DISTRO_FEATURES
+# has no "alsa" token) and trims the rest of pipewire's own unconditional
+# defaults (gstreamer/libcamera/jack/avahi/webrtc-echo-cancelling/raop/...)
+# down to the same "wpctl-only, no ALSA-app shim, no PulseAudio shim, no
+# Bluetooth" shape the Debian line's D5 round chose at the apt-package
+# level -- see that bbappend's own header for the full accounting.
+#
+# Session wiring (kiosk user's `audio` group + the kiosk-launch.sh
+# start_audio_session function that hand-starts both daemons before any
+# compositor) lives in duduclaw-shell's own recipe/files, ported from D5's
+# exact reasoning: this kiosk is a plain systemd SYSTEM service with no
+# logind session, so there is no `systemd --user` manager to activate
+# pipewire.service/wireplumber.service the way Debian ships them -- see
+# duduclaw-kiosk-launch.sh's own comment block for the full port.
+#
+# QEMU verification note (this ticket): qemux86-64's default machine has no
+# emulated sound device at all unless one is added to the runqemu/QEMU
+# invocation -- appliance/run-vm-yocto.sh (this line's own QEMU launcher)
+# gained `-audiodev none -device intel-hda -device hda-duplex` for this
+# ticket, mirroring the Debian line's own run-vm.sh `-audiodev`/intel-hda
+# convention (REAL-HW-CHECKLIST.md §6 already names this as the expected
+# QEMU device shape) -- without it `wpctl status` would correctly show zero
+# sinks even with a fully working PipeWire/WirePlumber, which would be
+# indistinguishable from the packages being silently disabled the way (1)
+# above almost let happen for Wi-Fi's ALSA plugin.
+IMAGE_INSTALL:append = " pipewire wireplumber"
+
+# --- kernel-modules umbrella (Y7-3, 2026-08-26 QEMU verification fix) ----
+# Real bug caught by actually booting the image in QEMU, not by re-reading
+# the recipe: both the network and audio work above LOOKED complete
+# (bitbake succeeded, `which wpctl pipewire wireplumber` all resolved, iwd's
+# binary was on the image) but on first boot `systemctl is-active iwd`
+# reported `failed` and `/proc/asound/cards` was empty with `lsmod | grep
+# snd` returning nothing at all. Root cause, same SHAPE in both cases: the
+# kernel .config already has everything needed built as a MODULE
+# (`CONFIG_CRYPTO_USER_API_HASH=m` / `CONFIG_CRYPTO_USER_API_SKCIPHER=m` for
+# iwd's AF_ALG crypto backend; `CONFIG_SND_HDA_INTEL=m` +
+# `CONFIG_SND_HDA_CODEC_*=m` for the audio controller), and linux-yocto's
+# module-splitting machinery DOES build+package every one of them
+# individually (`kernel-module-algif-hash`, `kernel-module-algif-skcipher`,
+# `kernel-module-snd-hda-intel`, `kernel-module-snd-hda-codec-realtek`, ...
+# — confirmed present as real .rpm files in this exact build's own deploy/
+# rpm/ output) — but NONE of those package names were ever referenced
+# anywhere in this image's IMAGE_INSTALL or in iwd's own RRECOMMENDS
+# (iwd_3.12.bb's RRECOMMENDS:${PN} only lists the PKCS7/PKCS8/X509
+# key-parser modules needed for EAP-TLS certificates — it does NOT
+# RRECOMMEND the AF_ALG glue modules its own crypto backend needs, an
+# upstream/OE recipe gap, not a Yocto-line mistake), so `modprobe`d up
+# built .ko files simply never made it onto the rootfs at all. Live-verified
+# the exact failure mode too: `modprobe algif_hash` on the booted VM failed
+# with "FATAL: Module algif_hash not found in directory
+# /lib/modules/6.18.24-yocto-standard" — the module truly is not there, not
+# just unloaded.
+#
+# Fix: `kernel-modules`, the standard oe-core umbrella meta-package that
+# RDEPENDS on every kernel-module-* package this exact kernel build
+# produced (kernel.bbclass's own module-split mechanism, not hand-picked by
+# this recipe). Deliberately NOT hand-listing `kernel-module-algif-hash
+# kernel-module-algif-skcipher kernel-module-snd-hda-intel
+# kernel-module-snd-hda-codec-realtek ...` individually: this image doesn't
+# yet know which exact HDA codec chip the real N305/8845HS hardware carries
+# (REAL-HW-CHECKLIST.md's own "AX-series module TBD" disclosure for Wi-Fi
+# firmware applies here too, for the audio codec), and enumerating "the
+# codecs QEMU's intel-hda emulates" would silently under-cover real
+# hardware the same way the original bug under-covered everything. The
+# umbrella costs disk (every built module, not just the ones this ticket
+# needed) but removes the guessing entirely — same trade-off direction this
+# project already made for MACHINE_EXTRA_RRECOMMENDS's firmware subset
+# (explicit, not narrowed to a guess), just resolved the other way here
+# because unlike firmware there is no per-chip package split cheap enough
+# to enumerate confidently without the real hardware in hand.
+IMAGE_INSTALL:append = " kernel-modules"
+
+# --- Entry B: 實體救援開機項 (Y7-2, 2026-08-26) ---------------------------
+# Authority: commercial/docs/DESIGN-maintenance-mode-2026-08.md §3 — the
+# Yocto-line-specific rescue boot entry, dependent on the sd-boot menu
+# mechanism (DRAFT-no-linux-surface-2026-08.md item 4) which this ticket
+# also realizes on this line for the first time (no loader.conf existed
+# on this line before this ticket at all — wic's own auto-generated
+# default was silently in effect, see duduclaw-rescue-boot.bbclass's own
+# header for the exact finding).
+#
+# `duduclaw-rescue-boot` (meta-duduclaw/classes/) is the MECHANISM: builds
+# a second signed UKI (same kernel+initramfs as the product UKI, cmdline
+# `systemd.unit=duduclaw-rescue.target`) and overrides wic's own
+# auto-generated loader.conf with a hardened one (`timeout 0` + `editor
+# no` — the `editor no` line is a real gap this ticket found and closed,
+# see that class's own comment and the fetched loader.conf file's header
+# for the systemd upstream documentation evidence).
+#
+# `duduclaw-rescue` (recipes-duduclaw/duduclaw-rescue/) is the POLICY: the
+# target itself, its diagnostic-shell/audit/root-lock units, the
+# restricted non-root autologin account, and the emergency.target/
+# rescue.target mask — see that recipe's own header for the full
+# identity-model decision record (§3.3 option (a) chosen over (b)) and the
+# DRAFT item 5 (emergency.target) mask decision.
+inherit duduclaw-rescue-boot
+
+# Y7-1 (2026-08-26) real parse-time fix, hit while rebuilding
+# duduclaw-image-flatpak (this ticket's own deliverable, which `require`s
+# this file): "Unable to get checksum for duduclaw-image-flatpak SRC_URI
+# entry duduclaw-loader.conf: file could not be found" -- bitbake's default
+# FILESPATH is computed from the OUTERMOST recipe's PN/BPN (whichever .bb
+# file bitbake was actually asked to build), not the PN of whichever file a
+# `require`d snippet happens to live in; Y7-2's own `bitbake duduclaw-image`
+# runs never hit this because there PN really is `duduclaw-image` and the
+# default `${THISDIR}/duduclaw-image/` search entry already covers it --
+# only a *different* top-level recipe requiring this one (duduclaw-image-
+# flatpak.bb) exposes the gap. Explicit FILESEXTRAPATHS makes the lookup
+# PN-independent, matching the fix's own file (still `duduclaw-image/
+# duduclaw-loader.conf`, untouched -- this only adds a search path, it does
+# not move/rename Y7-2's file).
+FILESEXTRAPATHS:prepend := "${THISDIR}/duduclaw-image:"
+
+SRC_URI += "file://duduclaw-loader.conf"
+
+IMAGE_INSTALL:append = " duduclaw-rescue"

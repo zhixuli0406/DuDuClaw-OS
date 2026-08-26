@@ -13,9 +13,13 @@
 # (fcitx5 needs one to register its control interface on) and fcitx5 itself
 # (the D3/D3-f/W7-3 Debian-line Chinese-input work, ported onto this base --
 # see recipes-support/{fcitx5,fcitx5-chewing,libchewing,extra-cmake-modules}/
-# for the four self-authored recipes this needed). PipeWire/audio remains
-# deferred, matching D5's own scope on the Debian line being separate from
-# D3's IME work.
+# for the four self-authored recipes this needed).
+#
+# Y7-3 (2026-08-26) closes the third: PipeWire/audio (start_audio_session
+# below), a verbatim port of the Debian line's own D5 function
+# (appliance/mkosi.extra/usr/local/sbin/duduclaw-kiosk-launch.sh) -- same
+# scope split D5 itself had from D3's IME work, just closed in a later
+# ticket on this line instead.
 set -euo pipefail
 shopt -s nullglob
 
@@ -64,6 +68,77 @@ comp_socket_name() {
         return 0
     done
     return 0
+}
+
+# ── Audio: PipeWire + WirePlumber (Y7-3, 2026-08-26, verbatim port of the
+# Debian appliance line's D5 `start_audio_session`) ───────────────────────
+# This kiosk is a plain systemd SYSTEM service (User=duduclaw-kiosk,
+# duduclaw-kiosk.service) with no logind session, so there is no
+# `systemd --user` manager to activate pipewire.service/wireplumber.service
+# the way the upstream OE recipes install them -- exactly the same reason
+# the D-Bus session bus above has to be started by hand. So they are
+# started here too, as ordinary background children of this script, which
+# also means systemd's default KillMode=control-group tears them down with
+# the session.
+#
+# Started BEFORE any compositor, for every session shape this script might
+# grow later (matching D5's own reasoning verbatim): PipeWire only needs
+# $XDG_RUNTIME_DIR (already created at 0700 by duduclaw-kiosk.service's own
+# RuntimeDirectory=) and, for WirePlumber, the session bus started by the
+# dbus-run-session re-exec at the top of this file -- neither depends on
+# comp/shell being up, and comp/shell do not depend on audio being up
+# either.
+#
+# Fail-open on every branch, same contract as the fcitx5 block below: a box
+# with no audio hardware, or an image built without these packages, must
+# still reach a working screen. The shell reports the resulting state
+# honestly rather than pretending -- crates/duduclaw-shell/src/audio/ fails
+# to an explicit "audio unavailable" backend on Linux (NOT to its demo
+# backend), and 系統設定 › 聲音 runs its own probe, so a missing daemon
+# surfaces as 「音訊服務未啟動」 instead of a slider that moves and changes
+# nothing.
+#
+# WirePlumber is started AFTER PipeWire's client socket exists rather than
+# in parallel: it is a PipeWire client, and starting it against a socket
+# that is not there yet just makes it retry-or-exit for no reason. The wait
+# is bounded and non-fatal -- past the budget it starts anyway and reports
+# its own failure to the journal, because a stuck wait here would delay the
+# whole screen coming up.
+AUDIO_WAIT_SECS="${DUDUCLAW_KIOSK_AUDIO_WAIT_SECS:-5}"
+
+start_audio_session() {
+    local i
+
+    if [[ "${DUDUCLAW_KIOSK_AUDIO:-1}" == "0" ]]; then
+        log "audio disabled via DUDUCLAW_KIOSK_AUDIO=0 -- 音量控制不可用"
+        return 0
+    fi
+    if ! command -v pipewire >/dev/null 2>&1; then
+        log "note: pipewire not installed -- 音量控制不可用"
+        return 0
+    fi
+    if [[ -S "$RUNTIME_DIR/pipewire-0" ]]; then
+        log "note: PipeWire socket already present at $RUNTIME_DIR/pipewire-0 -- not starting a second daemon"
+        return 0
+    fi
+
+    log "starting PipeWire"
+    pipewire >/dev/null 2>&1 &
+
+    for (( i = 0; i < AUDIO_WAIT_SECS * 10; i++ )); do
+        [[ -S "$RUNTIME_DIR/pipewire-0" ]] && break
+        sleep 0.1
+    done
+    if [[ ! -S "$RUNTIME_DIR/pipewire-0" ]]; then
+        log "WARNING: PipeWire produced no socket within ${AUDIO_WAIT_SECS}s -- starting WirePlumber anyway"
+    fi
+
+    if command -v wireplumber >/dev/null 2>&1; then
+        log "starting WirePlumber (PipeWire session manager; ships wpctl, which the shell drives)"
+        wireplumber >/dev/null 2>&1 &
+    else
+        log "note: wireplumber not installed -- PipeWire is running but has no session manager, so there will be no default sink"
+    fi
 }
 
 # ── fcitx5 configuration seed (Y6-1, ported from the Debian appliance
@@ -160,6 +235,10 @@ FCITX5_CONFIG
     printf '%s' "$FCITX5_SEED_VERSION" > "$marker"
     log "seeded fcitx5 config (v$FCITX5_SEED_VERSION): keyboard-us/chewing order, 開機即中文, Ctrl+Space 切中英（Shift 已停用防誤觸）, 直式候選字"
 }
+
+# Audio starts before comp, matching D5's own ordering -- see
+# start_audio_session's own comment block above for why.
+start_audio_session
 
 # No LIBGL_ALWAYS_SOFTWARE here -- same rule the Debian line's script
 # documents: Mesa refuses to force software rendering on the process that

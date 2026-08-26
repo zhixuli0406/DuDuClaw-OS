@@ -257,11 +257,25 @@ FILES:${PN} += "${systemd_system_unitdir}/duduclaw-kiosk.service ${sbindir}/dudu
 # kept for the same reason the Debian line keeps it: Chromium-shaped GPU
 # clients open /dev/dri/renderD* directly (a plain filesystem open, not
 # brokered through seatd) -- duduclaw-shell's own wgpu backend does the
-# same thing. No `audio` group / PipeWire wiring in this Y3-1 round (no
-# PipeWire recipe in this image yet) -- tracked as an explicit gap, see the
-# image recipe's own comment.
+# same thing.
+#
+# `audio` ADDED (Y7-3, 2026-08-26 -- pipewire/wireplumber now in the image,
+# see duduclaw-image.bb's own comment for the recipe/layer wiring). Unlike
+# the `video`-vs-`seat` divergence above, this one is NOT a divergence from
+# the Debian line -- `audio` is a plain stock group shipped by base-passwd's
+# own group.master (GID 29, one-hand-verified by extracting the actual
+# base-passwd_3.6.8.tar.xz source tarball out of this build's own DL_DIR
+# cache and grepping it, the same "stock group, no cross-recipe DEPENDS
+# needed" status this comment already established for `video` a few lines
+# up) -- no USERADD_DEPENDS addition needed for it, unlike `render`/`seat`
+# below. /dev/snd/* being root:audio 0660 is PipeWire's own convention for
+# who may open real ALSA hardware nodes directly (the SPA ALSA plugin this
+# ticket's pipewire_%.bbappend force-enables runs as this same
+# duduclaw-kiosk user, inside the kiosk session, not as a separate system
+# daemon user -- see the image recipe's own comment for why nothing here is
+# systemd-enabled as a system service).
 USERADD_PACKAGES = "${PN}"
-USERADD_PARAM:${PN} = "--system --home-dir /data/duduclaw-kiosk --no-create-home --shell /sbin/nologin --groups video,render,seat duduclaw-kiosk"
+USERADD_PARAM:${PN} = "--system --home-dir /data/duduclaw-kiosk --no-create-home --shell /sbin/nologin --groups video,render,seat,audio duduclaw-kiosk"
 
 # Y3-2 (2026-08-26) real build-time bug: `bitbake duduclaw-image-flatpak`
 # failed do_prepare_recipe_sysroot with "useradd: group 'render' does not

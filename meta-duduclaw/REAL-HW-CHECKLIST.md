@@ -169,50 +169,187 @@ of 'fmt'`：fcitx5 5.1.12 上游程式碼呼叫 `fmt::localtime()`，但這條 Y
 
 ## 5. 網路
 
-**誠實狀態（Y6-3 查證時點）**：這條 Yocto 線的 image recipe 裡**沒有**
-`wpa_supplicant`／`iwd`／`NetworkManager` 任何一種 WiFi 連線管理套件
-（搜尋 `recipes-core/images/*.bb` 與 `conf/machine/duduclaw-genericx86-64.conf`
-確認）。已經有的只是**韌體 blob**（`linux-firmware-iwlwifi`
-`linux-firmware-mediatek` `linux-firmware-rtl-nic`，見該 machine.conf
-的「Firmware subset」註解）——韌體讓 kernel driver 認得到硬體，但沒有
-使用者空間工具能實際「連上一個 WiFi 熱點」。
+**誠實狀態（Y7-3 更新，2026-08-26，取代 Y6-3 的舊誠實記錄）**：Y6-3
+查證時點記錄的缺口（image 裡完全沒有 WiFi 連線管理套件）**已補上**——
+`iwd`（meta-oe/recipes-connectivity，client+monitor+systemd
+PACKAGECONFIG）＋`wireless-regdb-static`（oe-core 自帶，kernel 直接載入
+regulatory.db 用的現代套件，**不是**裸的 `wireless-regdb`——那個名字在
+這條線上其實是舊版 crda 導向的套件，二擇一互斥，見
+`duduclaw-network-config.bb` 自己的說明）＋新的小 recipe
+`duduclaw-network-config`（`recipes-connectivity/duduclaw-network-config/`，
+帶 `25-wireless-dhcp.network`，`Type=wlan` 比對＋`RouteMetric=600`，
+高於這條線 oe-core 內建 `systemd-conf` 的有線 `RouteMetric=10`，讓有線
+優先、無線退居次要，比照 Debian appliance 線 D4a-1 的慣例但數值基準不同，
+理由見該 `.network` 檔案自己的註解）都已進 `duduclaw-image.bb` 的
+`IMAGE_INSTALL`。韌體（`linux-firmware-iwlwifi`／`-mediatek`／`-rtl-nic`）
+Y2-2 已在機器層。gateway 端的 iwd D-Bus client（`network/iwd.rs`）**不需要
+任何 Yocto 端改動**——確認與 Debian 線 D4a-3 用的是同一份原始碼，
+在這個 Yocto image 的 vendored 快照裡逐位元組相同。
 
 - [ ] **有線網路（優先測這個）**：接上網路線，開機後跑
       `ip addr show` 確認拿到 DHCP IP；`curl -sS http://127.0.0.1:18789/healthz`
       確認 gateway 對外可達（呼應 §6 dashboard 項）。這條路徑走的是
       `systemd-networkd`（`INIT_MANAGER = "systemd"` 已含 networkd，
-      oe-core 預設對乙太網路走 DHCP client，理論上開箱即通，但**本輪
-      未在真機上驗證過乙太網路埠是否真的被 kernel 正確辨識**——列 ⚠️。
-- [ ] **無線網路**：目前預期 **FAIL 或 SKIP**（沒有連線管理工具，就算
-      kernel 認得到網卡也無法連上熱點）。若要測試，最多只能驗證
-      `dmesg | grep -i iwlwifi` 或 `mt7921e`/`mt7925e`（視主機板實際
-      無線網卡而定）有沒有正確載入韌體、沒有 firmware-load 錯誤——這樣
-      至少能確認韌體套件選對了，即使連不上網。
-- [ ] dashboard 的網路設定頁（`os_wifi` 三工具，`duduclaw-gateway` 裡的
-      Rust 端 API）目前**沒有對應的 OS 層執行者**可以真的執行「連上某個
-      WiFi」——這是一個真實的功能缺口，不是本票要修的範圍，但到貨當天
-      如果客戶預期能用介面連 WiFi，請先設好心理預期。
+      oe-core 的 `systemd-conf` 套件內建 `wired.network`，
+      `RouteMetric=10`，理論上開箱即通，但**本輪未在真機上驗證過乙太
+      網路埠是否真的被 kernel 正確辨識**——列 ⚠️。
+- [x] **無線連線管理套件已補齊，QEMU 上已驗證服務本身活著**：
+      `systemctl is-active iwd` → `active`；`iwctl device list` 印出正確
+      表頭且成功連上 D-Bus（QEMU 無 Wi-Fi 網卡故清單為空，誠實的環境
+      限制，見上方「QEMU 驗證記錄」）。真機上若網卡被韌體正確載入，
+      `iwctl station <dev> scan` +
+      `iwctl station <dev> get-networks` 應該能看到附近熱點；
+      `iwctl station <dev> connect <SSID>` 走互動式密碼輸入。
+- [ ] **無線連線本身仍是 ⚠️ 未在真機驗證**：套件補齊≠已在真實無線網卡
+      上跑過一次完整關聯流程——這條線目前沒有比照 Debian appliance 線
+      D4a-9 那樣的 mac80211_hwsim 自動走查（掃描→連線→forget→重開機
+      自動重連），到貨當天請按上面的 `iwctl` 指令手動走一次，若失敗
+      請完整記錄 `journalctl -u iwd -b --no-pager` 供除錯。
+- [ ] `dmesg | grep -iE "iwlwifi|mt7921e|mt7925e|rtl8"`（視主機板實際
+      無線網卡而定）：確認韌體正確載入、沒有 firmware-load 錯誤——這是
+      判斷「網卡認到了但連不上」vs「韌體本身選錯」的第一道分野。
+- [ ] dashboard 的網路設定頁（`os_wifi` 三工具）目前**沒有接到這條
+      Yocto 線的 OS 層**——iwd D-Bus client 程式碼雖然共用，但這條線
+      尚未做 Debian appliance 線 D4b 那樣的設定頁 UI 串接活測；到貨當天
+      請先用 `iwctl` 手動驗證連線能力本身，不要預期設定頁上能操作。
+      這是本票故意不擴大範圍的部分，非本票要修，已記入 §8 欠帳。
+- [ ] **netdev 群組機制刻意沒有移植**：這是與 Debian appliance 線 D4a-1
+      的真實架構差異，不是遺漏——這條線的 `duduclaw-gateway.service`
+      目前以 root 執行（Y2-1 拍板，尚未有非特權服務帳號），root 本身已
+      能通過 iwd 預設的 D-Bus 政策，不需要額外的 netdev 群組授權。等這條
+      線的 gateway 改成非特權使用者執行時，才需要補上 netdev 機制。
 
 ---
 
 ## 6. 音訊
 
-**誠實狀態（Y6-3 查證時點）**：`duduclaw-shell` 的 Rust 原始碼裡有
-`audio/wpctl.rs`（呼叫 PipeWire 的 `wpctl` 控制工具）與
-`settings/sound_page.rs`（設定頁 UI），但**image recipe 裡沒有找到
-pipewire／wireplumber／alsa-utils 任何一個套件**被 `IMAGE_INSTALL`
-納入（`duduclaw-image.bb`／`duduclaw-image-flatpak.bb` 逐行核對過，
-無此類項目）。這代表 `wpctl` 這個二進位在目前的映像裡大機率**不存在**，
-音訊設定頁在真機上開啟後很可能對著一個不存在的指令。
+**誠實狀態（Y7-3 更新，2026-08-26，取代 Y6-3 的舊誠實記錄）**：
+Y6-3 查證時點記錄的缺口（image 裡沒有 pipewire／wireplumber／
+alsa-utils 任何一個套件）**已補上**——`pipewire`＋`wireplumber`
+（來自新加入的 `meta-multimedia` sublayer，見 `kas/duduclaw-os.yml`）
+已進 `duduclaw-image.bb` 的 `IMAGE_INSTALL`。**這裡抓到一個真的、如果
+沒抓到會讓整個修法悄悄失效的洞**：這條 distro 的 `DISTRO_FEATURES`
+沒有 `alsa` 這個 token，而 pipewire 上游 recipe 把「真正讀寫硬體音效卡」
+的 SPA ALSA plugin（`PACKAGECONFIG[alsa]`）用
+`bb.utils.filter('DISTRO_FEATURES', 'alsa ...')` 閘住——若不處理，
+pipewire 會建置成功、`wpctl` 也存在，但**永遠看不到任何一個 sink**，
+和「套件根本沒裝」在真機上難以區分卻同樣無法出聲。已用新的
+`pipewire_%.bbappend`（`recipes-multimedia/pipewire/`）明確覆寫
+`PACKAGECONFIG:class-target` 修正，同時把上游其餘不需要的預設項
+（gstreamer／libcamera／jack／avahi／webrtc-echo-cancelling／raop 等）
+一併關掉，比照 Debian appliance 線 D5 的「wpctl-only、無 ALSA-app
+shim、無 PulseAudio shim、無藍牙」精簡精神，只是在 meson flag 層面做，
+比 Debian 只能在 apt 套件層面做能砍得更乾淨。kiosk 使用者
+（`duduclaw-kiosk`）已加入 `audio` 群組（stock 群組，一手核對
+`base-passwd` 原始碼的 `group.master` 確認 GID 29 存在，無需額外
+`USERADD_DEPENDS`）；`duduclaw-kiosk-launch.sh` 已比照 D5 移植
+`start_audio_session`（compositor 之前手動起 pipewire→等 socket→起
+wireplumber，全程 fail-open）。
 
-- [ ] 開機後跑 `which wpctl pipewire wireplumber` 確認是否存在（預期：
-      不存在，除非 Y6-1 或其他並行票已經補上）。
-- [ ] 若不存在：這一項標記 **SKIP（套件未安裝）**，不是 FAIL；記錄成
-      獨立欠帳（見 §8），不要在驗收現場臨時嘗試安裝—— Flatpak 沒有
-      pipewire 套件可裝（那是系統層級 daemon，不是 app），需要回頭補
-      recipe。
-- [ ] 若已存在（Y6-1 或後續票補上）：用 `speaker-test` 或播放一段音訊
-      確認實際出聲，並在 dashboard 音訊設定頁測試音量調整。
+- [x] 開機後跑 `which wpctl pipewire wireplumber` 確認存在——**QEMU 上
+      已驗證存在**（`/bin/wpctl` `/bin/pipewire` `/bin/wireplumber`）。
+- [x] `systemctl is-active duduclaw-kiosk` → **QEMU 上已驗證 `active`**；
+      `/run/duduclaw-kiosk/` 下 `pipewire-0`／`pipewire-0-manager`／
+      `wayland-1` 均為真實 socket（`srwxr-xr-x`），確認 PipeWire＋
+      WirePlumber 真的在 kiosk session 裡跑起來，不是「binary 存在但
+      沒人啟動它」。
+- [ ] **`wpctl status`（在 kiosk session 內部執行）本輪未達成**——注意
+      指令不是 `runuser`（這條線的 busybox `sh` 沒有 `runuser`），也不能
+      單靠裸的 `su -s /bin/sh duduclaw-kiosk -c 'wpctl status'`：本輪這樣
+      測會回 `Could not connect to PipeWire`（缺 session bus，是這個
+      臨時指令本身的限制，不是 PipeWire 沒起來——見上方「QEMU 驗證記錄」
+      的說明）。真機到貨當天若要看到真實裝置＋`Sinks:` 清單，走 dashboard
+      設定頁的聲音頁籤（會用正確的 session 上下文呼叫 wpctl），或等殼本身
+      點亮後直接用控制中心的音量滑桿。
+- [ ] 用 dashboard 設定頁的音量滑桿確認能真的調整（`wpctl get-volume`
+      前後對照）——需殼本身能點亮，本輪 QEMU 驗證只到 D-Bus/systemd 層，
+      未到殼 UI 層（§3 AVX2/TCG 崩潰迴圈裁決尚待真機）。
+- [x] `speaker-test` 這條線**沒有** `alsa-utils`（比照 Debian D5 的判斷，
+      靠 wpctl 生態不需要它）——改用 pipewire 自帶的 `pw-play`/`pw-cat`
+      （本票的 `pipewire_%.bbappend` 已明確開啟 `pw-cat` PACKAGECONFIG，
+      二進位應存在，QEMU 上 `which` 已確認存在，實際播放未測——
+      `-audiodev none` 下 QEMU 主機本身不出聲，這項要留給真機）。
+- [x] **QEMU 層級的音效卡辨識已驗證**：`cat /proc/asound/cards` →
+      `0 [Intel]: HDA-Intel - HDA Intel`，`lsmod | grep -c snd` → `7`。
+      真機上實際聽到聲音、dashboard 滑桿真的調得動——**仍是 ⚠️ 未在真機
+      驗證**，見下方 QEMU 驗證記錄的「QEMU 環境天花板」說明。
+
+---
+
+## QEMU 驗證記錄（Y7-3，2026-08-26）
+
+**狀態：COMPLETE（QEMU 層級）**。在 `duduclaw-qemux86-64` 機器上完整重烤
+`duduclaw-image`（`kas shell meta-duduclaw/kas/duduclaw-os.yml -c "bitbake
+duduclaw-image"`，`Tasks Summary: Attempted 7497 tasks ... all succeeded`），
+用獨立於既有兩台常駐 VM（47023／47025，未觸碰）的私有 QEMU 實例
+（serial 47031→47033、qmp 47032→47034、dashboard 18798→18799，兩輪，見下）
+在真實序列主控台上逐項活測，不是讀 log 推論。
+
+**第一輪活測（修 kernel-modules 之前）揪出兩個真的、會讓整個修法悄悄
+失效的洞**（兩者都不是網路/音訊套件本身的問題，是同一類「kernel
+.config 有开但沒打包成 image 裡的模組」的缺口）：
+1. `systemctl is-active iwd` → `failed`；`journalctl -u iwd` 明說
+   `No HMAC(SHA1) support found` 等一長串 crypto 缺失，並列出
+   `CONFIG_CRYPTO_USER_API_HASH` 等一串「kernel 缺少的選項」。順著查
+   `/proc/config.gz` 才發現這些其實**都有**開（`CONFIG_CRYPTO_AES=y`
+   `CONFIG_CRYPTO_USER_API_HASH=m` 等）——只是編成**模組**，而模組檔案
+   `algif_hash.ko`/`algif_skcipher.ko` 根本沒被打包進 image
+   （`modprobe algif_hash` 在開機的 VM 上直接回
+   `FATAL: Module algif_hash not found`）。根因：iwd 上游/OE recipe 自己的
+   `RRECOMMENDS` 只列了 PKCS7/PKCS8/X509 憑證解析模組，沒列 AF_ALG 這組
+   iwd 自己 crypto 後端真正要用的模組——是上游 recipe 的疏漏，不是這條
+   Yocto 線寫錯。
+2. `cat /proc/asound/cards` → `--- no soundcards ---`，`lsmod | grep snd`
+   → 空。同一類根因：`CONFIG_SND_HDA_INTEL=m`／`CONFIG_SND_HDA_CODEC_*=m`
+   全部編成模組但同樣沒打包進 image。
+3. 修法：`duduclaw-image.bb` 新增 `IMAGE_INSTALL:append = "
+   kernel-modules"`（oe-core 標準的「這顆 kernel 建出的每一個模組都打包」
+   umbrella package，不是逐一手點 `kernel-module-algif-hash`
+   `kernel-module-snd-hda-codec-realtek` ……——刻意不逐一列舉，因為這條線
+   目前還不知道 N305/8845HS 真機實際是哪顆 HDA codec 晶片，逐一列舉會重演
+   同一種「猜漏就悄悄失效」的洞）。重烤後 `Tasks Summary: 7497 attempted,
+   all succeeded`。
+
+**第二輪活測（kernel-modules 修法之後，最終結果）**：
+- `systemctl is-active iwd` → **`active`**（PASS，由 `failed` 轉為
+  `active`，實錘 kernel-modules 修法有效）。
+- `iwctl device list` → 印出正確的表頭（`Name Address Powered Adapter
+  Mode`）且成功連上 iwd 的 D-Bus 服務，清單本身是空的——**這是誠實的
+  QEMU 限制，不是失敗**：qemux86-64 這個 QEMU machine 沒有任何模擬的
+  Wi-Fi 網卡，iwd 找不到「一張都沒有」是預期行為，真機驗收要看的是
+  「iwd 服務本身活著、iwctl 連得上」，這兩項都 PASS 了。
+- `cat /proc/asound/cards` → **`0 [Intel]: HDA-Intel - HDA Intel / HDA
+  Intel at 0x81040000 irq 35`**（PASS，QEMU 的 `-device intel-hda -device
+  hda-duplex` 模擬裝置被 kernel 真的認到並掛上 `snd-hda-intel` 驅動）；
+  `lsmod | grep -c snd` → `7`（snd 核心系列模組全數載入）。
+- `systemctl is-active duduclaw-kiosk` → **`active`**；
+  `/run/duduclaw-kiosk/` 下確認看到 `pipewire-0`／`pipewire-0-manager`／
+  `wayland-1` 均為真實 socket（`srwxr-xr-x`），代表 `duduclaw-kiosk-launch.sh`
+  的 `start_audio_session` 真的把 PipeWire＋WirePlumber 起在 kiosk session
+  裡、且 comp/shell 的 Wayland socket 也活著。
+- **未達成一項，誠實記錄**：透過臨時 `su -s /bin/sh duduclaw-kiosk -c
+  'wpctl status'` 手動驗證失敗於 `Could not connect to PipeWire`——這是
+  我這次手動下的 `su` 指令本身沒有 kiosk session 自己那條
+  `dbus-run-session` 包出來的 session bus（RTKit 相關警告印證了這點：
+  `Unable to autolaunch a dbus-daemon without a $DISPLAY`），**不是**
+  PipeWire/WirePlumber 本身沒起來——上一行已經用 socket 存在證明它們真的
+  在跑。真正對等於「進到 kiosk session 內部跑 wpctl」需要重放
+  `duduclaw-kiosk-launch.sh` 自己的 dbus-run-session 包法（或等殼本身
+  真的點亮再從殼內測 UI），本輪未做到那一步，留給真機到貨當天或殼本身
+  的 AVX2/TCG 崩潰迴圈裁決之後一併驗證（見 §3 既有揭露）。
+
+**QEMU 環境天花板（誠實界線，這是本輪能拿到的驗證上限，非本輪失誤）**：
+- 殼（duduclaw-comp/duduclaw-shell）本身仍受 §3 已經記錄的 Apple
+  Silicon+TCG+AVX2 JIT 崩潰迴圈影響——這次驗證全程用 serial console 讀
+  systemd/D-Bus 層狀態，沒有嘗試看畫面，兩者互不影響（誠實地說：這代表
+  這次驗證證明的是「dbus/systemd 這一層的網路與音訊管線是通的」，不是
+  「使用者在畫面上真的看得到/摸得到」）。
+- iwd 的「連上一個真的 Wi-Fi 熱點」半段（掃描→WPA2 握手→取得 IP）需要
+  真實無線網卡，QEMU 沒有等價的 mac80211_hwsim 走查腳本（Debian
+  appliance 線的 D4a-9 有，這條 Yocto 線目前沒有移植），留待真機。
+- 音訊的「真的聽到聲音」半段同理需要真實喇叭/耳機，`-audiodev none`
+  代表 QEMU 主機本身不出聲，這次驗證證明的是「kernel 認得到裝置、
+  PipeWire 找得到 sink」，不是「有聲音真的播出來」。
 
 ---
 

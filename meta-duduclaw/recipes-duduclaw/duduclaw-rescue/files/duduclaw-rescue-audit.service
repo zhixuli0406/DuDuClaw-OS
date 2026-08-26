@@ -1,0 +1,31 @@
+# DuDuClaw OS — Entry B: automatic, tamper-evident boot audit marker.
+#
+# Runs BEFORE the rescue shell exists at all (Before=duduclaw-rescue-
+# shell@.service) and is NOT dependent on the operator cooperating — the
+# whole point is that entering rescue mode itself leaves a trace even if
+# the person at the console never types anything (commercial/docs/DESIGN-
+# maintenance-mode-2026-08.md §3.4: "即使拿到機器的人在當下不受即時稽核
+# ...進入 rescue 環境本身也要留痕").
+#
+# Honest limit (2026-08-26, Y7-2): the design doc's own recommendation is
+# to write this marker to a `/data`-style persistent state partition so
+# gateway can read it back and report to dashboard on the NEXT normal
+# boot. This Yocto line does not have that partition yet (duduclaw-
+# gateway.service's own comment already flags "/data mount" as a separate,
+# not-yet-landed product-layer ticket) — wiring gateway-side ingestion
+# against a path that is about to move house would be manufacturing
+# technical debt, not paying it down. This unit therefore writes to the
+# local rootfs only (survives a REBOOT, not necessarily an A/B slot
+# switch/re-flash) — real forensic value today, full gateway/dashboard
+# wiring tracked as a follow-up once /data lands.
+[Unit]
+Description=DuDuClaw rescue mode: write boot audit marker
+DefaultDependencies=no
+Requisite=duduclaw-rescue.target
+After=local-fs.target systemd-journald.service
+Before=duduclaw-rescue-shell@.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/duduclaw-rescue-audit.sh

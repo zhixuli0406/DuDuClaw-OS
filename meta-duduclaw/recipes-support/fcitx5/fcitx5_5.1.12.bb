@@ -36,6 +36,7 @@ LIC_FILES_CHKSUM = "file://LICENSES/LGPL-2.1-or-later.txt;md5=2a4f4fd2128ea2f650
 SRC_URI = "git://github.com/fcitx/fcitx5.git;protocol=https;branch=master \
     file://0001-log-fmt-localtime-removed-in-newer-fmt.patch \
     file://0002-cmake-install-interface-relative-includedir.patch \
+    file://0003-cmake-resolve-libdatadir-relative-to-install-prefix.patch \
 "
 # 5.1.12 is a lightweight tag (object type "commit" in the GitHub API
 # response, i.e. this SHA already IS the commit, unlike the annotated tags
@@ -83,12 +84,35 @@ DEPENDS = " \
 # COMPONENTS TestFrontend)` at configure time (verified by reading
 # fcitx5-chewing 5.1.7's actual CMakeLists.txt) -- turning this off here
 # would break fcitx5-chewing's build even with ITS OWN ENABLE_TEST=OFF.
+# Y7-1 (2026-08-26) real do_package_qa "buildpaths" fix, root-caused by
+# reading the actual generated build/config.h (not guessed): fcitx5's own
+# cmake/FindIsoCodes.cmake does `find_file(ISOCODES_ISO639_JSON
+# iso_639-3.json HINTS "${PC_ISOCODES_PREFIX}/share/iso-codes/json/")`
+# guarded by `if(NOT DEFINED ISOCODES_ISO639_JSON)` -- under cross-compile,
+# find_file()'s CMAKE_FIND_ROOT_PATH redirection makes it discover the file
+# inside THIS recipe's staging sysroot and returns that absolute,
+# TMPDIR-rooted path as the variable's value, which config.h then bakes in
+# as a runtime C-string literal ("<TMPDIR>/.../recipe-sysroot/usr/share/
+# iso-codes/json/iso_639-3.json" -- confirmed verbatim in the generated
+# config.h). That path does not exist on the real target rootfs. Since the
+# guard is `if(NOT DEFINED ...)`, pre-defining the cache variable via
+# EXTRA_OECMAKE bypasses the broken find_file() entirely and supplies the
+# CORRECT target runtime path directly -- iso-codes (already an RDEPENDS
+# below) installs its json data to ${datadir}/iso-codes/json/ via its own
+# default meson FILES (confirmed: the leaked sysroot string's suffix after
+# "recipe-sysroot" is exactly "usr/share/iso-codes/json/...", i.e. this IS
+# where the real target file lands once resolved against / instead of the
+# sysroot). This is a functional fix, not just QA-silencing -- without it
+# fcitx5's ISO language/country name lookups would fail open on real
+# hardware (the file genuinely wouldn't exist at the baked-in path).
 EXTRA_OECMAKE = " \
     -DENABLE_X11=OFF \
     -DENABLE_ENCHANT=OFF \
     -DBUILD_SPELL_DICT=OFF \
     -DENABLE_TEST=OFF \
     -DENABLE_DOC=OFF \
+    -DISOCODES_ISO639_JSON=${datadir}/iso-codes/json/iso_639-3.json \
+    -DISOCODES_ISO3166_JSON=${datadir}/iso-codes/json/iso_3166-1.json \
 "
 
 # ${datadir}/icons: real do_package QA failure caught this ("30 installed

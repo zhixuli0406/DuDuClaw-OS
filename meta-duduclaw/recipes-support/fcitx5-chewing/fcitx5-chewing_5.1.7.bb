@@ -53,4 +53,20 @@ EXTRA_OECMAKE = " \
     -DENABLE_COVERAGE=OFF \
 "
 
-FILES:${PN} += "${datadir}/fcitx5 ${datadir}/metainfo ${datadir}/locale"
+# Y7-1 (2026-08-26) real do_package QA failure caught by actually running
+# `bitbake fcitx5-chewing` (Y6-1's 4th round): "19 installed and not shipped
+# files [installed-vs-shipped]", two distinct roots:
+#   1. ${libdir}/fcitx5 -- the chewing engine's fcitx5 ADDON module itself
+#      (libchewing.so, fcitx5's addon-naming convention: NOT the same file
+#      as libchewing_0.9.1.bb's own ${libdir}/libchewing.so.3 -- that is
+#      libchewing the C-ABI shim living in a different directory, this is
+#      the fcitx5 addon that loads it). Same class of miss as fcitx5's own
+#      FILES:${PN} fix for ${datadir}/icons -- addon-module recipes need
+#      their addon dir explicitly listed, upstream's own default
+#      packaging never assumes it for you.
+#   2. ${datadir}/icons -- fcitx5-chewing ships its own chewing-specific
+#      icon assets (fcitx5's hicolor icon set, same shape as fcitx5_5.1.12.bb's
+#      own ${datadir}/icons miss for its core icons -- this recipe's FILES
+#      list never accounted for its OWN icons even after that fix landed
+#      on the fcitx5 recipe).
+FILES:${PN} += "${datadir}/fcitx5 ${datadir}/metainfo ${datadir}/locale ${libdir}/fcitx5 ${datadir}/icons"

@@ -1,0 +1,27 @@
+# DuDuClaw OS — Entry B: remount root read-only.
+#
+# This Yocto line does not yet have a general read-only-root hardening pass
+# (unlike the Debian appliance line's build.sh Step 3.5 root-lock — see
+# duduclaw-image.bb's own "MUST NOT ship with this on" comment for the
+# still-open, separately-tracked bring-up gap). Rather than wait on that
+# larger ticket, Entry B enforces read-only root FOR ITSELF: the rescue
+# environment is diagnostic, not a place to hand-edit the golden rootfs —
+# any real fix belongs in the normal A/B update mechanism. `/` is what gets
+# locked; there is no `/data`-equivalent writable state partition on this
+# line yet for this unit to leave alone (see duduclaw-rescue-audit.service's
+# own comment for the same honest limit).
+[Unit]
+Description=DuDuClaw rescue mode: remount root filesystem read-only
+DefaultDependencies=no
+Requisite=duduclaw-rescue.target
+After=local-fs.target
+Before=duduclaw-rescue-shell@.service duduclaw-rescue-audit.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Idempotent either way (a future general read-only-root pass may already
+# have mounted `/` ro before this unit ever runs) — a remount of an
+# already-read-only filesystem is a normal no-op for mount(8), not a
+# failure, so no special exit-status handling is needed.
+ExecStart=/bin/mount -o remount,ro /

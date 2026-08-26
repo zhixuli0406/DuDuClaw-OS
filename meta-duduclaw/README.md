@@ -66,17 +66,34 @@ meta-duduclaw/
 │                                         # common-pc-64, kernel fragments applied
 ├── recipes-core/images/
 │   ├── duduclaw-image-minimal.bb        # console-only bring-up image, UKI+systemd-boot
-│   └── duduclaw-image.bb                # + duduclaw-sysd/duduclaw-cli payload (Y2-3,
-│                                         # qemux86-64 dual-verified: sysd socket + healthz)
+│   ├── duduclaw-image.bb                # + duduclaw-sysd/duduclaw-cli/duduclaw-comp/
+│   │                                     # duduclaw-shell payload — "開機即殼" (Y3-1/Y4-0):
+│   │                                     # qemux86-64 boots straight into duduclaw-kiosk.
+│   │                                     # service (comp+shell), real DRM/udev backend,
+│   │                                     # real Wayland socket in /run/duduclaw-kiosk/
+│   │                                     # (Y4-0 QEMU-verified after the libegl-mesa fix
+│   │                                     # below — before that fix, comp always panicked
+│   │                                     # on missing libEGL.so.1 and the kiosk service
+│   │                                     # crash-looped to a permanent StartLimitBurst
+│   │                                     # failure)
+│   └── duduclaw-image-flatpak.bb        # + flatpak/bubblewrap/ostree/polkit chain (Y3-2,
+│                                         # Y4-0 PASS: duduclaw-flatpak-kiosk-verify.service
+│                                         # OVERALL PASS — real Flathub install of Chromium
+│                                         # + 6 runtimes, --kiosk --dump-dom against the
+│                                         # real gateway dashboard returns real DOM content)
 ├── recipes-kernel/linux/
 │   ├── linux-yocto_6.18.bbappend        # COMPATIBLE_MACHINE alias fix (both machines)
 │   └── linux-yocto/                     # duduclaw-{n305,8845hs,gaming}.cfg driver
 │                                         # fragments, real-HW only, Y2-2 written / Y2-3
 │                                         # build-verified via kernel_configme
-├── recipes-duduclaw/                    # duduclaw-sysd + duduclaw-cli built+verified
-│                                         # (Y2-1/Y2-3); duduclaw-comp recipe written but
-│                                         # never build-verified; duduclaw-shell/
-│                                         # duduclaw-cli-worker have no recipe yet
+├── recipes-duduclaw/                    # all five duduclaw-* binaries now build-verified:
+│                                         # duduclaw-sysd/duduclaw-cli (Y2-1/Y2-3),
+│                                         # duduclaw-comp/duduclaw-shell (Y4-0, first-ever
+│                                         # successful build — see duduclaw-shell's own
+│                                         # gen-git-manifests.sh header comment for the
+│                                         # zed-monorepo workspace-inheritance fix this
+│                                         # needed). duduclaw-cli-worker still has no
+│                                         # recipe (zero work done on it).
 ├── kas/
 │   ├── duduclaw-os.yml                  # build config — start here (qemux86-64)
 │   └── duduclaw-os-genericx86-64.yml    # overlay for the real-HW machine (Y2-2/Y2-3)
@@ -280,3 +297,19 @@ docker exec -u 1000 duduclaw-yocto bash -c \
 See `commercial/docs/TODO-agent-first-os-2026-08.md` "Y 線" section for the
 live status (build/boot evidence, disk/time actuals, what's deferred to
 Y1-2).
+
+As of Y4-0 (2026-08-26): `bitbake duduclaw-image-flatpak` builds 100% green
+(all 7734 tasks succeed) and boots to a real "開機即殼" — `duduclaw-comp` +
+`duduclaw-shell` run under `duduclaw-kiosk.service` with a real udev/DRM
+backend and a real Wayland socket in `/run/duduclaw-kiosk/`, and
+`duduclaw-flatpak-kiosk-verify.service` proves the Flatpak/Chromium chain
+end-to-end (real Flathub network install, real `--kiosk --dump-dom` against
+the real gateway dashboard). This took six real bugs to get here — see the
+TODO doc's "Y4-0 本輪紀錄" section for the full list (a Yocto Rust version
+gap, a zed-monorepo Cargo workspace-inheritance gotcha, a missing runtime
+library the image recipe's own comment had misdiagnosed as unnecessary, and
+three smaller packaging fixes). One residual finding not yet root-caused:
+`duduclaw-kiosk.service` was observed to restart once or twice before
+settling into a stable `active`/`running` state on one boot (down from
+*always* hitting `StartLimitBurst` permanently before the fix) — tracked as
+an open follow-up, not re-claimed as fully stable.

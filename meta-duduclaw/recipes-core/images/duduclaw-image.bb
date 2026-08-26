@@ -62,7 +62,7 @@ IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
 # line's `run_comp_session` shape).
 #
 # mesa-megadriver / mesa-vulkan-drivers are explicit, not left to automatic
-# shlib RDEPENDS resolution: comp/shell link against libgbm.so/libEGL.so/
+# shlib RDEPENDS resolution: comp/shell link against libgbm.so/
 # libvulkan.so (caught by the normal ELF NEEDED-based auto-RDEPENDS
 # mechanism), but the actual GPU/software-rendering backend drivers
 # (llvmpipe, virtio_gpu, the vulkan gfxstream ICD) are dlopen()'d at
@@ -75,6 +75,30 @@ IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
 # repo's other image recipes prefer explicit installs over relying on
 # RRECOMMENDS being honored.
 #
+# Y3-8 (2026-08-26) real boot failure fix: the ORIGINAL version of this
+# comment (above) claimed libEGL.so was linked/auto-RDEPENDS-covered like
+# libgbm/libvulkan -- that claim was WRONG, caught by a live QEMU boot
+# actually panicking, not by re-reading the recipe:
+#   thread 'main' panicked at .../smithay-0.7.0/src/backend/egl/ffi.rs:148
+#   Failed to load LibEGL: DlOpen { desc: "libEGL.so.1: cannot open shared
+#   object file: No such file or directory" }
+# The word "DlOpen" in smithay's own error is the tell: smithay's EGL
+# backend dynamically dlopen()s libEGL.so.1 (via the same `libloading`-style
+# pattern the mesa GPU driver .so's already use), it does NOT link it as an
+# ELF NEEDED entry -- so it is exactly as invisible to auto-RDEPENDS as
+# mesa-megadriver/mesa-vulkan-drivers already are, just missed when this
+# image recipe was first written. comp panicking kills its Wayland socket,
+# which makes duduclaw-shell's own client connection see "Connection reset
+# by peer" and panic too, which makes duduclaw-kiosk-launch.sh exit 101,
+# which duduclaw-kiosk.service's Restart=always retries every 5s until
+# StartLimitBurst=8 within StartLimitIntervalSec=300 is hit and systemd
+# gives up ("Start request repeated too quickly", "Failed to start DuDuClaw
+# kiosk session") -- confirmed via `systemctl show -p NRestarts` climbing
+# 1->6+ across repeated checks on a live boot, not inferred from the panic
+# alone. `libegl-mesa` (verified package name+contents:
+# `meta/recipes-graphics/mesa/mesa.inc`'s `FILES:libegl-mesa =
+# "${libdir}/libEGL*.so.* ${datadir}/glvnd/egl_vendor.d"`) is the fix.
+#
 # xkeyboard-config is added explicitly too: libxkbcommon (comp/shell's
 # keymap compiler, DEPENDS'd at build time by both recipes) needs the
 # actual XKB rules/layouts data files under ${datadir}/X11/xkb at RUNTIME
@@ -83,4 +107,4 @@ IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
 # a keysym (confirmed present as its own oe-core recipe,
 # recipes-graphics/xorg-lib/xkeyboard-config_2.47.bb -- not a guessed
 # package name).
-IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers xkeyboard-config"
+IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers libegl-mesa xkeyboard-config"

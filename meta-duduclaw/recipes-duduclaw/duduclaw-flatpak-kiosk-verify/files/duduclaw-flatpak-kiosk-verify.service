@@ -40,6 +40,26 @@ StateDirectory=duduclaw-flatpak-verify
 # /var/log/duduclaw-flatpak-kiosk-verify/, matching the script's
 # RESULT_FILE.
 LogsDirectory=duduclaw-flatpak-kiosk-verify
+# Y3-7 (2026-08-26) real activity failure fix: the FIRST live QEMU run of
+# this unit failed at the script's own "named-installation-not-registered"
+# check -- `flatpak --installation=verify remotes` returned a bare
+# "error: Permission denied" (verified by reproducing this EXACT scenario
+# in an isolated debian:trixie container: same useradd shape --no-
+# create-home, same StateDirectory-equivalent 0700 dir, run as that user --
+# `flatpak --installation=verify remotes` fails Permission denied; adding
+# `HOME=<the state dir>` alone, no other env var, makes it succeed). Root
+# cause: `useradd --no-create-home` still WRITES a `/home/<user>` path into
+# the passwd entry's gecos home field (it just never creates that
+# directory) -- flatpak's underlying GLib calls need some writable
+# $HOME/.cache (or $HOME/.local/share) for bookkeeping even when only
+# listing remotes of an explicitly-named, explicitly-pathed installation,
+# and get Permission denied trying to use a $HOME that resolves to a
+# directory that doesn't exist and this user cannot create (/home is
+# root:root 0755, same class of problem as /var/lib itself). Reusing the
+# StateDirectory as HOME needs no new directory, no new ownership, and no
+# second systemd-managed directory to keep in sync with this unit's own
+# Path= expectations.
+Environment=HOME=/var/lib/duduclaw-flatpak-verify
 ExecStart=/usr/local/sbin/duduclaw-flatpak-kiosk-verify.sh
 # Never blocks boot and never crash-loops: this is a diagnostic, not a
 # service other units depend on.

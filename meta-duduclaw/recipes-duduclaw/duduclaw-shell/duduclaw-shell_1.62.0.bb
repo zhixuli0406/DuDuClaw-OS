@@ -50,6 +50,165 @@ S = "${UNPACKDIR}/duduclaw-shell-src"
 require duduclaw-shell-crates.inc
 require duduclaw-shell-git-deps.inc
 
+# Y3-4 (2026-08-26) real build failure fix: `bitbake duduclaw-image-flatpak`
+# died in duduclaw-shell's do_compile -- "failed to parse manifest at
+# .../sources/collections/Cargo.toml" / "error inheriting `edition` from
+# workspace root manifest's `workspace.package.edition`" / "failed to find
+# a workspace root". Root cause: the 26 zed/wasm_thread/font-kit/scap
+# crates duduclaw-shell-git-deps.inc fetches via `subpath=` extract ONLY
+# their own subdirectory -- the zed monorepo's workspace-root Cargo.toml
+# (which `edition.workspace = true`, `[lints] workspace = true`, and
+# several `foo.workspace = true` dependency entries all need to resolve)
+# is never present on disk, so cargo cannot parse these manifests at all,
+# not even to start resolving dependencies.
+#
+# Switching these 26 entries to a `file://` vendor-directory fetch was
+# considered and rejected: cargo_common_do_patch_paths (cargo_common.bbclass)
+# only generates its `[patch."<repo-url>"]` entries for SRC_URI whose
+# fetcher type is 'git'/'gitsm' -- a `file://` entry would silently produce
+# NO patch, and cargo would then try to resolve these packages from their
+# real `git+https://...` Cargo.lock source at build time, a hard network
+# fetch `--frozen --offline` cannot make. The git:// SRC_URI entries above
+# (subpath+destsuffix+name+SRCREV, one bare mirror fetch per repo, per
+# gen-git-deps.py's own header comment) therefore stay completely
+# untouched by this fix.
+#
+# What actually needs to change is narrower: only each crate's Cargo.toml
+# needs the workspace-inherited fields resolved to literal values --
+# every real .rs source file, feature flag, and target-cfg dependency is
+# identical either way. `cargo vendor` is real cargo machinery that does
+# exactly this normalization as a side effect of producing a
+# publish-shaped manifest (see gen-git-manifests.sh's own header comment
+# for the full verification, including why its `<vendor-dir>/<name>/`
+# output layout with flat sibling `path = "../other-name"` references
+# happens to be byte-for-byte the same shape this recipe's
+# `destsuffix=<name>` layout already uses). files/duduclaw-shell-git-manifests/
+# holds 26 small, checked-in, human-diffable Cargo.toml snapshots (NOT a
+# 942MB vendor blob -- that whole-recipe strategy was independently
+# considered and rejected for the ~700 crates.io deps already, see
+# gen-git-deps.py's own comment; this is a narrower, purely additive fix
+# for the 26 git-sourced ones that already can't be built any other way).
+SRC_URI += "file://duduclaw-shell-git-manifests"
+
+# Must run AFTER do_unpack (so the raw git-fetched Cargo.toml files already
+# exist to overwrite) and BEFORE do_configure (cargo_common_do_patch_paths
+# is a do_configure postfunc, but the actual manifest CONTENT only matters
+# once do_compile invokes cargo -- do_unpack:append is simply the earliest,
+# cleanest point once both sides of the overwrite exist).
+python do_unpack:append() {
+    import os
+    import shutil
+    manifests_dir = d.expand("${UNPACKDIR}/duduclaw-shell-git-manifests")
+    unpackdir = d.expand("${UNPACKDIR}")
+    for name in os.listdir(manifests_dir):
+        src = os.path.join(manifests_dir, name, "Cargo.toml")
+        dest = os.path.join(unpackdir, name, "Cargo.toml")
+        if not os.path.exists(dest):
+            bb.fatal("gen-git-manifests.sh overlay target missing: %s (did duduclaw-shell-git-deps.inc's destsuffix=%s get renamed?)" % (dest, name))
+        shutil.copyfile(src, dest)
+        bb.note("duduclaw-shell: overlaid normalized Cargo.toml for git dep '%s'" % name)
+}
+
+# Y3-5 (2026-08-26) real build failure fix: after the manifest-overlay and
+# nested-path fixes above got `bitbake -k duduclaw-image-flatpak` all the
+# way to real rustc compilation (642-package dependency graph, ~90%
+# through), it died on a genuine Rust toolchain version gap, not a Yocto
+# packaging bug:
+#   error[E0658]: use of unstable library feature `cold_path`
+#     --> .../gpui/src/profiler.rs:1080:5 (also 469, 490, 610, and
+#         profiler/actions.rs:94, 100 -- 6 call sites total)
+#   = note: see issue #136873 <https://github.com/rust-lang/rust/issues/136873>
+# `std::hint::cold_path()` is a real, unconditional call in the pinned
+# gpui rev's own source (not gated behind any feature/cfg) -- it builds
+# fine on this crate's own macOS toolchain (`rust-toolchain.toml` pins
+# 1.97.1) because that Rust release already stabilized it, but this
+# Yocto release (6.0.2/wrynose) only ships `rust_1.94.1.bb` -- verified by
+# actually checking: `find openembedded-core/meta/recipes-devtools/rust
+# -iname 'rust_*.bb'` returns exactly one hit, 1.94.1, no newer version
+# available to switch PREFERRED_VERSION to. Upgrading Yocto's own
+# bootstrapped Rust toolchain (a multi-stage rust-native/rust-cross-canadian
+# chain, effectively tracking a newer oe-core/meta-yocto release entirely)
+# is a different, much larger-scope ticket than this recipe's own build
+# fix and is NOT attempted here.
+#
+# Fix: strip the 6 `std::hint::cold_path();` call sites via sed, not a
+# quilt patch file -- rust-lang's own documentation for this function is
+# explicit that it is "opaque to the optimizer" and "will always execute,
+# having no effect on runtime behavior" (it is a pure branch-prediction
+# hint, semantically equivalent to a no-op on any toolchain that doesn't
+# understand it), so deleting the call sites is behavior-preserving, not a
+# functional patch. sed over quilt because the fix is a single repeated
+# literal string (not a structural diff) and needs zero manual rebasing
+# if the pinned gpui rev ever moves and keeps using the same call
+# (idempotent: a rev with `cold_path` already removed just yields zero
+# substitutions here, not an error).
+# python, not shell -- oe-core's do_patch (patch.bbclass's patch_do_patch,
+# EXPORT_FUNCTIONS do_patch) is itself a python task; bitbake requires an
+# :append/:prepend to match the base function's language, and silently
+# concatenating shell text onto a python function body is what produced a
+# real, confusing failure here: `bitbake -e duduclaw-shell` errored with a
+# Python `SyntaxError` pointing at this block's own shell `for` loop line
+# ("Unable to parse ... Exception during build_dependencies for do_patch")
+# BEFORE the fix below -- caught by the mandatory `bitbake -e` sanity check
+# this recipe's own history already established as a pre-build habit, not
+# by burning a build cycle on it.
+python do_patch:append() {
+    import subprocess
+    unpackdir = d.getVar("UNPACKDIR")
+    marker = "/* cold_path() stripped: unstable on Yocto rust_1.94.1, see duduclaw-shell_1.62.0.bb comment; pure optimizer hint, no behavior change (rust-lang/rust#136873) */"
+    for relpath in ("profiler.rs", "profiler/actions.rs"):
+        target = os.path.join(unpackdir, "gpui", "src", relpath)
+        if not os.path.exists(target):
+            bb.fatal("duduclaw-shell: expected gpui source file missing: %s (did the pinned gpui rev move src/profiler*.rs?)" % target)
+        subprocess.run(["sed", "-i", "s|std::hint::cold_path();|%s|" % marker, target], check=True)
+        bb.note("duduclaw-shell: stripped cold_path() call sites in %s" % target)
+
+    # Y3-6 (2026-08-26): see the SRC_URI += "file://duduclaw-shell-branding"
+    # comment below this function for the full root-cause writeup. Kept in
+    # the SAME do_patch:append (not a second one) -- bitbake merges
+    # multiple :append definitions for one function in file order, which
+    # works, but one block is simpler to reason about and avoids relying on
+    # that merge behavior at all.
+    home_rs = os.path.join(unpackdir, "duduclaw-shell-src", "src", "home.rs")
+    if not os.path.exists(home_rs):
+        bb.fatal("duduclaw-shell: expected home.rs missing: %s" % home_rs)
+    for png in ("mark-32.png", "cat-512.png"):
+        old = "../../../appliance/branding/png/%s" % png
+        new = "../../duduclaw-shell-branding/%s" % png
+        subprocess.run(["sed", "-i", "s|%s|%s|" % (old, new), home_rs], check=True)
+    bb.note("duduclaw-shell: repointed home.rs branding include_bytes! paths at duduclaw-shell-branding/")
+}
+
+# Y3-6 (2026-08-26) real build failure fix: past cold_path, `duduclaw-shell`
+# itself (not gpui) failed do_compile --
+#   error: couldn't read `src/../../../appliance/branding/png/mark-32.png`
+#   error: couldn't read `src/../../../appliance/branding/png/cat-512.png`
+# `crates/duduclaw-shell/src/home.rs` genuinely `include_bytes!`s these two
+# PNGs from THREE directories above its own `src/`, i.e. repo-root-relative
+# `appliance/branding/png/*.png` (the source's own comment: "repo-relative
+# to appliance/branding/png/ ... commercial/ 是 gitignored，資產一律用
+# appliance/branding 的版本") -- correct and intentional on a normal
+# checkout of this repo, but refresh-src.sh only ever snapshots
+# `crates/duduclaw-shell` + `crates/duduclaw-native-gui` into this
+# recipe's files/ (see that script's own header comment) -- the
+# `appliance/` tree three levels up was never part of what this recipe
+# fetches, so the literal relative path resolves to nothing on disk here.
+#
+# Fix: check in the two PNGs themselves (tiny, 1010 + 14568 bytes, license
+# already MIT/repo-owned -- this crate's own brand mark, not third-party,
+# per about.rs's identical reasoning for its own bundled mark-256.png copy)
+# as a THIRD small file:// SRC_URI entry, then patch home.rs's two
+# `include_bytes!` paths (in the SAME do_patch:append as the cold_path fix
+# above, since both are "make a fetched source file's on-disk path
+# assumptions match this recipe's actual UNPACKDIR layout") from the
+# repo-relative `../../../appliance/branding/png/<f>` to
+# `../../duduclaw-shell-branding/<f>` -- two `../` from
+# `${UNPACKDIR}/duduclaw-shell-src/src/` reaches `${UNPACKDIR}/`, where the
+# new destsuffix=duduclaw-shell-branding directory lands. The actual sed
+# lives in the do_patch:append above (kept as ONE block with the cold_path
+# fix, not a second :append).
+SRC_URI += "file://duduclaw-shell-branding"
+
 # Q1 (2026-08-24) shipping gate: this crate's own Cargo.toml `[features]
 # default = []` already matches the appliance's desired build (no debug
 # affordances reachable) -- plain `cargo build`, no CARGO_BUILD_FLAGS
@@ -103,6 +262,30 @@ FILES:${PN} += "${systemd_system_unitdir}/duduclaw-kiosk.service ${sbindir}/dudu
 # image recipe's own comment.
 USERADD_PACKAGES = "${PN}"
 USERADD_PARAM:${PN} = "--system --home-dir /data/duduclaw-kiosk --no-create-home --shell /sbin/nologin --groups video,render,seat duduclaw-kiosk"
+
+# Y3-2 (2026-08-26) real build-time bug: `bitbake duduclaw-image-flatpak`
+# failed do_prepare_recipe_sysroot with "useradd: group 'render' does not
+# exist" / "useradd: group 'seat' does not exist" -- RDEPENDS (below) only
+# orders the FINAL rootfs-time postinst (when the real /etc/group is
+# assembled), but useradd.bbclass ALSO runs a separate, earlier
+# useradd_sysroot check against this recipe's OWN build sysroot's fake
+# passwd/group database (populated from whichever OTHER recipes' own
+# groupadd_sysroot output happen to already be merged in) -- RDEPENDS has
+# no effect on that task's ordering at all, only DEPENDS does. `render` is
+# created by systemd's `udev` sub-package (`GROUPADD_PARAM:udev = "-r
+# render"`, openembedded-core/meta/recipes-core/systemd/systemd_259.5.bb)
+# and `seat` by seatd (`GROUPADD_PARAM:${PN} = "-r seat"`,
+# recipes-core/seatd/seatd_0.9.3.bb) -- neither recipe was in this
+# recipe's DEPENDS. `USERADD_DEPENDS` is useradd.bbclass's own documented
+# mechanism for exactly this ("valid to inherit useradd and only set
+# USERADD_DEPENDS to depend on users/groups created by another recipe" --
+# see that class's own comment): it appends to DEPENDS AND to the
+# setscene-dependency list so the group-creating recipes' do_populate_sysroot
+# is guaranteed to have already merged their GROUPADD_PARAM output into the
+# shared sysroot database before THIS recipe's useradd_sysroot task reads
+# it. `video` never errored -- it ships as a stock group in base-files'
+# default /etc/group, no cross-recipe dependency needed for it.
+USERADD_DEPENDS = "systemd seatd"
 
 # RDEPENDS on duduclaw-comp (the systemd unit's ExecStart target) and seatd
 # (the `seat` supplementary group referenced above must exist by the time

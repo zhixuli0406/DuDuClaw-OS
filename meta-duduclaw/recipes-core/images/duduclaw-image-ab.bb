@@ -64,6 +64,57 @@ UKI_CMDLINE = "rootwait root=PARTUUID=${DUDUCLAW_AB_ROOTA_PARTUUID} console=${KE
 
 IMAGE_INSTALL:append = " duduclaw-ab-update"
 
+# duduclaw-firstboot (Y11-2, 2026-08-27): this image's /data partition (p4,
+# files/wic/duduclaw-ab-bootdisk.wks.in) has had a mountpoint since Y8-1 but,
+# until this line, NOTHING that ever provisioned it — Y10-2's own structural
+# finding ("三個額外挖到的結構性發現" ②) already named this gap: an empty,
+# correctly-mounted /data is still useless without `config.toml`/
+# `device.key`/the duduclaw-kiosk home tree that duduclaw-firstboot-
+# provision.sh creates, and Y9-1 already ported+QEMU-verified that exact
+# mechanism onto files/wic/duduclaw-data-bootdisk.wks.in's own /data
+# partition (recipes-core/images/duduclaw-image-data.bb). This line makes
+# THIS image pull in the same recipe rather than fork a second copy of it —
+# duduclaw-firstboot has no partition-NUMBER assumption anywhere (checked
+# this round, not assumed): its systemd units key off the generically-named
+# `data.mount` unit (systemd derives that name from the /data MOUNTPOINT in
+# fstab, not from which partition number backs it — 3 on the data wks, 4
+# here), and its `usr/lib/repart.d/30-data.conf` matches by GPT
+# `Type=linux-generic`+`Label=duduclaw-data`, both of which
+# files/wic/duduclaw-ab-bootdisk.wks.in's own p4 line already sets
+# identically to the data wks's p3 line. Only reachable now because THIS
+# ticket's own wks edit above (`--use-uuid` on p4) is what makes /data
+# actually mount at all on this image — installing duduclaw-firstboot
+# without that fix would have shipped `Requires=data.mount` units waiting
+# on a mount unit that generates but never activates, and (per Y9-1's own
+# Requires= finding on the data line) turned the pre-existing "empty" gap
+# into a hard `duduclaw-gateway.service` boot failure the moment
+# recipes-duduclaw/duduclaw-firstboot/files/10-data.conf's
+# `Requires=duduclaw-firstboot-provision.service` drop-in landed alongside
+# this recipe's own pre-existing recipes-duduclaw/duduclaw-ab-update/files/
+# 10-ab-home.conf (same directory, different filename, both setting the
+# identical `Environment=DUDUCLAW_HOME=/data/duduclaw` — benign duplication,
+# not a conflict, per Y10-2's own §6 disposition on the two drop-ins).
+# RESIDUAL, NOT-YET-VERIFIED RISK (honestly flagged, not silently assumed
+# fine): `duduclaw-firstboot-repart.sh` runs `systemd-repart --dry-run=no
+# --definitions=/usr/lib/repart.d /dev/<root-disk>` against the WHOLE disk,
+# not just /data — Y9-1's own QEMU evidence for this script is on the
+# THREE-partition data wks (ESP+root+data, no reserved root-B slot); this
+# image's FOUR-partition disk additionally carries root-B (p3, GUID:63/60
+# NoAuto+ReadOnly, Type=root, `_empty` GPT name). Reasoned-through-but-
+# UNTESTED-on-this-exact-layout: systemd-repart only creates/grows
+# partitions that have a matching `[Partition]` definition under the
+# `--definitions=` directory (only 30-data.conf lives there, matching
+# Type=linux-generic — root-B's Type=root+NoAuto/ReadOnly bits are never
+# touched by a directory that contains no Type=root definition at all), so
+# root-B should be left untouched by this first-boot pass exactly as it is
+# on every A/B-line boot today — but "should be, by inspection" is not the
+# same bar this recipe's own header already holds itself to ("real QEMU
+# boot, not inferred"), and this specific interaction (repart run alongside
+# a live reserved root-B slot) has never actually been exercised end to end.
+# See this ticket's own TODO-agent-first-os-2026-08.md Y11-2 entry for the
+# exact verification status reached this round.
+IMAGE_INSTALL:append = " duduclaw-firstboot"
+
 # Y9-2 (2026-08-27): factory UKI naming + loader.conf default, so the very
 # first boot's own UKI competes in the SAME sysupdate-managed namespace as
 # every future update instead of permanently winning by static pin.

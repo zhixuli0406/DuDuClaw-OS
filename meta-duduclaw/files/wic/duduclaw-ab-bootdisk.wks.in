@@ -187,15 +187,63 @@ part --fstype=ext4 --label "root-b" --align 1024 --part-name="_empty" --part-typ
 # Setting the bit alone does NOT make growth happen automatically on real
 # hardware with a bigger disk than this factory image: that requires
 # systemd-repart to actually run against a `repart.d/` drop-in on the
-# target, which is NOT wired up yet (tracked as a Y8-1 followup, not done in
-# this wave — see PACKAGECONFIG[repart]'s own comment in
-# recipes-core/systemd/systemd_%.bbappend for why the binary is present
-# anyway). On THIS wks the size is simply fixed at
-# DUDUCLAW_AB_DATA_SIZE_MB — sized for QEMU dev/test disks, not for a real
-# mini-PC's full disk.
+# target — wired up as of Y11-2 (2026-08-27) via
+# recipes-duduclaw/duduclaw-firstboot/'s `duduclaw-firstboot-repart.sh` +
+# `usr/lib/repart.d/30-data.conf`, now installed on this image too (see
+# recipes-core/images/duduclaw-image-ab.bb's own IMAGE_INSTALL comment).
+# PACKAGECONFIG[repart] itself (the systemd-repart binary being present at
+# all) was already enabled layer-wide by Y8-1's
+# recipes-core/systemd/systemd_%.bbappend. On THIS wks the size is simply
+# fixed at DUDUCLAW_AB_DATA_SIZE_MB — sized for QEMU dev/test disks, not for
+# a real mini-PC's full disk.
 #
 # GPT type is the generic `linux-generic` GUID (0FC63DAF-8483-4772-8E79-
 # 3D69D8477DE4), matching the Debian line's own `30-data.conf` (`Type=
 # linux-generic`) — /data is explicitly NOT a `root`-typed partition (it
 # must never be a gpt-auto root candidate).
-part /data --fstype=ext4 --label duduclaw-data --align 1024 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}
+#
+# --use-uuid + --fsoptions + --fspassno (Y11-2, 2026-08-27): THE FIX for the
+# bug Y9-2 (same day, earlier round) reproduced live on this exact wks — with
+# neither `--use-uuid` nor `--use-label` set, wic's own `update_fstab()`
+# (plugins/imager/direct.py, `if part.use_uuid: ... UUID=... elif
+# part.use_label: ... LABEL=... else: /dev/%s%s%d`) fell back to a raw
+# `/dev/<disk><partnum>` device path, and wic's own internal disk-name
+# default is `sda` — baked into /etc/fstab as `/dev/sda4` regardless of what
+# the target machine's actual block device is. On this layer's QEMU machines
+# the disk is virtio-blk (`/dev/vda*`), so `/dev/sda4` never existed: a cold
+# boot hung ~90s on `A start job is running for /dev/sda4` before timing out
+# and continuing without /data ever mounting — confirmed directly via
+# `mount | grep /data` returning nothing on a fresh boot, not inferred. Every
+# earlier round's `df -h /data` "looked mounted" because `df` silently
+# reports the CONTAINING filesystem's usage when the mountpoint itself has
+# nothing mounted on it — a fallback illusion, not a real PASS (see Y9-2's
+# own "新發現" section in TODO-agent-first-os-2026-08.md for the full
+# reproduction). This is the exact same fstab identifier gap
+# files/wic/duduclaw-data-bootdisk.wks.in's own /data line already closed
+# (Y9-1, same day) and real-QEMU-verified (`/dev/vda3 on /data type ext4
+# (rw,relatime,x-systemd.growfs)`, reboot-idempotent, gateway self-config
+# read back from it) — this line mirrors that ALREADY-PROVEN fix verbatim
+# rather than reaching for a third, unverified identifier scheme: the
+# Debian/mkosi appliance line's equivalent fstab entry
+# (appliance/mkosi.extra/etc/fstab) uses `PARTLABEL=duduclaw-data`, but that
+# is mkosi.repart's own `Label=` directive writing the GPT partition Name
+# field directly — a DIFFERENT tool with a different fstab vocabulary. wic's
+# kickstart parser has no `--use-partlabel` equivalent at all (confirmed by
+# reading `ksparser.py`'s `part` argument list, same way Y9-2 confirmed
+# `--label`/`--part-name` land on different GPT fields on the wic side); the
+# two options wic actually offers are `--use-uuid` (ext4 filesystem UUID) and
+# `--use-label` (ext4 filesystem LABEL via `mkfs -L` — NOT the raw GPT
+# Name/PARTLABEL field p2/p3's own comments above already warn is a
+# different, easily-confused namespace on this tool). Picking `--use-uuid`
+# — the option with real QEMU boot evidence behind it on this exact layer —
+# over blindly porting the Debian line's `PARTLABEL=` wording is a deliberate
+# call to not repeat the class of mistake Y9-2 just finished fixing (Bug 1:
+# assuming a Debian/mkosi vocabulary term maps onto the same-named wic
+# option). `--fsoptions=defaults,x-systemd.growfs --fspassno=2` mirror the
+# data wks's own /data line for the same reason stated there: a
+# GPT-level GrowFileSystem resize alone does not resize the ext4 filesystem
+# living inside the partition — `x-systemd.growfs` is the mount-time hook
+# that does, and without it this line's own GrowFileSystem bit (set below by
+# duduclaw-ab-partflags.bbclass) would silently do nothing once /data
+# actually starts mounting.
+part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --fsoptions=defaults,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}

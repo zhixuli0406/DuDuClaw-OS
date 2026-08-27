@@ -112,8 +112,56 @@ header:
 machine: duduclaw-qemux86-64
 distro: duduclaw-os
 
+# --- target 回填記錄 (Y11-3, 2026-08-27) ------------------------------
+# Real finding, not a cosmetic tidy-up: this `target:` sat on Y1-1's own
+# `duduclaw-image-minimal` for nine waves (Y1 through Y9) without ever
+# being bumped, first surfaced by Y10-2's image-convergence design audit
+# (commercial/docs/DESIGN-image-convergence-2026-08.md §1) and re-verified
+# independently here by reading the actual build commands every wave
+# logged in commercial/docs/TODO-agent-first-os-2026-08.md: NONE of them
+# ran a bare `kas build meta-duduclaw/kas/duduclaw-os.yml` and trusted this
+# field — every real build instead named its image explicitly, either via
+# `kas shell ... -c 'bitbake duduclaw-image-flatpak'` (the normal path,
+# Y3-Y9) or `KAS_TARGET=duduclaw-image-ab kas build ...` (Y8-1's env
+# override). So this stale field never broke a wave's own build.
+#
+# It DID sit as a live footgun in two officially-documented paths that
+# always resolved this field literally, found while fixing it, not
+# guessed: (1) this file's own "Usage" comment above (`kas build
+# meta-duduclaw/kas/duduclaw-os.yml`, no target override) — correct for
+# Y1-1 bring-up when it was written, silently stale for every wave since;
+# (2) scripts/release-os.sh's `plan`/`package` subcommands print/expect
+# exactly that same bare `kas build $kas_cfg` as the release build step —
+# followed literally, the sanctioned release path would have cut a
+# console-only minimal image, not the shipping kiosk/flatpak product.
+# release-os.sh itself is untouched by this ticket (out of Y11-3's scope,
+# "只碰 kas 設定的 target") — flagged in
+# commercial/docs/TODO-agent-first-os-2026-08.md Y11-3 entry for a
+# follow-up ticket to add an explicit target print/override there too.
+#
+# Fix, scoped exactly as Y11-3 was asked to do it: bump this field to
+# `duduclaw-image-flatpak` — the most functionally complete AND most
+# QEMU-boot-verified image in the current `require` chain (minimal ->
+# image -> data -> flatpak; carries kiosk/comp/shell, fcitx5 IME, iwd
+# network, pipewire audio, kernel-modules, rescue-boot, AND (since Y9-1's
+# rebase) the /data partition + firstboot provisioning — see that file's
+# own header). This is explicitly an INTERIM fix, not the Y10-2
+# convergence target: that design's own migration path (§3, step ⑦) plans
+# to backfill this same field again, to a new top-level
+# `duduclaw-image-appliance.bb`, only after that recipe exists and clears
+# its own QEMU verification ladder (step ⑥) — NOT implemented as of this
+# ticket (confirmed: no such file under recipes-core/images/ yet). Y10-2's
+# own step ① explicitly says "kas target 現況盤點但暫不改" (survey now,
+# don't fix yet) as part of ITS sequencing; this ticket's own task brief
+# independently authorized doing the interim `duduclaw-image-flatpak` bump
+# now rather than leaving the footgun live for however many more waves the
+# full appliance migration takes — noted here as a real tension between
+# the two, resolved in favor of closing the live doc/release-path gap
+# immediately, not against Y10-2's eventual design (step ⑦ still applies
+# unchanged: this value gets bumped again to duduclaw-image-appliance once
+# that recipe is real and verified).
 target:
-  - duduclaw-image-minimal
+  - duduclaw-image-flatpak
 
 repos:
   bitbake:

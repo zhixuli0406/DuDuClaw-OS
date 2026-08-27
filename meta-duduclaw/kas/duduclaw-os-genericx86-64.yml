@@ -26,7 +26,21 @@ header:
   includes:
     - meta-duduclaw/kas/duduclaw-os.yml
 
+# --- target 回填記錄 (Y11-3, 2026-08-27) ------------------------------
+# Same nine-wave-stale finding as duduclaw-os.yml's own target comment
+# (full rationale there — this file's `target:` is a separate kas key that
+# does NOT inherit the base config's list value via `header.includes`, so
+# it silently drifted right alongside the qemux86-64 one and needed its
+# own fix). Bumped to `duduclaw-image-flatpak` for the same interim-fix
+# reason. Real evidence this exact image has already been built for THIS
+# machine, not just qemux86-64: commercial/docs/TODO-agent-first-os-2026-08.md
+# Y6-3 "genericx86-64 燒錄包" round shipped a real
+# `duduclaw-os-genericx86-64.wic` (10,856,438,784 bytes, sha256 logged
+# there) from `bitbake duduclaw-image-flatpak` on this machine, 7740/7740
+# tasks succeeded, do_rootfs/do_image_wic/do_image_complete all passed —
+# this is not a first-time-for-this-machine guess.
+
 machine: duduclaw-genericx86-64
 
 target:
-  - duduclaw-image-minimal
+  - duduclaw-image-flatpak

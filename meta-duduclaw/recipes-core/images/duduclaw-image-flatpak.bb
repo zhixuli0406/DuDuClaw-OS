@@ -32,7 +32,24 @@ meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-kiosk-verify/ for the \
 Steam-reaches-its-login-screen verification this image now also carries."
 LICENSE = "MIT"
 
-require recipes-core/images/duduclaw-image.bb
+# Y9-1 (2026-08-27): rebased from duduclaw-image.bb onto duduclaw-image-data.bb
+# (which itself just `require`s duduclaw-image.bb + adds a /data partition +
+# first-boot provisioning -- see that recipe's own header). This is the ONE
+# line that changed to bring /data to this image: everything Y3-Y8 already
+# proved here (Flatpak/Steam/kiosk/fcitx5-IME/network/audio) is untouched,
+# since duduclaw-image-data.bb changes nothing about duduclaw-image.bb
+# itself, only adds a WKS_FILE override + one more IMAGE_INSTALL entry on
+# top of it. Motivation: Y8-2 (2026-08-27) found this exact image family
+# has ZERO /data provisioning today -- fcitx5/libchewing's own per-user
+# dictionary can never persist across a reboot, nor can the gateway's
+# config.toml/device identity, because there is nowhere durable to put them
+# (root:root 0755 `/` refuses even `mkdir` from the unprivileged
+# duduclaw-kiosk account). duduclaw-image-ab.bb (Y8-1's separate, NOT YET
+# boot-verified A/B mechanism) also has a /data partition, but gating this
+# much more basic fix behind that unrelated mechanism's own verification
+# bar would have blocked this image's active IME/kiosk work for no reason
+# -- see duduclaw-image-data.bb's own header for the full argument.
+require recipes-core/images/duduclaw-image-data.bb
 
 # dbus: flatpak's own SystemHelper D-Bus activation AND the D-Bus session
 # bus the kiosk launch wrapper needs (research spike §1.2 point 1 --

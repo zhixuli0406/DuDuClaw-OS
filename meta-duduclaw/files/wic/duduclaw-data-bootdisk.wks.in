@@ -1,0 +1,85 @@
+# DuDuClaw OS -- root + /data GPT layout (Y9-1, 2026-08-27).
+#
+# WHY THIS FILE EXISTS: Y8-2 (2026-08-27) live-verified that every image
+# built from this layer's MAIN product line (duduclaw-image.bb ->
+# duduclaw-image-flatpak.bb, both still on oe-core's stock
+# efi-uki-bootdisk.wks.in -- ESP + a single root partition, no /data at
+# all) has ZERO /data provisioning: `ls -lad /data` on a live QEMU boot
+# returned "No such file or directory", and even a root shell attempting
+# `mkdir /data` as the unprivileged duduclaw-kiosk user hit a flat
+# `Permission denied` against `/` itself (root:root 0755) -- not a timing
+# race, a structural absence. That gap blocks fcitx5/libchewing user-dict
+# persistence, the gateway's own config.toml/device identity, and any
+# future agent working-state store from ever surviving a reboot on this
+# line. Y8-1 (same day) already designed and wired a /data partition, but
+# only inside `duduclaw-ab-bootdisk.wks.in` -- a FOUR-partition (ESP +
+# root-A + root-B + data) layout gated behind the entirely separate,
+# NOT YET boot-verified A/B update mechanism (duduclaw-image-ab.bb, see
+# that recipe's own STATUS note). Waiting for the full A/B chain to clear
+# its own verification bar before fixing this much more basic, currently
+# actively-blocking gap would tie two unrelated risk profiles together for
+# no reason -- this file lets /data land on the boot chain that Y3-Y8's
+# IME/kiosk/network/audio work already has real QEMU evidence for, without
+# touching the A/B wks or its bbclass at all.
+#
+# SHAPE: ESP + root are copied byte-for-byte from oe-core's own
+# efi-uki-bootdisk.wks.in (openembedded-core/meta/files/wic/) -- the root
+# partition's `--label root` in particular MUST stay exactly as upstream
+# ships it, because duduclaw-image-minimal.bb's `UKI_CMDLINE = "rootwait
+# root=LABEL=root ..."` is baked into the signed UKI at build time and
+# nothing in this file's own change is meant to touch that already-verified
+# contract. Only p3 (/data) is new.
+#
+# /data's own partition stanza (type GUID, ext4, GrowFileSystem GPT
+# attribute bit) is the SAME role Y8-1 already designed for the A/B wks's
+# own /data partition (files/wic/duduclaw-ab-bootdisk.wks.in) -- same GPT
+# type, same semantics, same growth story -- just at partition number 3
+# instead of 4 here, since there is no root-B slot in this layout. See
+# classes/duduclaw-data-partflags.bbclass for the GrowFileSystem attribute
+# post-processing this wks alone cannot express (wic's kickstart `part`
+# line has no equivalent of mkosi.repart's `GrowFileSystem=` -- same finding
+# Y8-1's own bbclass header already documents in full, not re-derived here).
+#
+# --use-uuid (NOT left unset, and NOT --use-label): wic's own
+# `update_fstab()` (plugins/imager/direct.py) falls back to a raw
+# `/dev/<disk><partnum>` device path in /etc/fstab for any partition with a
+# mountpoint that sets neither --use-uuid nor --use-label -- read directly
+# from wic's own source this round (`if part.use_uuid: ... UUID=...  elif
+# part.use_label: ... LABEL=...  else: /dev/%s%s%d`). A raw device path is
+# fine on QEMU's single deterministic virtio-blk disk (this is why the
+# gap was invisible until now) but is exactly the kind of thing that can
+# differ on real hardware with more than one block device (NVMe vs SATA
+# naming, add-in cards, etc.) -- --use-uuid keys the fstab entry off the
+# ext4 filesystem's own UUID instead, which is assigned once at mkfs time
+# and survives both a GPT-level GrowFileSystem partition resize and the
+# matching x-systemd.growfs filesystem-level resize (resize2fs/e2fsck
+# preserve the superblock UUID across a grow -- this is standard ext4
+# behavior, not a DuDuClaw-specific claim). --fsoptions/--fspassno mirror
+# the Debian appliance line's own /data fstab line
+# (appliance/mkosi.extra/etc/fstab: "defaults,x-systemd.growfs ... 0 2").
+#
+# GPT type is the generic linux-generic GUID
+# (0FC63DAF-8483-4772-8E79-3D69D8477DE4), matching both the Debian line's
+# own 30-data.conf (`Type=linux-generic`) and Y8-1's A/B wks -- /data must
+# never be a Type=root gpt-auto candidate.
+bootloader --ptable gpt --timeout=5
+
+# p1: ESP -- byte-for-byte copy of efi-uki-bootdisk.wks.in.
+part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label boot --active --align 1024 --use-uuid --part-name="ESP" --part-type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B --overhead-factor=1
+
+# p2: root -- byte-for-byte copy of efi-uki-bootdisk.wks.in. Label MUST
+# stay literally "root" (duduclaw-image-minimal.bb's UKI_CMDLINE depends
+# on it). No fixed size -- auto-sizes off IMAGE_ROOTFS_SIZE at build time,
+# same as every image using efi-uki-bootdisk.wks.in today.
+part / --source rootfs --fstype=ext4 --label root --align 1024 --exclude-path boot/
+
+# p3: /data -- new in this file. Fixed build-time size (this is the golden/
+# dev-image size, not a real disk's eventual size); the GrowFileSystem GPT
+# attribute bit (set by duduclaw-data-partflags.bbclass, not expressible
+# here) plus the on-target systemd-repart pass
+# (recipes-duduclaw/duduclaw-firstboot/files/duduclaw-firstboot-repart.sh,
+# reading usr/lib/repart.d/30-data.conf) is what actually grows the
+# partition on real hardware with a bigger disk -- see that script's own
+# header for the full mechanism, ported near-verbatim from the Debian
+# appliance line's equivalent.
+part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --fsoptions=defaults,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_DATA_SIZE_MB}

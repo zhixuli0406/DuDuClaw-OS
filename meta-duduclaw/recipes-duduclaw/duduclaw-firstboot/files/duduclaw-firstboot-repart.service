@@ -1,0 +1,33 @@
+# DuDuClaw OS first-boot: grow /data to fill the disk (Y9-1 Yocto port).
+#
+# Ordered via local-fs-pre.target, the standard systemd hook point for
+# "must run before the bulk of fstab-declared filesystems are mounted"
+# (systemd.special(7)) -- same ordering the Debian appliance line's own
+# duduclaw-firstboot-repart.service uses, and for the same reason: /data's
+# fstab entry (files/wic/duduclaw-data-bootdisk.wks.in's --use-uuid mount,
+# generated into /etc/fstab by wic itself) is one of the "bulk of
+# fstab-declared filesystems" this unit must run ahead of, so a grown
+# partition table is in place before the x-systemd.growfs mount-time resize
+# ever runs. Root itself is not fstab-managed at all on this line (it is
+# found via the UKI's baked-in root=LABEL=root, resolved in the initrd
+# ahead of any regular unit), so this ordering never touches it.
+#
+# Idempotent via the /var/lib/duduclaw/.repart-grown stamp file rather than
+# a self-disable -- kept re-triggerable on purpose, matching the Debian
+# line's own reasoning (a future factory-reset flow can delete the stamp to
+# force a re-grow after a disk swap, without needing to re-enable a
+# disabled unit first).
+[Unit]
+Description=DuDuClaw OS first-boot: grow /data to fill the disk (Yocto)
+Documentation=man:systemd-repart(8)
+DefaultDependencies=no
+Before=local-fs-pre.target
+ConditionPathExists=!/var/lib/duduclaw/.repart-grown
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/duduclaw-firstboot-repart.sh
+
+[Install]
+WantedBy=local-fs-pre.target

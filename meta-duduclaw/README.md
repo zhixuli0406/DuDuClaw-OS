@@ -402,6 +402,61 @@ ProcessKeyEvent` 這組真正的按鍵注入 D-Bus API（`busctl introspect` 已
 （見 TODO 文件 Y8-2 段落）；`fcitx5-remote` 狀態層級的引擎啟用/切換驗證
 已經比 Y7-1（AVX2 崩潰迴圈下連一次穩定查詢都拿不到）更進一步。
 
+## /data 掛載＋first-boot provisioning（Y9-1，2026-08-27）
+
+Y8-2 活測發現這條 Yocto 線的主力產品線（duduclaw-image.bb ->
+duduclaw-image-flatpak.bb，走 oe-core 原生的
+efi-uki-bootdisk.wks.in --只有 ESP+單一 root）**完全沒有 /data 分割**，
+`/` 是 root:root 0755，連非特權使用者 `mkdir` 都被拒絕 -- 不是時序競態，
+是結構性缺席。Y8-1（同日）已經在 duduclaw-ab-bootdisk.wks.in（A/B 四分割，
+`duduclaw-image-ab.bb` 專用，該機制本身尚未經過任何 build/QEMU 驗證）裡
+設計了 /data，但把這個更基礎、正在卡住 IME/gateway config 的缺口綁在一個
+還沒驗證過的機制後面沒有道理。
+
+本輪新增（獨立於 A/B 線，不修改 duduclaw-ab-bootdisk.wks.in /
+duduclaw-ab-partflags.bbclass 任何一行）：
+
+- `files/wic/duduclaw-data-bootdisk.wks.in` -- ESP+root 逐位複製自
+  oe-core 的 `efi-uki-bootdisk.wks.in`（root label 必須維持字面
+  `root`，`duduclaw-image-minimal.bb` 的 `UKI_CMDLINE` 依賴這個事實），
+  新增第三個分割 `/data`（`--use-uuid`，修正 Y8-1 A/B wks 同款寫法在
+  無 `--use-uuid`/`--use-label` 時會退回 `/dev/<disk><num>` 裸路徑的
+  真機命名風險 -- 讀 wic 原始碼 `update_fstab()` 證實，非猜測）。
+- `classes/duduclaw-data-partflags.bbclass` -- 對 `duduclaw-ab-partflags`
+  同款手法（`sfdisk --part-attrs` 補 wic kickstart 語法不支援的 GPT
+  屬性位元），只設 partition 3 的 GrowFileSystem（bit 59），不含 A/B 線
+  的 NoAuto/ReadOnly（這裡沒有 root-B）。
+- `recipes-core/images/duduclaw-image-data.bb` -- `require`
+  `duduclaw-image.bb`（不改動它本身，A/B 線的 `duduclaw-image-ab.bb`
+  仍直接 `require duduclaw-image.bb`，兩者互不干擾、不會有兩個
+  `*-partflags` bbclass 對同一個 `.wic` 檔案跑衝突的 partition-number
+  假設）。`duduclaw-image-flatpak.bb` 的 `require` 目標已改成這個檔案
+  （唯一改動的一行）。
+- `recipes-duduclaw/duduclaw-firstboot/` -- 移植自 Debian 線的
+  `duduclaw-firstboot-provision.sh`／`duduclaw-firstboot-repart.sh`／H3g
+  遷移器 baseline stamping，含兩個誠實列出的分歧：這條線的 root 目前不是
+  唯讀（Y2-1 決策，未改動）；這條線目前沒有非特權的 `duduclaw` 服務帳號
+  （gateway 仍是 root -- 腳本執行期偵測 `id -u duduclaw`，帳號存在才
+  `chown`，不存在就留 root:root 並在 stderr 留下明確訊息，不是靜默降級）。
+  同時安裝 `usr/lib/repart.d/30-data.conf`（systemd-repart 定義，供
+  `duduclaw-firstboot-repart.service` 在真機開機時把 /data 長到吃滿剩餘
+  硬碟 -- Y8-1 已經在共用的 `systemd_%.bbappend` 開了
+  `PACKAGECONFIG[repart]`，這裡不需要再動 systemd 本身）。
+- `duduclaw-gateway.service.d/10-data.conf` drop-in（同樣由
+  `duduclaw-firstboot` 這個 recipe 安裝，不改動 duduclaw-cli 自己那份共用
+  base unit）-- 補上 `Requires=duduclaw-firstboot-provision.service` +
+  `Environment=DUDUCLAW_HOME=/data/duduclaw`。沒有這行，即使 /data
+  掛好、provisioning 也跑過，gateway 進程本身仍然會用預設的
+  `$HOME/.duduclaw`（root 帳號的家目錄，在 root 分割上，每次重建 image
+  就消失）-- 這一行才是讓前面所有 /data 工程真正被 gateway 讀到的關鍵。
+- fcitx5/libchewing 使用者詞庫持久化（Y8-2 列的欠帳）：`seed_fcitx5_config()`
+  的既有降級邏輯（`duduclaw-kiosk-launch.sh`）本來就是為了「一旦 /data
+  可寫就自動恢復」設計的，本輪不需要改任何程式碼，只在該函式加了一段
+  Y9-1 追記註解確認機制對得上。
+
+**驗證狀態**：見 TODO 文件 Y9-1 段落（有無實際跑過 `bitbake
+duduclaw-image-data` + QEMU 開機，誠實依當輪磁碟/併發實況記錄）。
+
 ## Status
 
 See `commercial/docs/TODO-agent-first-os-2026-08.md` "Y 線" section for the

@@ -1,0 +1,43 @@
+# DuDuClaw OS /data forward-only settings migrator (H3g, Y9-1 Yocto port).
+#
+# Same mechanism as the Debian appliance line's own
+# duduclaw-data-migrate.service: replays baked-in
+# /usr/share/duduclaw/migrations/*.sh scripts (this recipe) against /data,
+# tracking completion via marker files ON /data. See
+# crates/duduclaw-core/src/data_migrations.rs (vendored byte-for-byte into
+# this recipe's own duduclaw-cli-src/ snapshot -- diffed against the
+# workspace source before this ticket touched anything, already current)
+# for the full mechanism.
+#
+# WHY Before= duduclaw-gateway.service BUT NOT Requires= (in that
+# direction): identical reasoning to the Debian line's own unit -- a
+# migration bug must never turn into a gateway that refuses to start on an
+# unattended box. A failed run is never silent: data_migrations.rs durably
+# records it (readable via `read_failure`), and this unit itself ends in
+# `failed` state.
+#
+# WHY User=root, DIVERGING from the Debian line's User=duduclaw: this
+# Yocto line has not yet created an unprivileged `duduclaw` service account
+# (duduclaw-gateway.service itself still runs as root -- see that unit's
+# own header). Running this unit as `duduclaw` today would fail outright
+# (no such user), which would be strictly worse than the current
+# all-root posture. This is a tracked divergence, not a silent downgrade:
+# revisit together with the gateway's own eventual move to an unprivileged
+# user, at which point both units should switch together.
+[Unit]
+Description=DuDuClaw OS /data forward-only settings migrations (H3g, Yocto)
+Documentation=file:///usr/bin/duduclaw (data-migrate subcommand)
+Documentation=file:///usr/share/duduclaw/migrations
+After=duduclaw-firstboot-provision.service
+Requires=duduclaw-firstboot-provision.service
+Before=duduclaw-gateway.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DUDUCLAW_HOME=/data/duduclaw
+ExecStart=/usr/bin/duduclaw data-migrate --run
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

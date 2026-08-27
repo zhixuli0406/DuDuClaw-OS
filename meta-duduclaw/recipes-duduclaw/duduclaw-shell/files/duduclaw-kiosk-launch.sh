@@ -235,6 +235,32 @@ seed_fcitx5_config() {
         log "note: could not create $conf_dir -- 中文輸入設定使用建置期烤入的 /etc/xdg/fcitx5 系統預設（開機即中文/直式候選字仍生效，僅使用者個人化設定無法持久化）"
         return 0
     fi
+    # Y9-1 (2026-08-27) update: the /data provisioning this comment
+    # predicted has landed -- files/wic/duduclaw-data-bootdisk.wks.in +
+    # recipes-duduclaw/duduclaw-firstboot ship a real /data partition,
+    # mounted+grown+first-boot-provisioned, on duduclaw-image-data.bb and
+    # everything requiring it (duduclaw-image-flatpak.bb as of this same
+    # ticket). duduclaw-firstboot-provision.sh creates and chowns
+    # /data/duduclaw-kiosk to this exact user before duduclaw-kiosk.service
+    # ever starts (ordering: kiosk After=...duduclaw-gateway.service, which
+    # itself now Requires=duduclaw-firstboot-provision.service via a
+    # gateway.service.d drop-in -- see that drop-in's own header), so THIS
+    # function's mkdir above is expected to succeed on those images with no
+    # further code change, exactly as the paragraph above predicted. Not yet
+    # independently re-verified against a live duduclaw-image-data QEMU boot
+    # as running duduclaw-kiosk (Y9-1's own QEMU verification targeted the
+    # provisioning layer itself, headless -- see that ticket's handoff notes
+    # for exactly which layer of verification was reached). Plain
+    # duduclaw-image.bb (no /data partition at all) still degrades exactly as
+    # described below -- this addendum does not change that image.
+    #
+    # The same reasoning covers libchewing's own user-dictionary persistence
+    # (chewing_capi::io's "Failed to load user dict: Permission denied",
+    # Y8-2's own drive-by finding, a sibling of this exact bug under a
+    # different fcitx5-managed path) -- it is not this function's code, but
+    # the identical "was $HOME writable" precondition governs it, and Y9-1's
+    # fix reaches it the same way, with no separate code path of its own.
+
 
     cat > "$conf_dir/profile" <<'FCITX5_PROFILE'
 [Groups/0]

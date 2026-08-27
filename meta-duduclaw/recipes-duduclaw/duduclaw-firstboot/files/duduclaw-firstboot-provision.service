@@ -1,0 +1,29 @@
+# DuDuClaw OS first-boot: device identity + minimal config (Y9-1 Yocto port).
+#
+# First-boot step 2 of 2 (see duduclaw-firstboot-repart.service for step
+# 1). Runs after /data is mounted and after the repart-grow step, so it has
+# somewhere persistent to write -- Requires=/After=data.mount is the
+# systemd-generated mount unit for the fstab entry
+# files/wic/duduclaw-data-bootdisk.wks.in produces (wic's own
+# update_fstab() -- verified by reading wic's actual source this round, not
+# assumed from the Debian line's equivalent unit).
+#
+# Self-disables on success -- ExecStartPost removes the [Install] symlink
+# so it won't even be considered on future boots. The ConditionPathExists
+# guard is kept too (belt-and-braces): if power is lost between the script
+# succeeding and the disable call landing, the stamp file still prevents
+# re-running.
+[Unit]
+Description=DuDuClaw OS first-boot: device identity + minimal config (Yocto)
+After=data.mount duduclaw-firstboot-repart.service
+Requires=data.mount
+ConditionPathExists=!/data/duduclaw/system/.provisioned
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/duduclaw-firstboot-provision.sh
+ExecStartPost=-/usr/bin/systemctl disable duduclaw-firstboot-provision.service
+
+[Install]
+WantedBy=multi-user.target

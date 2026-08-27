@@ -1,21 +1,38 @@
 # DuDuClaw privileged system helper (duduclaw-sysd) -- Yocto bring-up unit.
 #
 # Adapted from appliance/mkosi.extra/etc/systemd/system/duduclaw-sysd.service
-# (the Debian appliance line's verified unit) with one deliberate
-# simplification for this Y2-1 bring-up stage: no `--allowed-uid` flag.
-# The Yocto image doesn't provision a non-root `duduclaw` service user yet
-# (that's product-layer work for a later ticket, not part of "does the
-# binary build+boot+listen"), and duduclaw-sysd's own startup path treats a
-# missing --allowed-uid as a legal, fail-closed boot -- it still binds and
-# listens on the socket (this ticket's QEMU acceptance line), it just denies
-# every connection until a uid is configured. See crates/duduclaw-sysd/src/
+# (the Debian appliance line's verified unit).
+#
+# --allowed-uid 0 (Y9-2, 2026-08-27): this line originally shipped with NO
+# --allowed-uid flag at all (documented reasoning below, kept verbatim) —
+# fail-closed meant duduclaw-sysd bound and listened but denied EVERY
+# connection, including the gateway's own. That was confirmed live during
+# this ticket's first real `device.update_apply` QEMU run: ESP prepare
+# failed with "sysd rejected the call: kind=unauthorized message=caller
+# uid is not the configured sysd peer" — not a hang or a crash, exactly
+# the documented fail-closed behavior, but it silently blocked the whole
+# A/B update chain from ever completing on this line. The Yocto
+# duduclaw-gateway.service (recipes-duduclaw/duduclaw-cli/files/) also has
+# no `User=` yet, so it runs as root (uid 0) same as this unit — `0` is
+# the CURRENT real uid the gateway connects as, not a placeholder.
+#
+# Once the Yocto layer provisions its own non-root `duduclaw` service user
+# (mirroring appliance/postinst.d/20-users-and-units.sh's fixed uid 1000)
+# AND duduclaw-gateway.service gains a matching `User=`, change this back
+# to `--allowed-uid 1000` in the SAME commit as that user's creation --
+# tracked as an explicit TODO, not silently deferred. Running two
+# privileged daemons as root and gating them by "root talking to root" is
+# not the intended end state (see original reasoning below); `0` is a
+# bring-up-stage value that matches today's actual process identities, not
+# a security posture to keep past this stage.
+#
+# Original reasoning (Y2-1) for why omitting the flag was safe to boot with
+# at all: duduclaw-sysd's own startup path treats a missing --allowed-uid
+# as a legal, fail-closed boot -- it still binds and listens on the socket
+# (that ticket's own QEMU acceptance line), it just denies every
+# connection until a uid is configured. See crates/duduclaw-sysd/src/
 # main.rs's own doc comment: "Omitting BOTH is a legal startup ... denies
 # every single connection -- fail-closed, not fail-to-boot."
-#
-# Once the Yocto layer provisions its own `duduclaw` user (mirroring
-# appliance/postinst.d/20-users-and-units.sh's fixed uid 1000), add
-# `--allowed-uid 1000` back here in the same commit as that user's creation
-# -- tracked as an explicit TODO, not silently deferred.
 [Unit]
 Description=DuDuClaw privileged system helper (Yocto bring-up)
 
@@ -24,7 +41,7 @@ Type=simple
 User=root
 RuntimeDirectory=duduclaw
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/duduclaw-sysd
+ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 0
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=300

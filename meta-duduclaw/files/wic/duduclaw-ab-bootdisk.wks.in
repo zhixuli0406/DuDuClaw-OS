@@ -4,13 +4,27 @@
 # design (commercial/docs/DESIGN-ab-update-rollback-2026-08.md §1.1, §11):
 # ESP + root-A (populated, active) + root-B (empty, reserved update target)
 # + /data (grows to fill the real disk, hosts update staging). The MECHANISM
-# is ported verbatim (same partition roles, same GPT type GUID, same label
-# scheme, same three attribute bits); the FORM is Yocto-native because wic's
-# kickstart-style partitioning language is a different tool with a smaller
-# vocabulary than mkosi.repart's declarative `.conf` drop-ins — see
-# meta-duduclaw/classes/duduclaw-ab-partflags.bbclass for the one thing wic
-# cannot express in-line (raw GPT attribute bits) and how this build fills
-# that gap.
+# is ported verbatim (same partition roles, same GPT type GUID, same
+# version/`_empty` label scheme, same three attribute bits); the FORM is
+# Yocto-native because wic's kickstart-style partitioning language is a
+# different tool with a smaller vocabulary than mkosi.repart's declarative
+# `.conf` drop-ins — see meta-duduclaw/classes/duduclaw-ab-partflags.bbclass
+# for the one thing wic cannot express in-line (raw GPT attribute bits) and
+# how this build fills that gap.
+#
+# FIELD-MAPPING CORRECTION (Y9-2, 2026-08-27): mkosi.repart's `Label=`
+# directive writes the GPT partition Name field directly; wic's kickstart
+# `--label` option does NOT — it only sets the ext4 filesystem label
+# (mkfs -L), a field invisible to systemd-sysupdate's raw-GPT
+# `[Target] MatchPattern=` matching and to appliance/tools/uki-slots.py's
+# `read_gpt()`. The first real `make-payload.py` run against a build of
+# this file (before this correction) reproduced the Debian line's own
+# already-fixed-once H3a bug byte-for-byte (root-A's on-disk GPT name read
+# back as the static role string `duduclaw-root-a`, never a version) —
+# see p2/p3's own comments below for the full evidence trail. wic's
+# `--part-name` is the option that actually reaches the GPT Name field;
+# p2/p3 below carry the version/`_empty` scheme there now, with `--label`
+# repurposed as a purely cosmetic ext4 label.
 #
 # p1 (ESP) is copied byte-for-byte from the already-QEMU-verified single-
 # partition efi-uki-bootdisk.wks.in (openembedded-core/meta/files/wic/) —
@@ -53,32 +67,97 @@
 
 bootloader --ptable gpt --timeout=5
 
-# p1: ESP — unchanged from efi-uki-bootdisk.wks.in.
-part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label boot --active --align 1024 --use-uuid --part-name="ESP" --part-type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B --overhead-factor=1
+# p1: ESP — same as efi-uki-bootdisk.wks.in EXCEPT `--fixed-size
+# ${DUDUCLAW_AB_ESP_SIZE_MB}` (Y9-2, 2026-08-27): the single-partition
+# base template lets wic auto-size the ESP off whatever it happens to
+# contain at build time (one UKI + rescue), which is provably too small
+# once a second (incoming update) UKI needs to coexist with it — see
+# classes/duduclaw-ab-partflags.bbclass's own comment on
+# DUDUCLAW_AB_ESP_SIZE_MB for the exact reproduction (a real
+# `device.update_apply` run hit ENOSPC writing the new UKI). `--fixed-size`
+# combines with `--source` the same way p2/p3 below already rely on
+# (content populates it, --fixed-size overrides the total partition size)
+# — EXCEPT `--overhead-factor` had to be dropped entirely, not just left
+# at its old value: wic's ksparser rejects `--overhead-factor` (and
+# `--extra-filesystem-space`) as mutually exclusive with `--fixed-size`
+# ("arguments --overhead-factor and --extra-filesystem-space not allowed
+# with argument --fixed-size" — confirmed by an actual failed
+# `do_image_wic` run during this ticket, not assumed). That is fine here:
+# `--overhead-factor` only mattered for wic's OWN auto-sizing math, which
+# `--fixed-size` replaces outright.
+part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label boot --active --align 1024 --use-uuid --part-name="ESP" --part-type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B --fixed-size ${DUDUCLAW_AB_ESP_SIZE_MB}
 
-# p2: root-A — the only partition with real content at build time. Label is
-# the version-string scheme systemd-sysupdate itself relies on for slot
-# selection (sd-boot / gpt-auto's `find_gpt_root()` picks the root partition
-# with the highest `strverscmp_improved()` label among non-no-auto,
-# native-root-typed partitions — this is NOT cosmetic, it is how "which slot
-# is active" is actually decided at runtime). `${DUDUCLAW_PLATFORM_VERSION}`
-# is the same single-source-of-truth version this layer already uses for
-# DISTRO_VERSION (conf/distro/include/duduclaw-platform-version.inc) — using
-# it here means a factory image's own root-A label always matches what
-# `os-release`'s `IMAGE_VERSION=` reports, which
+# p2: root-A — the only partition with real content at build time.
+# `--part-name` (NOT `--label`) is the field that actually lands in the raw
+# GPT partition entry's Name field — the exact 72-byte region
+# appliance/tools/uki-slots.py's `read_gpt()` decodes as `.label`
+# (`raw_entry[56:128].decode("utf-16-le")`), and the same field
+# systemd-sysupdate's own `[Target] MatchPattern=` in
+# recipes-duduclaw/duduclaw-ab-update/files/10-duduclaw-root.transfer
+# matches against ("Matched against the partition LABEL" — systemd's own
+# terminology for this GPT field, not wic's `--label` kickstart option,
+# which instead only sets the ext4 filesystem label via mkfs -L and is
+# invisible to both sysupdate and any tool doing a raw GPT parse). This is
+# the SAME distinction the Debian appliance line's own
+# appliance/mkosi.repart/20-root-a.conf already documents having gotten
+# wrong once and fixed (H3a, 2026-08-23: "the old `duduclaw-root-a` matched
+# no pattern, so `systemd-sysupdate list` reported ZERO installed
+# instances") — mkosi.repart's `Label=` directive maps onto the GPT
+# partition Name field directly, but wic's `--label` kickstart option does
+# NOT (`--part-name` does); a first real build+`make-payload.py` run
+# against this line's own .wic (Y9-2, 2026-08-27) reproduced the identical
+# failure via `read_gpt()` reporting the on-disk name as `duduclaw-root-a`
+# instead of the intended version string, confirming this was a real
+# regression of the already-fixed Debian-line bug, not a new distinct
+# issue. `${DUDUCLAW_PLATFORM_VERSION}` is the same single-source-of-truth
+# version this layer already uses for DISTRO_VERSION
+# (conf/distro/include/duduclaw-platform-version.inc) — using it here means
+# a factory image's own root-A GPT name always matches what os-release's
+# `IMAGE_VERSION=` reports, which
 # `crates/duduclaw-gateway/src/os_update.rs`'s `ProtectVersion=%A` depends
 # on to protect the running slot from ever being treated as a free target.
-part / --source rootfs --fstype=ext4 --label "duduclaw-os_${DUDUCLAW_PLATFORM_VERSION}" --align 1024 --exclude-path boot/ --part-name="duduclaw-root-a" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
+# `--label` is kept as a purely cosmetic ext4 filesystem label (never read
+# by sysupdate, make-payload.py, or gpt-auto — this line's root mount is by
+# `root=PARTUUID=` baked into the UKI, not by fstab LABEL=/UUID=, and p2 has
+# neither `--use-uuid` nor `--use-label` so wic never emits an fstab line
+# for it either) so `e2label`/`lsblk -o LABEL` still show something
+# human-readable.
+#
+# --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" (Y9-2, 2026-08-27): fixes root-A's
+# actual GPT PARTUUID to a build-time-known constant instead of wic's
+# default `uuid.uuid4()` random value — see
+# classes/duduclaw-ab-partflags.bbclass's own comment on
+# DUDUCLAW_AB_ROOTA_PARTUUID for the full reasoning (do_uki runs before
+# do_image_wic, so a random PARTUUID cannot be read back and baked into
+# the UKI at build time the way mkosi's own `root=PARTUUID` bare-token
+# substitution does). recipes-core/images/duduclaw-image-ab.bb's
+# UKI_CMDLINE override bakes `root=PARTUUID=${DUDUCLAW_AB_ROOTA_PARTUUID}`
+# — the SAME constant — directly into the signed UKI, so this line is
+# root-A's boot-selection input for real (not the GPT name/label scheme
+# above, which is sysupdate's version ledger, not a boot-time mechanism —
+# see p2's own comment two paragraphs up and DESIGN-ab-update-rollback-
+# 2026-08.md §4.2's "Not a boot-selection input any more" finding on the
+# Debian line, which applies identically here).
+part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-path boot/ --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DUDUCLAW_PLATFORM_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
 
-# p3: root-B — the reserved, empty update target. `_empty` is the ONE label
+# p3: root-B — the reserved, empty update target. `_empty` is the ONE
 # string systemd-sysupdate's `Type=partition` target recognises as "free to
 # write into" (sysupdate.d(5) — this is not a DuDuClaw convention, it is the
-# literal string upstream's own partition-target code matches on). Formatted
-# ext4 here (unlike the Debian line's raw unformatted slot) purely because
-# wic's kickstart partitioning requires SOME --fstype for size/empty-
-# partition handling — this filesystem is irrelevant and gets completely
-# overwritten the moment sysupdate (or, in a manual test, `dd`) writes a real
-# root image into this partition; it carries no content that matters.
+# literal string upstream's own partition-target code matches on), and it
+# MUST land in `--part-name` (the raw GPT partition Name field), not
+# `--label` (ext4 filesystem label, invisible to sysupdate and to
+# make-payload.py's raw GPT parse) — see p2's comment above for the full
+# make-payload.py/sysupdate.d field-mapping evidence and the matching
+# already-fixed-once Debian-line bug this mirrors
+# (appliance/mkosi.repart/21-root-b.conf: "The old `duduclaw-root-b` did the
+# opposite — it sorted ABOVE slot A's `duduclaw-root-a`, making the empty
+# slot gpt-auto's preferred root"). Formatted ext4 here (unlike the Debian
+# line's raw unformatted slot) purely because wic's kickstart partitioning
+# requires SOME --fstype for size/empty-partition handling — this
+# filesystem is irrelevant and gets completely overwritten the moment
+# sysupdate (or, in a manual test, `dd`) writes a real root image into this
+# partition; it carries no content that matters. `--label "root-b"` is the
+# same purely-cosmetic ext4 label p2 sets, for the same reason.
 # --no-fstab-update: this slot is never mounted at boot (no mountpoint
 # argument), so it must never get an /etc/fstab line — an unmountable UUID
 # left in fstab would fail the whole mount unit chain on generation.
@@ -87,17 +166,20 @@ part / --source rootfs --fstype=ext4 --label "duduclaw-os_${DUDUCLAW_PLATFORM_VE
 # in wic's kickstart syntax at all (confirmed: `ksparser.py`'s `part`
 # argument list has no equivalent of mkosi.repart's `Flags=`/`NoAuto=`/
 # `ReadOnly=`/`GrowFileSystem=`) — set as a post-`do_image_wic` step by
-# duduclaw-ab-partflags.bbclass instead. Until that runs, this partition is
-# indistinguishable from an ordinary auto-discoverable root partition, which
-# would make gpt-auto-generator's tie-break (`strverscmp_improved` picks the
-# higher label) the ONLY thing preventing it from being mounted — correct by
+# duduclaw-ab-partflags.bbclass instead, KEYED BY PARTITION NUMBER (3), not
+# by name or label, so this field swap does not affect it (confirmed by
+# reading that bbclass — it never references either string). Until that
+# post-processing step runs, this partition is indistinguishable from an
+# ordinary auto-discoverable root partition, which would make
+# gpt-auto-generator's tie-break (`strverscmp_improved` picks the higher
+# GPT name) the ONLY thing preventing it from being mounted — correct by
 # luck (`_empty` sorts below any real version string, per Debian's own
 # §4.1 finding: `_` = 0x5F < `d` = 0x64), but the NoAuto bit is what makes it
 # correct on purpose, matching the design doc's own stated defense-in-depth
 # reasoning for why NoAuto exists at all (§1.1: "gpt-auto-generator 看到兩個
 # 候選 root 會歧義" was a REAL incident on the Debian line before that bit was
 # added).
-part --fstype=ext4 --label "_empty" --align 1024 --part-name="duduclaw-root-b" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB} --no-fstab-update
+part --fstype=ext4 --label "root-b" --align 1024 --part-name="_empty" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB} --no-fstab-update
 
 # p4: /data — update staging + gateway state, grows to fill whatever is left
 # of the real disk (GPT attribute bit 59 / GrowFileSystem, same

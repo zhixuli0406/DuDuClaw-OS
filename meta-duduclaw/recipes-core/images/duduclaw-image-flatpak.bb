@@ -51,84 +51,21 @@ LICENSE = "MIT"
 # -- see duduclaw-image-data.bb's own header for the full argument.
 require recipes-core/images/duduclaw-image-data.bb
 
-# dbus: flatpak's own SystemHelper D-Bus activation AND the D-Bus session
-# bus the kiosk launch wrapper needs (research spike §1.2 point 1 --
-# "D-Bus session bus 從錦上添花升級為地基" once the kiosk fallback itself
-# is Flatpak Chromium). Not pulled in transitively by core-image-minimal.
-#
-# flatpak/bubblewrap/ostree: three of the four-piece carriage set, all
-# resolved from meta-oe (see kas pin-rationale comment).
-#
-# xdg-desktop-portal is DELIBERATELY DROPPED from this milestone -- a real
-# build-time discovery, not the original plan: `bitbake -e` failed with
-# "Nothing PROVIDES 'pipewire'" (xdg-desktop-portal_1.20.4.bb's DEPENDS is
-# unconditional -- json-glib/glib-2.0/flatpak/libportal/geoclue/pipewire/
-# fuse3, no PACKAGECONFIG gate to drop pipewire). `pipewire` lives in
-# meta-multimedia, a DIFFERENT meta-openembedded sublayer than meta-oe (one
-# hand-checked via GitHub code search against the pinned commit, same as
-# every other version claim in this layer). Pulling in a second sublayer
-# just to satisfy a portal-frontend build dependency is not worth it for
-# THIS milestone: the research spike (flatpak-carrier-2026-08.md §2.2)
-# already proved the kiosk path works with ZERO portal packages installed
-# ("全程零 xdg-desktop-portal / xdg-desktop-portal-gtk 安裝"). Tracked as
-# follow-up (add meta-multimedia, or find/patch a pipewire-free
-# PACKAGECONFIG path) whenever a real desktop-portal consumer (file
-# choosers, screen share) actually needs it -- not blocking Y3-2's own
-# scope (kiosk mechanism + OS permission foundation).
-#
-# duduclaw-polkit-flatpak: this layer's own OS-side permission rule (item 4
-# of the Y3-2 ticket) -- see that recipe for the full reasoning on why it
-# does not just reuse flatpak's stock wheel-group rule unchanged.
-#
-# duduclaw-steam-devices (Y5-2): host-side udev rule Steam's Flatpak
-# wrapper's check_device_perms() actually requires (/dev/uinput
-# group=input) -- see that recipe for the full one-hand-verified reasoning.
-#
-# duduclaw-flatpak-offline-repo (Y6-3): bakes a pre-normalized 2.4G
-# OSTree/Flatpak repo (Chromium + its 7 runtime/extension deps) into
-# /opt/duduclaw-flatpak-offline-repo at IMAGE BUILD time, so a real machine
-# with zero network at first boot still has a working Chromium kiosk
-# fallback -- see that recipe's own header for why this exists (the
-# official sideload-repos mechanism does not work, confirmed on two
-# separate flatpak versions) and duduclaw-flatpak-kiosk-verify.sh's
-# "Offline preload repo" section for the consumer side.
-IMAGE_INSTALL:append = " \
-    dbus \
-    flatpak \
-    bubblewrap \
-    ostree \
-    duduclaw-polkit-flatpak \
-    duduclaw-flatpak-kiosk-verify \
-    duduclaw-steam-devices \
-    duduclaw-flatpak-offline-repo \
-"
+# Y14-A (2026-08-27): the flatpak/Steam/Chromium IMAGE_INSTALL block +
+# IMAGE_ROOTFS_EXTRA_SPACE this recipe carried inline since Y3-2/Y6-3 moved
+# verbatim into a shared `.inc` so duduclaw-image-appliance.bb (the new A/B +
+# full-payload convergence image, see
+# commercial/docs/DESIGN-image-convergence-2026-08.md) can `require` the
+# exact same package list without also `require`-ing this file's own
+# `require recipes-core/images/duduclaw-image-data.bb` chain (which pulls in
+# `inherit duduclaw-data-partflags`, a 3-partition assumption incompatible
+# with the A/B line's 4-partition one). Zero behavior change here:
+# `bitbake -e` before/after this edit was diffed and IMAGE_INSTALL's/
+# IMAGE_ROOTFS_EXTRA_SPACE's final expansion is byte-identical.
+require recipes-core/images/duduclaw-image-flatpak.inc
 
 # IMAGE_FEATURES already carries serial-autologin-root + empty-root-password
 # from duduclaw-image.bb (Y2-3) -- this milestone's QEMU verification (item
 # 3: flatpak remote-add + install + dbus-run-session-wrapped --kiosk launch)
 # is run as an interactive shell over that same serial console, no separate
 # feature needed here.
-
-# --- Disk headroom on top of the baked-in offline repo --------------------
-# wic's efi-uki-bootdisk.wks.in has no fixed --size on the root partition
-# (`part / --source rootfs ...`) -- it auto-sizes off IMAGE_ROOTFS_SIZE,
-# which is computed from what IMAGE_INSTALL actually bakes in at BUILD
-# time. Y6-3 update: duduclaw-flatpak-offline-repo (added above) now bakes
-# ~2.4G of the Chromium/runtime OSTree content in as an ordinary package,
-# so that specific weight IS already counted by IMAGE_ROOTFS_SIZE's normal
-# auto-sizing -- this EXTRA_SPACE margin is no longer "the whole Chromium
-# download has zero build-time footprint" (that was the Y3-2-era
-# rationale, now stale) but headroom for: (a) `flatpak install`'s own
-# checkout of the offline repo into the named installation's app/ tree --
-# expected to mostly hardlink against the repo's own objects since both
-# live on the same rootfs, but not zero; (b) ostree/flatpak's tmp/staging
-# working set; (c) the profile directory Chromium writes into at runtime;
-# (d) the LIVE network flathub path (duduclaw-flatpak-kiosk-verify.sh
-# still falls back to it if the offline repo is absent/broken) still needs
-# room for a fresh 2.4G download on top of whatever's already on disk.
-# Kept at the same 4GB (KB units, OE convention) rather than tuned down,
-# since (a)+(d) together could plausibly approach it and this is a
-# disk-safety margin, not a tightly-budgeted allocation -- see the
-# recipe's own header comment for why this entire image is scoped to
-# prove the mechanism, not to ship a production kiosk.
-IMAGE_ROOTFS_EXTRA_SPACE = "4194304"

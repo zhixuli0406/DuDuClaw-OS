@@ -56,6 +56,15 @@ inherit duduclaw-data-partflags
 
 WKS_FILE = "duduclaw-data-bootdisk.wks.in"
 
-IMAGE_INSTALL:append = " duduclaw-firstboot"
+# Y14-A (2026-08-27): the single `IMAGE_INSTALL:append = " duduclaw-firstboot"`
+# line this recipe carried since Y9-1 moved verbatim into a shared `.inc` so
+# duduclaw-image-appliance.bb (the new A/B + full-payload convergence image,
+# see commercial/docs/DESIGN-image-convergence-2026-08.md) can `require` the
+# exact same fact without also `require`-ing this file's own
+# `inherit duduclaw-data-partflags`/`WKS_FILE` (which assume a 3-partition
+# layout incompatible with the A/B line's 4-partition one). Zero behavior
+# change here: `bitbake -e` before/after this edit was diffed and
+# IMAGE_INSTALL's final expansion is byte-identical.
+require recipes-core/images/duduclaw-image-data.inc
 
 COMPATIBLE_MACHINE = "duduclaw-genericx86-64|duduclaw-qemux86-64"

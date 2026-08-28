@@ -58,6 +58,48 @@ IMAGE_FEATURES += "allow-empty-password allow-root-login empty-root-password ser
 # overwriting non-self-created data is a human decision, never automatic).
 IMAGE_INSTALL:append = " duduclaw-os-installer"
 
+# ---------------------------------------------------------------------------
+# Y20-P1 (2026-08-28): desktop stack spike -- "can the full graphical
+# installer wizard (Y20-P2..P4, not built yet) even boot inside THIS live
+# environment's squashfs+tmpfs-overlay+kiosk shape at all?" Four unknowns
+# this ticket exists to answer: ISO/RAM footprint, whether mesa's llvmpipe
+# software rasterizer survives (Y12 already fixed one llvmpipe crash class
+# on the production line; this is the first time that code path runs from a
+# read-only squashfs root instead of an ext4 one), and whether the kiosk
+# session still comes up clean once its service account changes from the
+# unprivileged duduclaw-kiosk to root (see duduclaw-live-tweaks.bb's own
+# header for why root is required at all).
+#
+# COPIED, not `require`d, from duduclaw-image.bb's own five desktop-stack
+# IMAGE_INSTALL:append lines (comp/shell/mesa, dbus/fcitx5, pipewire) --
+# deliberate, not an oversight: extracting a shared
+# duduclaw-image-desktop.inc now would put this throwaway spike recipe in
+# the same edit blast radius as the production image line before P1 has even
+# proven the desktop stack works here at all. Deduping into an .inc is
+# explicitly deferred to P4 (see DESIGN-live-installer-iso-2026-08.md).
+# kernel-modules is copied too (needed at runtime for the same audio/crypto
+# module-splitting reasons duduclaw-image.bb's own comment documents, not
+# specific to the installer).
+#
+# Wi-Fi is the one deliberate CUT, not copied: `iwd wireless-regdb-static
+# duduclaw-network-config` from duduclaw-image.bb's Y7-3 block is left out
+# entirely -- the graphical installer wizard this stack is being spiked for
+# writes a local A/B image already carried inside the ISO (see
+# populate_live:append below), it has no network-dependent step, and cutting
+# it saves ISO/squashfs bytes on a recipe whose whole point is to stay small
+# enough to fit on optical media.
+IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers vulkan-loader libegl-mesa xkeyboard-config"
+IMAGE_INSTALL:append = " dbus fcitx5 fcitx5-chewing"
+IMAGE_INSTALL:append = " pipewire wireplumber"
+IMAGE_INSTALL:append = " kernel-modules"
+
+# duduclaw-live-tweaks (meta-duduclaw/recipes-duduclaw/duduclaw-live-tweaks/)
+# -- the User=root kiosk override + the /etc/duduclaw-live marker file. Live-
+# image-only by construction: this package is referenced from nowhere except
+# this IMAGE_INSTALL:append, so duduclaw-image.bb / duduclaw-image-ab.bb stay
+# byte-identical to before this ticket touched anything.
+IMAGE_INSTALL:append = " duduclaw-live-tweaks"
+
 inherit image-live
 
 # Override, not append: this recipe must never accidentally pick up wic/uki

@@ -47,6 +47,17 @@ require recipes-core/images/core-image-minimal.bb
 # IMAGE_FEATURES) — spelled out as its constituent primitives instead.
 IMAGE_FEATURES += "allow-empty-password allow-root-login empty-root-password serial-autologin-root"
 
+# The installer itself (Y19) — a shell script + its runtime tools (sgdisk,
+# zstd, parted, util-linux). This is what makes the live environment an
+# *installer* environment rather than just a bootable throwaway: it writes the
+# production A/B .wic (carried in the ISO as duduclaw-install.wic.zst, see
+# populate_live:append below) onto the target disk. Run manually as
+# `duduclaw-os-install` from the live root login — deliberately NOT an
+# auto-running service, because writing to disk is a destructive operation
+# that must stay behind an explicit human trigger (this project's own gate:
+# overwriting non-self-created data is a human decision, never automatic).
+IMAGE_INSTALL:append = " duduclaw-os-installer"
+
 inherit image-live
 
 # Override, not append: this recipe must never accidentally pick up wic/uki
@@ -117,3 +128,49 @@ APPEND = "console=${KERNEL_CONSOLE}"
 # image never goes through wic or the signed-UKI chain. Its kernel+initrd
 # are plain deployed artifacts that image-live.bbclass's do_bootimg copies
 # directly into the ISO/EFI layout.
+
+# ---------------------------------------------------------------------------
+# Y19: carry the production A/B image as install material INSIDE the ISO.
+#
+# image-live.bbclass's populate_live() installs rootfs.img into the ISO tree
+# ($1 = ISODIR for build_iso, HDDDIR for build_hddimg) just before mkisofs /
+# the FAT image is assembled. Appending to it drops one more file — the
+# zstd-compressed production A/B .wic — into that same tree, so it ends up in
+# the ISO9660 filesystem next to rootfs.img and the live installer finds it at
+# /run/media/<label>/duduclaw-install.wic.zst (design doc §3.2/§3.3: the live
+# ISO is a *vehicle* — it ships the finished, signed A/B artifact, it does not
+# rebuild the system). Compress here (not in duduclaw-image-ab.bb) to keep the
+# production release chain byte-for-byte untouched — the A/B image is consumed
+# as an opaque input. mkisofs runs with -iso-level 3 automatically once the ISO
+# exceeds 3.8GB (image-live.bbclass build_iso), so a multi-GB install payload
+# is handled without extra flags.
+#
+# do_bootimg[depends]: force the A/B image's do_image_complete to finish first,
+# so its .wic exists in DEPLOY_DIR_IMAGE before populate_live runs. bitbake's
+# codeparser cannot infer this cross-image dependency (the .wic path is built
+# by shell string expansion at task time), so it is declared explicitly.
+# zstd-native: populate_live:append below runs `zstd` in the build-host
+# context to compress the install material; the binary must be staged into
+# do_bootimg's native sysroot (image-live.bbclass's own do_bootimg deps —
+# mkisofs/syslinux/etc. — do not pull it in).
+do_bootimg[depends] += "duduclaw-image-ab:do_image_complete zstd-native:do_populate_sysroot"
+
+DUDUCLAW_INSTALL_AB_WIC ?= "${DEPLOY_DIR_IMAGE}/duduclaw-image-ab-${MACHINE}.rootfs.wic"
+
+populate_live:append() {
+    ab_wic="${DUDUCLAW_INSTALL_AB_WIC}"
+    if [ ! -e "$ab_wic" ]; then
+        # symlink name can vary with IMAGE_NAME_SUFFIX; fall back to a glob on
+        # the stable prefix rather than guessing the timestamped basename.
+        ab_wic="$(ls -1 ${DEPLOY_DIR_IMAGE}/duduclaw-image-ab-${MACHINE}*.wic 2>/dev/null | grep -v '\-[0-9]\{14\}\.wic$' | head -n1 || true)"
+        [ -n "$ab_wic" ] && [ -e "$ab_wic" ] || ab_wic="$(ls -1t ${DEPLOY_DIR_IMAGE}/duduclaw-image-ab-${MACHINE}*.wic 2>/dev/null | head -n1 || true)"
+    fi
+    if [ -z "$ab_wic" ] || [ ! -s "$ab_wic" ]; then
+        bbfatal "duduclaw-image-live: production A/B install material not found (looked for ${DUDUCLAW_INSTALL_AB_WIC} and duduclaw-image-ab-${MACHINE}*.wic in ${DEPLOY_DIR_IMAGE}). Build duduclaw-image-ab first."
+    fi
+    bbnote "duduclaw-image-live: embedding install material $ab_wic -> $1/duduclaw-install.wic.zst"
+    # -T0 multi-thread, -3 fast level (the .wic is mostly already-compact ext4
+    #  + a small ESP; a higher level buys little and costs minutes on every ISO
+    #  rebuild). -f overwrite, stream to the ISO tree.
+    zstd -T0 -3 -f "$ab_wic" -o "$1/duduclaw-install.wic.zst"
+}

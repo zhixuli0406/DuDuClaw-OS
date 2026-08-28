@@ -46,3 +46,13 @@ SRC_URI:append:duduclaw-genericx86-64 = " \
     file://duduclaw-8845hs.cfg \
     file://duduclaw-gaming.cfg \
 "
+
+# --- Live installer ISO squashfs support (Y18, 2026-08-28) ---
+# Unscoped (both machines) — see duduclaw-live-squashfs.cfg's own header
+# comment for the full root-cause writeup (live QEMU probe showed squashfs
+# entirely absent from /proc/filesystems, breaking duduclaw-image-live's
+# rootfs.img mount). This DOES change duduclaw-qemux86-64's kernel SRC_URI/
+# sstate signature (unlike the genericx86-64-only fragments above), which
+# is intentional and unavoidable: the QEMU machine is this ticket's own
+# verification target.
+SRC_URI:append = " file://duduclaw-live-squashfs.cfg"

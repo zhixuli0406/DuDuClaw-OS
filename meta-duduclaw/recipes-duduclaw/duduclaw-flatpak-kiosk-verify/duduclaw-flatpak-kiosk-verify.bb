@@ -1,12 +1,13 @@
-SUMMARY = "Flatpak Chromium + Steam kiosk verification under a no-logind systemd service"
+SUMMARY = "Flatpak Chromium + LibreOffice + Steam kiosk verification under a no-logind systemd service"
 DESCRIPTION = "One-shot, NOT-auto-enabled diagnostic units + scripts that \
 prove the Yocto-built Flatpak/bubblewrap/ostree/dbus/polkit chain can \
 install and run real Flatpak apps under this OS's actual kiosk shape: a \
 plain systemd SYSTEM service with no logind session. Two independent \
 checks share the one verify identity/state directory this recipe owns: \
-(1) duduclaw-flatpak-kiosk-verify.service (Y3-2) -- headless Chromium \
---dump-dom, predates duduclaw-comp/-shell having a Yocto recipe at all, so \
-it never touches a real Wayland socket; (2) duduclaw-steam-kiosk-verify.service \
+(1) duduclaw-flatpak-kiosk-verify.service (Y3-2, LibreOffice added Y14-B) \
+-- headless Chromium --dump-dom AND headless LibreOffice --cat, predates \
+duduclaw-comp/-shell having a Yocto recipe at all, so it never touches a \
+real Wayland socket; (2) duduclaw-steam-kiosk-verify.service \
 (Y5-2) -- a REAL Wayland client of the now-existing duduclaw-kiosk.service, \
 launching Steam and checking it reaches its login screen (map judgment ⑥). \
 Run manually with `systemctl start <unit>` and read \

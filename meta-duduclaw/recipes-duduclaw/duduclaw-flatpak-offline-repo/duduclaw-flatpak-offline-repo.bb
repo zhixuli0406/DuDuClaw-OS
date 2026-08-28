@@ -1,4 +1,4 @@
-SUMMARY = "Pre-normalized OSTree/Flatpak repo (Chromium + runtime deps) baked in for zero-network first boot"
+SUMMARY = "Pre-normalized OSTree/Flatpak repo (Chromium + LibreOffice + runtime deps) baked in for zero-network first boot"
 DESCRIPTION = "${SUMMARY}. This is the Y6-3 answer to \
 research/native-os-2026-08/flatpak-carrier-2026-08.md §2.3/§2.4 and the \
 Y3-2 handoff notes' 'sid-test' spike, both of which found that the \
@@ -21,7 +21,23 @@ apt-installs its own flatpak/ostree/gnupg tooling in a throwaway \
 container -- neither of which belongs inside a do_fetch/do_compile \
 sandbox). See duduclaw-flatpak-kiosk-verify.sh's 'Offline preload repo' \
 section for the consumer side (tries this repo as a `flathub-offline` \
-remote before falling back to the live `flathub` network remote)."
+remote before falling back to the live `flathub` network remote). \
+\
+Y14-B (2026-08-27): org.libreoffice.LibreOffice added alongside Chromium \
+in the SAME repo/tarball (meta-duduclaw never had a LibreOffice recipe at \
+all -- Y13-1 grepped the whole layer and found zero hits, the earlier \
+assumption it already existed was wrong) via the identical pull-then-\
+normalize pipeline in gen-flatpak-offline-repo.sh (now APP_IDS, a \
+space-separated list, was the singular APP_ID); LibreOffice reuses the \
+SAME org.freedesktop.Platform/25.08 runtime Chromium already needs, so no \
+second runtime download/object set was required. Also fixed a real bug \
+this round: the consumer script's `flatpak remote-add --gpg-verify-\
+summary=false` was never a valid CLI flag on this layer's pinned flatpak \
+version (confirmed against upstream's own GOptionEntry source) -- it \
+failed outright on real hardware/QEMU with real network available to fall \
+back to, silently making this entire package's zero-network purpose a \
+no-op. See duduclaw-flatpak-kiosk-verify.sh's own Y14-B header comment for \
+the full explanation and the `--no-gpg-verify` fix."
 HOMEPAGE = "https://github.com/duduclaw/duduclaw"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
@@ -35,23 +51,26 @@ DEPENDS = "zstd-native"
 
 SRC_URI = "file://duduclaw-flatpak-offline-repo.tar.zst;unpack=0"
 
-# Real measured size (research spike + this recipe's own
-# gen-flatpak-offline-repo.sh run against a live Flathub pull, both agree):
-# Chromium + its 7 runtime/extension deps (org.chromium.Chromium.Codecs,
+# Real measured size (this recipe's own gen-flatpak-offline-repo.sh run
+# against a live Flathub pull, 2026-08-27, Y14-B): Chromium + its 7
+# runtime/extension deps (org.chromium.Chromium.Codecs,
 # org.chromium.Chromium.Locale, org.freedesktop.Platform + .GL.default +
-# .GL.default-extra + .Locale + .codecs-extra) land at 2.4G of OSTree
-# objects. SRC_URI_STRICT_CHECKSUMS is NOT set here on purpose -- Flathub
-# content is refreshed upstream over time (security updates), and this
-# package's whole point is "whatever gen-flatpak-offline-repo.sh most
-# recently produced", not a byte-pinned external download -- there is
-# nothing for bitbake to verify against a network source here, this is a
-# pure local file:// SRC_URI.
+# .GL.default-extra + .Locale + .codecs-extra) at 2.4G, PLUS
+# org.libreoffice.LibreOffice + org.libreoffice.LibreOffice.Locale added
+# this round (reusing the same org.freedesktop.Platform/25.08 runtime
+# Chromium already pulls in -- no separate runtime object set) at another
+# ~1.1G, for ~3.5G of uncompressed OSTree objects total. SRC_URI_STRICT_
+# CHECKSUMS is NOT set here on purpose -- Flathub content is refreshed
+# upstream over time (security updates), and this package's whole point is
+# "whatever gen-flatpak-offline-repo.sh most recently produced", not a
+# byte-pinned external download -- there is nothing for bitbake to verify
+# against a network source here, this is a pure local file:// SRC_URI.
 
 S = "${UNPACKDIR}"
 
 # This package is a passthrough of real Flathub-built OSTree content
-# (Chromium binaries, .so's, compressed media assets already inside the
-# per-object OSTree store). It MUST NOT go through OE's normal
+# (Chromium + LibreOffice binaries, .so's, compressed media assets already
+# inside the per-object OSTree store). It MUST NOT go through OE's normal
 # strip/debug-split/sysroot-strip pipeline: OSTree's repo is
 # content-addressed (object filenames under objects/xx/yyyy... ARE the
 # sha256 of their exact byte content) -- if do_package_strip or any other
@@ -76,8 +95,8 @@ INHIBIT_SYSROOT_STRIP = "1"
 # built anything to satisfy in the first place -- none of these are actual
 # defects in content we did not compile ourselves.
 INSANE_SKIP:${PN} += "already-stripped arch ldflags textrel build-deps file-rdeps dev-so libdir staticdev split-strip"
-# Auto file-dependency (shlibs/pkgconfig) scanning would walk 2.3G of
-# unrelated Chromium-internal .so's and either take a very long time or
+# Auto file-dependency (shlibs/pkgconfig) scanning would walk 3.5G of
+# unrelated Chromium/LibreOffice-internal .so's and either take a very long time or
 # manufacture bogus RDEPENDS/RPROVIDES entries from SONAMEs this image's
 # package manager has no business tracking (they are consumed exclusively
 # from inside Flatpak's own sandboxed runtime, never dynamically linked by
@@ -85,8 +104,8 @@ INSANE_SKIP:${PN} += "already-stripped arch ldflags textrel build-deps file-rdep
 SKIP_FILEDEPS:${PN} = "1"
 PRIVATE_LIBS:${PN} = "*"
 
-# Genuinely x86_64-specific content (Chromium's Flathub build for this
-# arch) -- see gen-flatpak-offline-repo.sh's ARCH= var. Not COMPATIBLE_MACHINE
+# Genuinely x86_64-specific content (Chromium's + LibreOffice's Flathub
+# builds for this arch) -- see gen-flatpak-offline-repo.sh's ARCH= var. Not COMPATIBLE_MACHINE
 # = ".*" like the config-only recipes in this layer; this one only makes
 # sense on an x86_64 MACHINE (duduclaw-qemux86-64 / duduclaw-genericx86-64,
 # the only two this layer currently defines).

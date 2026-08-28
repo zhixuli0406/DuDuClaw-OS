@@ -32,8 +32,10 @@ ZENITY_STUB_DIR=/opt/duduclaw-steam-stubs
 SOCKET_WAIT_SECS="${DUDUCLAW_STEAM_VERIFY_SOCKET_WAIT_SECS:-30}"
 LOGIN_WAIT_SECS="${DUDUCLAW_STEAM_VERIFY_LOGIN_WAIT_SECS:-180}"
 # Same floor and rationale as duduclaw-flatpak-kiosk-verify.sh's own
-# MIN_FREE_KB_FOR_CHROMIUM -- Y4-2 measured Steam + all its pulled-in
-# runtimes (Compat.i386, GL32, codecs-extra) at ~2.8GB total.
+# MIN_FREE_KB_FOR_APPS (renamed from MIN_FREE_KB_FOR_CHROMIUM in Y14-B when
+# LibreOffice joined that script's own disk-safety gate) -- Y4-2 measured
+# Steam + all its pulled-in runtimes (Compat.i386, GL32, codecs-extra) at
+# ~2.8GB total.
 MIN_FREE_KB_FOR_STEAM=$((3 * 1024 * 1024))
 
 : > "$RESULT_FILE"

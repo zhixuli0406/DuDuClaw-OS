@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build-time helper: pull Chromium (+ its Flathub runtime deps) into a
-# scratch named Flatpak installation, then normalize the resulting OSTree
-# repo (remote-tracking refs -> real head refs + `flatpak build-update-repo`
-# summary) so it can be served as a plain file:// remote with zero network at
-# consumption time.
+# Build-time helper: pull Chromium + LibreOffice (+ each one's Flathub
+# runtime deps) into a scratch named Flatpak installation, then normalize
+# the resulting OSTree repo (remote-tracking refs -> real head refs +
+# `flatpak build-update-repo` summary) so it can be served as a plain
+# file:// remote with zero network at consumption time.
 #
 # This is the exact replacement path validated in
 # research/native-os-2026-08/flatpak-carrier-2026-08.md §2.3/§2.4 and
@@ -14,10 +14,23 @@
 # over the network first) -- so this script does not use sideload-repos at
 # all. The repo produced here is meant to be baked into the image and
 # pointed to directly as a remote's Url=.
+#
+# Y14-B (2026-08-27): LibreOffice added alongside Chromium -- meta-duduclaw
+# never carried a LibreOffice recipe at all (Y13-1 grepped the whole layer
+# and found zero hits; the earlier assumption that it already existed was
+# wrong), and the offline-repo consumer side has the exact same "zero
+# network at first boot" requirement for it as for Chromium, so it goes
+# through the identical pull-then-normalize pipeline rather than a second
+# bespoke mechanism. APP_IDS is now a space-separated list (was the
+# singular APP_ID) so `flatpak install` can pull every app -- and, via
+# Flatpak's own dependency resolution, every runtime/extension each one
+# needs -- in the ref-normalization loop below, which already iterates
+# generically over whatever `flathub:`-prefixed refs ended up in the repo
+# and therefore needed zero changes to support more than one app.
 set -euo pipefail
 
 ARCH="${ARCH:-x86_64}"
-APP_ID="${APP_ID:-org.chromium.Chromium}"
+APP_IDS="${APP_IDS:-org.chromium.Chromium org.libreoffice.LibreOffice}"
 INSTALL_NAME="gen"
 INSTALL_PATH="/srv/flatpak-gen"
 OUT_DIR="/srv/out"
@@ -40,7 +53,9 @@ flatpak remote-add --installation="${INSTALL_NAME}" --if-not-exists flathub http
 flatpak remote-list --installation="${INSTALL_NAME}" -d
 
 echo "==> [3/6] flatpak install (real network fetch, this is the ONLY step that needs network)"
-time flatpak install --installation="${INSTALL_NAME}" -y --noninteractive --arch="${ARCH}" flathub "${APP_ID}"
+# shellcheck disable=SC2086 -- APP_IDS is intentionally word-split, it is a
+# space-separated list of refs, not a single value.
+time flatpak install --installation="${INSTALL_NAME}" -y --noninteractive --arch="${ARCH}" flathub ${APP_IDS}
 flatpak list --installation="${INSTALL_NAME}" --app --runtime -d
 
 REPO="${INSTALL_PATH}/repo"

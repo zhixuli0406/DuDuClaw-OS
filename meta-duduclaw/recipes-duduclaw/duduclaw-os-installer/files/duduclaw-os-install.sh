@@ -33,6 +33,15 @@
 # factory flow): DUDUCLAW_INSTALL_TARGET=<disk basename, e.g. vda> selects the
 # target non-interactively; DUDUCLAW_INSTALL_YES=1 skips the destructive-write
 # confirmation. Absent either, the installer is fully interactive.
+#
+# DUDUCLAW_INSTALL_PROGRESS=1 (Y20-P3, 2026-08-29): emits machine-readable
+# `DUDUCLAW_PROGRESS:<0-100>` lines on THIS SCRIPT's own stdout while the dd
+# step runs, so a graphical front end (duduclaw-shell's `live_install`
+# module) can drive a determinate progress bar instead of an indeterminate
+# spinner. See §5 below for the full wire-format contract and the `pv -n`
+# mechanics behind it. No effect when unset/0, or when `pv` is not on PATH —
+# the dd step then behaves exactly as it always has (indeterminate `pv`
+# bar, or plain `dd` with neither).
 set -eu
 
 INSTALL_IMAGE_NAME="duduclaw-install.wic.zst"
@@ -171,7 +180,61 @@ log "正在寫入映像到 ${TARGET_DEV}（解壓串流，請勿中斷電源）�
 for p in $(lsblk -lno NAME "$TARGET_DEV" 2>/dev/null | tail -n +2); do
     umount "/dev/$p" 2>/dev/null || true
 done
-if command -v pv >/dev/null 2>&1; then
+# DUDUCLAW_INSTALL_PROGRESS=1 (Y20-P3, 2026-08-29): machine-readable
+# progress for a graphical front end. Interface (defined here, consumed by
+# `live_install/steps` + `install_runner.rs` in duduclaw-shell — the two
+# sides were versioned together in the same round): every line of the exact
+# shape `DUDUCLAW_PROGRESS:<0-100>` on THIS SCRIPT's own stdout is a
+# percentage sample (integers, not necessarily monotonic to the last digit —
+# see below); a final `DUDUCLAW_PROGRESS:100` is always emitted once dd/sync
+# settle, regardless of what the last `pv` sample said. No other stdout line
+# uses this prefix, so the consumer can filter on it with a plain anchored
+# match. When this variable is unset/0, or `pv` is not on PATH, behavior is
+# BYTE-IDENTICAL to before this round — the two branches below are
+# untouched.
+#
+# Percent math: `pv -n -s <total>` (numeric mode — one integer 0..100 per
+# line on ITS OWN stderr, see pv(1)) needs a byte total up front. The exact
+# decompressed size is available WITHOUT a second decompression pass via
+# `zstd -lv` (verbose long-listing)'s own "Decompressed Size: ... (<exact
+# bytes> B)" line — the parenthesized figure is always the precise byte
+# count regardless of which human-readable unit precedes it (verified
+# against a live capture: "Decompressed Size: 4.77 MiB (5000000 B)"). If
+# that parse ever fails (a future zstd release reformats the line, or a
+# multi-frame image this awk doesn't expect), this falls back to
+# `IMG_BYTES * 3` — the SAME floor-check ratio the size-sanity warning above
+# already uses for the identical "we don't know the exact decompressed
+# size" situation — so a percentage still renders, just potentially not
+# landing exactly on 100 the instant dd's last byte lands (the script's own
+# final `DUDUCLAW_PROGRESS:100` line is what guarantees the consumer always
+# sees a clean 100 once the write step is actually done, regardless of what
+# pv's own numeric stream reported up to that point).
+#
+# POSIX `sh` has no process substitution, so pv's numeric stderr stream is
+# routed through a named pipe read by a background prefixing loop rather
+# than `<(...)` — portable across dash/busybox sh, not just bash.
+if [ "${DUDUCLAW_INSTALL_PROGRESS:-0}" = "1" ] && command -v pv >/dev/null 2>&1; then
+    TOTAL_BYTES="$(zstd -lv "$IMG" 2>&1 | awk -F'[()]' '/Decompressed Size/{print $2}' | awk '{print $1}')"
+    case "$TOTAL_BYTES" in
+        ''|*[!0-9]*) TOTAL_BYTES=$((IMG_BYTES * 3)) ;;
+    esac
+    [ "$TOTAL_BYTES" -gt 0 ] 2>/dev/null || TOTAL_BYTES=$((IMG_BYTES * 3))
+
+    PROGRESS_FIFO="$(mktemp -u "${TMPDIR:-/tmp}/duduclaw-install-progress.XXXXXX")"
+    mkfifo "$PROGRESS_FIFO"
+    ( while IFS= read -r pct; do
+          case "$pct" in *[!0-9]*|'') continue ;; esac
+          [ "$pct" -gt 100 ] 2>/dev/null && pct=100
+          printf 'DUDUCLAW_PROGRESS:%s\n' "$pct"
+      done < "$PROGRESS_FIFO" ) &
+    PROGRESS_READER_PID=$!
+
+    zstd -dc "$IMG" | pv -n -s "$TOTAL_BYTES" 2>"$PROGRESS_FIFO" | dd of="$TARGET_DEV" bs=4M conv=fsync 2>/dev/null
+
+    wait "$PROGRESS_READER_PID" 2>/dev/null || true
+    rm -f "$PROGRESS_FIFO"
+    printf 'DUDUCLAW_PROGRESS:100\n'
+elif command -v pv >/dev/null 2>&1; then
     zstd -dc "$IMG" | pv | dd of="$TARGET_DEV" bs=4M conv=fsync 2>/dev/null
 else
     zstd -dc "$IMG" | dd of="$TARGET_DEV" bs=4M conv=fsync

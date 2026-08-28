@@ -17,18 +17,29 @@ S = "${UNPACKDIR}"
 
 # Runtime tools the installer shells out to:
 #  - gptfdisk        → sgdisk -e (move GPT backup header to real disk end)
-#  - zstd            → zstd -dc (decompress-stream the .wic.zst to disk)
+#  - zstd            → zstd -dc (decompress-stream the .wic.zst to disk) +
+#                      zstd -lv (Y20-P3: exact decompressed byte count for
+#                      DUDUCLAW_INSTALL_PROGRESS's `pv -n -s` total)
 #  - parted          → partprobe (re-read partition table after write)
 #  - util-linux-*    → lsblk / findmnt / blkid / blockdev / umount
 #  - coreutils       → stat / du / dd / sync (busybox equivalents also work,
 #                      pulled explicitly so the script's `stat -c`/`du -h`
 #                      behave identically regardless of the base image's
-#                      busybox config)
+#                      busybox config) + mkfifo (Y20-P3's progress-line
+#                      bridge, POSIX sh has no process substitution)
+#  - pv              → Y20-P3: numeric (`-n`) progress samples feeding
+#                      DUDUCLAW_INSTALL_PROGRESS=1's `DUDUCLAW_PROGRESS:<pct>`
+#                      lines (see the script's own §5 comment); a real
+#                      RDEPEND now (not merely optional-if-present) so the
+#                      graphical installer's determinate progress bar is a
+#                      live feature of the shipped image, not something that
+#                      happens to work only when pv is present.
 RDEPENDS:${PN} = " \
     gptfdisk \
     zstd \
     parted \
     coreutils \
+    pv \
     util-linux-lsblk \
     util-linux-findmnt \
     util-linux-blkid \

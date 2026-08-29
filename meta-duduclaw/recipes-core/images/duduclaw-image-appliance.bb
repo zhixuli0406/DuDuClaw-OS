@@ -92,7 +92,19 @@ require recipes-core/images/duduclaw-image-flatpak.inc
 # demand). Restored to the shipping state here once verification
 # completed -- confirmed via `bitbake -e` that this line active yields
 # IMAGE_FEATURES="ssh-server-dropbear" (no autologin, no empty password).
-IMAGE_FEATURES:remove = "serial-autologin-root empty-root-password"
+#
+# App-compat verification round (2026-08-29): the follow-up the Y14-A note
+# above recommends now exists -- duduclaw-image-appliance-test.bb, a
+# never-shipped `require`-variant that re-opens the two features for QEMU
+# harnesses WITHOUT anyone editing this file again. bitbake's `:remove` is
+# applied after every `+=`/`append` at final expansion, so a variant recipe
+# cannot simply re-add the removed tokens; instead the removal itself is
+# guarded by ?=-defaulted DUDUCLAW_IMAGE_TEST_LOGIN, which ONLY that test
+# recipe sets. Default ("0") keeps this shipping image bit-identical to the
+# unconditional remove above: `bitbake -e duduclaw-image-appliance` still
+# yields IMAGE_FEATURES="ssh-server-dropbear".
+DUDUCLAW_IMAGE_TEST_LOGIN ?= "0"
+IMAGE_FEATURES:remove = "${@'' if d.getVar('DUDUCLAW_IMAGE_TEST_LOGIN') == '1' else 'serial-autologin-root empty-root-password'}"
 
 # --- A/B slot sizing (Y14-A/Y14 T2-T6 round, 2026-08-27/28, real-build
 # calibration, revised twice against real measurements) --------------------

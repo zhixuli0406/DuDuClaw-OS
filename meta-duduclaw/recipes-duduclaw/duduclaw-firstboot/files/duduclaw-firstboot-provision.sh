@@ -117,8 +117,18 @@ chown -R "$DUDUCLAW_OWNER" "$DUDUCLAW_HOME"
 # duduclaw-shell and fcitx5 create their own subdirectories under here on
 # first launch. Harmless to run every boot even on a headless box that
 # never starts duduclaw-kiosk.service.
+#
+# `-R` (WP2, 2026-08-29, installer-settings-integration design doc §3.2):
+# the installer now pre-populates shell/oobe_state.json under this tree
+# BEFORE first boot, as root (it writes directly onto the target disk's
+# /data partition from the live environment -- see
+# `duduclaw-os-install.sh`'s own §7). Without recursing, that file would
+# stay root-owned forever and duduclaw-shell (running as duduclaw-kiosk)
+# could not overwrite it on a later real OOBE run. This unit's own
+# ConditionPathExists=!.provisioned only lets it fire once, so the
+# recursive walk's cost is a non-issue.
 mkdir -p /data/duduclaw-kiosk
-chown duduclaw-kiosk:duduclaw-kiosk /data/duduclaw-kiosk
+chown -R duduclaw-kiosk:duduclaw-kiosk /data/duduclaw-kiosk
 
 # --- minimal config.toml ---------------------------------------------
 # Same shape `write_minimal_config()` in crates/duduclaw-core/src/config.rs

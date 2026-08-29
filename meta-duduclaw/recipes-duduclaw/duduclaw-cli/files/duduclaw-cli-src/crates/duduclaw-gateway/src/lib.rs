@@ -41,6 +41,12 @@ pub mod device_about;
 pub mod device_ops;
 pub mod os_update;
 pub mod pre_update_backup;
+// ── A7c: agent→display gateway bridge (comp's shell_control display group,
+// reachable from an agent identity via A7c's PeerAuthority::Agent tier) ──
+pub mod display_bridge;
+// ── Y10-1: agent→audio gateway bridge (wpctl/PipeWire volume/mute/output —
+// never touches duduclaw-comp at all, see this module's own doc for why) ──
+pub mod audio_bridge;
 // ── H3g-b: surface a failed /data migration (H3g) to the dashboard ───────
 pub mod migration_alert;
 // ── D4a: network settings (Wi-Fi over iwd D-Bus) — `network.*` RPCs +
@@ -133,6 +139,7 @@ pub mod expert_admin;
 pub mod expert_generate;
 pub mod capability;
 pub mod capability_grants;
+pub mod maintenance;
 pub mod growth;
 pub mod custom_skills;
 pub mod custom_widgets;
@@ -187,6 +194,7 @@ pub mod line;
 pub mod local_llm;
 pub mod install_notify;
 pub mod install_requests;
+pub(crate) mod pending_account;
 pub mod mcp_oauth;
 pub mod mcp_scan;
 pub mod mail;
@@ -351,6 +359,10 @@ pub mod local_models;
 // ── G1: durable multi-agent dispatch engine (atomic claim / zombie reclaim /
 //        dependency unlock / goal-mode judge acceptance) ──
 pub mod dispatch_engine;
+
+// ── Y8-3 T1: agent-body update vertical slice — cross-restart update result
+//        reconciliation sweep, piggy-backed on `dispatch_engine`'s tick ──
+pub mod update_report_reconcile;
 
 // ── P1: autonomous goal loop — outer-loop driver that dispatches goal_mode
 //        tasks, enforces iteration/wall-clock/concurrency caps, and re-dispatches

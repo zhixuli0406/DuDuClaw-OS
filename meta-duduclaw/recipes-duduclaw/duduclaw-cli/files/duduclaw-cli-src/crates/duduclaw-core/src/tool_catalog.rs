@@ -684,7 +684,19 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "os_apply_update",
-        "Apply an update (device OS image or duduclaw self-update)",
+        "Apply an update (device OS image or duduclaw self-update, destructive, confirm required)",
+        "admin",
+        "os",
+    ),
+    (
+        "os_boot_assessment",
+        "Read systemd's automatic boot assessment for the running version (agent-body update slice)",
+        "admin",
+        "os",
+    ),
+    (
+        "os_update_rollback",
+        "Roll back to the previous A/B slot and reboot (destructive, confirm required, agent-body update slice)",
         "admin",
         "os",
     ),
@@ -709,6 +721,30 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     (
         "os_doctor_repair",
         "Reduced health checks with repair hints",
+        "admin",
+        "os",
+    ),
+    (
+        "os_display_get",
+        "Read display appearance: cursor size/source, comp's theme, primary screen scale (A7c agent→display bridge)",
+        "admin",
+        "os",
+    ),
+    (
+        "os_display_set",
+        "Change one display appearance field live (cursor_size/cursor_source/theme/output_scale — A7c \"make text bigger\" backend)",
+        "admin",
+        "os",
+    ),
+    (
+        "os_audio_get",
+        "Read current audio state: volume percentage, mute, and every output device (Y10-1 agent→audio bridge)",
+        "admin",
+        "os",
+    ),
+    (
+        "os_audio_set",
+        "Change one audio field live (volume 0-100 / mute toggle / output device id — Y10-1 \"turn it up / mute\" backend)",
         "admin",
         "os",
     ),

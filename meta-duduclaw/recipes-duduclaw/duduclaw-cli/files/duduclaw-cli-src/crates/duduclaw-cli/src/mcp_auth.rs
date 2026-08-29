@@ -871,10 +871,19 @@ pub fn tool_requires_scope(tool_name: &str) -> Option<Scope> {
         | "os_wifi_scan"
         | "os_wifi_connect"
         | "os_apply_update"
+        | "os_boot_assessment"
+        | "os_update_rollback"
         | "os_backup_create"
         | "os_power"
         | "os_factory_reset"
-        | "os_doctor_repair" => Some(Scope::Admin),
+        | "os_doctor_repair"
+        | "os_display_get"
+        | "os_display_set"
+        // Y10-1: agent→audio bridge (wpctl volume/mute/output), same tier
+        // as os_display_get/set — see `duduclaw_gateway::audio_bridge`'s
+        // module doc for why this never touches duduclaw-comp.
+        | "os_audio_get"
+        | "os_audio_set" => Some(Scope::Admin),
         // Server-side office-document script execution (docx/xlsx/pptx/pdf).
         // Its own least-privilege scope instead of the Admin `execute_program`
         // uses: the tool is constrained to the four bundled skills' vetted
@@ -1280,6 +1289,8 @@ is_external = {is_external}
             "os_wifi_scan",
             "os_wifi_connect",
             "os_apply_update",
+            "os_boot_assessment",
+            "os_update_rollback",
             "os_backup_create",
             "os_power",
             "os_factory_reset",
@@ -1309,6 +1320,8 @@ is_external = {is_external}
             "os_factory_reset",
             "os_power",
             "os_apply_update",
+            "os_boot_assessment",
+            "os_update_rollback",
         ] {
             assert!(
                 !external_tool_allowed(tool, &principal),

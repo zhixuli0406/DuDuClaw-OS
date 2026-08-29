@@ -42,6 +42,24 @@
 # mechanics behind it. No effect when unset/0, or when `pv` is not on PATH —
 # the dd step then behaves exactly as it always has (indeterminate `pv`
 # bar, or plain `dd` with neither).
+#
+# DUDUCLAW_INSTALL_OOBE_STATE_FILE / DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE
+# (WP2, 2026-08-29, `DESIGN-installer-settings-integration-2026-08.md`
+# §3.2/§4/§8/§9): absolute paths to two scratch JSON files that
+# `duduclaw-shell`'s live installer wizard writes BEFORE spawning this
+# script (`install_runner.rs`'s `build_oobe_state_json`/
+# `build_pending_account_json`, via `serde` — this script never generates
+# or reshapes their content, only copies the bytes onto the target disk;
+# hand-formatting JSON in `sh`, especially a password that might contain a
+# `"` or `\`, is exactly the "format drift" risk the design doc's §8.2
+# calls out). See §7 below for the injection step itself. Target paths on
+# the target disk's /data partition (wks layout: ESP=1/root-a=2/root-b=3/
+# data=4):
+#   $DUDUCLAW_INSTALL_OOBE_STATE_FILE      -> duduclaw-kiosk/shell/oobe_state.json
+#   $DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE -> duduclaw/pending-account.json
+# Both unset (an operator who backed out of the account step, or a build
+# from before this WP) -> §7 is skipped entirely, byte-identical to before
+# this round.
 set -eu
 
 INSTALL_IMAGE_NAME="duduclaw-install.wic.zst"
@@ -256,9 +274,89 @@ fi
 partprobe "$TARGET_DEV" 2>/dev/null || true
 sync
 
+# ---------------------------------------------------------------------------
+# 7. Inject the live wizard's collected settings onto the target /data
+#    partition (WP2, 2026-08-29 — see this script's own header comment for
+#    the full `DUDUCLAW_INSTALL_OOBE_STATE_FILE`/
+#    `DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE` env-var contract).
+#
+#    Failure semantics here are FAIL-LOUD, not silent: by this point `dd`
+#    has already written the whole target disk, so a failed injection costs
+#    nothing to retry (re-running the installer is harmless — it just
+#    overwrites the same disk again), but a SILENT skip would ship a
+#    machine with no way to log in, which is strictly worse than an
+#    installer that stops and says so.
+# ---------------------------------------------------------------------------
+if [ -n "${DUDUCLAW_INSTALL_OOBE_STATE_FILE:-}" ] || [ -n "${DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE:-}" ]; then
+    log "寫入初始設定至目標系統..."
+
+    # /data is partition 4 of the wks layout regardless of disk naming
+    # scheme — but the PARTITION NODE name differs: a plain "vda"/"sda"
+    # style disk suffixes the partition number directly ("vda4"), while an
+    # "nvme0n1"/"mmcblk0" style disk (whose own name already ends in a
+    # digit) needs a "p" separator ("nvme0n1p4") so the partition number
+    # can't be misread as part of the disk name.
+    case "$TARGET_DEV" in
+        *[0-9]) DATA_PART="${TARGET_DEV}p4" ;;
+        *) DATA_PART="${TARGET_DEV}4" ;;
+    esac
+
+    # The partition node may take a moment to appear after `partprobe`
+    # above — poll rather than assume it is already there. Busybox `sleep`
+    # only accepts whole seconds (no `sleep 0.5`), so this is a coarse
+    # ~10-try/~10s ceiling, not a tight poll.
+    tries=0
+    while [ ! -b "$DATA_PART" ]; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 10 ]; then
+            fail "等待 ${DATA_PART} 裝置節點出現逾時（partprobe 後應立即可見；安裝映像已完整寫入，可重試安裝以再次注入初始設定）"
+        fi
+        sleep 1
+    done
+
+    MNT="$(mktemp -d)"
+    mount "$DATA_PART" "$MNT" || fail "掛載 ${DATA_PART} 失敗，無法寫入初始設定（安裝映像已完整寫入，可重試安裝）"
+
+    # From here on, every failure must unmount before exiting — this
+    # script sets no EXIT trap (matching its own pre-existing style
+    # elsewhere), so each step below checks its own result explicitly
+    # through this helper rather than relying on a bare `set -e` exit that
+    # would leave $MNT mounted.
+    inject_fail() {
+        err "$1"
+        umount "$MNT" 2>/dev/null || true
+        rmdir "$MNT" 2>/dev/null || true
+        exit 1
+    }
+
+    if [ -n "${DUDUCLAW_INSTALL_OOBE_STATE_FILE:-}" ]; then
+        mkdir -p "$MNT/duduclaw-kiosk/shell" || inject_fail "建立 ${MNT}/duduclaw-kiosk/shell 失敗"
+        cp "$DUDUCLAW_INSTALL_OOBE_STATE_FILE" "$MNT/duduclaw-kiosk/shell/oobe_state.json" || inject_fail "寫入 oobe_state.json 失敗"
+    fi
+
+    if [ -n "${DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE:-}" ]; then
+        mkdir -p "$MNT/duduclaw" || inject_fail "建立 ${MNT}/duduclaw 失敗"
+        cp "$DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE" "$MNT/duduclaw/pending-account.json" || inject_fail "寫入 pending-account.json 失敗"
+        chmod 600 "$MNT/duduclaw/pending-account.json" || inject_fail "設定 pending-account.json 權限失敗"
+    fi
+
+    sync
+    umount "$MNT" || inject_fail "卸載 ${MNT} 失敗"
+    rmdir "$MNT" 2>/dev/null || true
+
+    ok "初始設定已寫入目標系統。"
+fi
+
 ok "安裝完成。"
 ok "請移除安裝媒介（光碟／USB）後重新開機，系統將從 ${TARGET_DEV} 啟動。"
-log "首次開機會自動擴充 /data 至整顆磁碟並執行初始設定（OOBE）。"
+# The first-boot description depends on whether §7 injected settings: with an
+# injected oobe_state.json the target boots straight to the desktop (no OOBE),
+# so promising "初始設定（OOBE）" there would be wrong.
+if [ -n "${DUDUCLAW_INSTALL_OOBE_STATE_FILE:-}" ]; then
+    log "首次開機會自動擴充 /data 至整顆磁碟，並套用安裝時完成的初始設定，直接進入桌面。"
+else
+    log "首次開機會自動擴充 /data 至整顆磁碟並執行初始設定（OOBE）。"
+fi
 
 # In the automated/QEMU path, power off so the harness can detect completion
 # and reboot from the target disk deterministically.

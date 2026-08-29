@@ -1929,7 +1929,10 @@ const TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "os_check_update",
         description: "Check for an available duduclaw self-update AND (appliance only) an available \
-            OS image update. admin. Bridges system.check_update + device.update_status to agents (O-0).",
+            OS image update. admin. Bridges system.check_update + device.update_status + \
+            device.update_check to agents (O-0). `device_check` is the REAL upstream freshness \
+            signal (signed manifest, not local staging) — prefer it over `device` for \"is there a \
+            new version\" questions.",
         params: &[],
     },
     ToolDef {
@@ -1978,12 +1981,33 @@ const TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "os_apply_update",
-        description: "Apply an update. admin; destructive (changes running binary or OS image). \
-            Requires `target`: \"device\" (appliance-only OS image update via duduclaw-sysd, no confirm \
-            required — mirrors device.update_apply) or \"system\" (duduclaw self-update, no confirm \
-            required — mirrors system.apply_update). Bridges both RPCs to agents (O-0).",
+        description: "Apply an update. admin; destructive (changes running binary or OS image); \
+            requires confirm:true (a NEW gate beyond the dashboard RPCs — an agent has no button a \
+            human physically clicked, see mcp_os_ops.rs's doc comment). Requires `target`: \"device\" \
+            (appliance-only OS image update, runs the SAME verify/stage/backup/install pipeline as \
+            device.update_apply) or \"system\" (duduclaw self-update, mirrors system.apply_update).",
         params: &[
             ParamDef { name: "target", description: "\"device\" or \"system\" — which update to apply", required: true },
+            ParamDef { name: "confirm", description: "Must be true — this is destructive", required: true },
+        ],
+    },
+    ToolDef {
+        name: "os_boot_assessment",
+        description: "Read systemd's automatic boot assessment (good/bad/indeterminate/clean) for the \
+            currently-running version. admin, appliance-only, read-only. Bridges the dashboard-only \
+            device.boot_assessment RPC to agents (O-0, agent-body update vertical slice) — the tool an \
+            agent uses to check whether an update it applied actually took, including across a reboot.",
+        params: &[],
+    },
+    ToolDef {
+        name: "os_update_rollback",
+        description: "Roll back to the previously-installed A/B slot, then reboot. admin, \
+            appliance-only, destructive: requires confirm:true (mirrors device.update_rollback's \
+            require_confirm!() gate exactly — recoverable, same tier as os_power, not os_factory_reset's \
+            ApprovalBroker). Bridges the dashboard-only device.update_rollback RPC to agents (O-0, \
+            agent-body update vertical slice).",
+        params: &[
+            ParamDef { name: "confirm", description: "Must be true — this is destructive", required: true },
         ],
     },
     ToolDef {
@@ -2019,6 +2043,64 @@ const TOOLS: &[ToolDef] = &[
             cold-start) with repair hints. admin. Bridges a subset of system.doctor_repair to agents \
             (O-0) — omits the dashboard's container_runtime/grok_cli probes (non-gate-relevant, heavier).",
         params: &[],
+    },
+    // ── A7c: agent→display bridge (comp's shell_control `display` group —
+    // cursor size/source, comp's own decoration theme, output scale). admin,
+    // appliance-only, requires_approval=false for both (A7a design doc §5:
+    // appearance preferences are reversible, low-risk — same tier as
+    // os_wifi_scan, not os_power/os_factory_reset). See
+    // `duduclaw_gateway::display_bridge`'s module doc for why this is the
+    // one O-0 pair that makes a real (stateless, one-shot) socket call
+    // instead of a pure/file-based read, and
+    // commercial/docs/DESIGN-os-self-drive-2026-08.md for the uid-boundary
+    // finding this closes.
+    ToolDef {
+        name: "os_display_get",
+        description: "Read the appliance's current display appearance: cursor size/source (+ effective \
+            size, theme, persistence), and the primary screen's UI scale percentage — the \"現況\" half \
+            of a \"把字放大\" request. admin, appliance-only, read-only.",
+        params: &[],
+    },
+    ToolDef {
+        name: "os_display_set",
+        description: "Change one display appearance field, live, no restart — the backend \"把字放大\" \
+            actually drives (WP-comp-shell-display D4b-3's real output-scale apply). admin, \
+            appliance-only, requires_approval=false (reversible appearance preference, not destructive). \
+            `field` is one of cursor_size (24/32/48/64/96) / cursor_source (\"system\"/\"brand\") / theme \
+            (\"light\"/\"dark\") / output_scale (100/125/150/175/200, applied to the primary screen — \
+            150 or 200 is \"make the text bigger\"). `value` is always a string; an out-of-set value is \
+            refused, never clamped to the nearest step (comp's own closed-set validation).",
+        params: &[
+            ParamDef { name: "field", description: "cursor_size | cursor_source | theme | output_scale", required: true },
+            ParamDef { name: "value", description: "The new value, as a string (e.g. \"150\" for output_scale)", required: true },
+        ],
+    },
+    // ── Y10-1: agent→audio bridge (wpctl volume/mute/output device). admin,
+    // appliance-only, requires_approval=false for both (audio twin of A7c's
+    // display pair above — reversible, low-risk preferences, not destructive
+    // machine operations). See `duduclaw_gateway::audio_bridge`'s module doc
+    // for why this NEVER touches duduclaw-comp (audio was never a
+    // compositor-owned resource — the shell's own volume slider already
+    // talks to `wpctl` directly).
+    ToolDef {
+        name: "os_audio_get",
+        description: "Read the appliance's current audio state: volume percentage, mute, and every \
+            output device (id/name/is_default) — the \"現況\" half of a \"把聲音調大\"/\"靜音\" request. \
+            admin, appliance-only, read-only.",
+        params: &[],
+    },
+    ToolDef {
+        name: "os_audio_set",
+        description: "Change one audio field live — the backend \"把聲音調大\"/\"靜音\" actually drives. \
+            admin, appliance-only, requires_approval=false (reversible preference, not destructive). \
+            `field` is one of volume (0-100, e.g. \"70\") / mute (\"toggle\" only — read the current \
+            state with os_audio_get first if you need a specific target) / output (a device id from \
+            os_audio_get's outputs[].id, switches the default output). `value` is always a string; an \
+            out-of-range or unparseable value is refused before any subprocess call.",
+        params: &[
+            ParamDef { name: "field", description: "volume | mute | output", required: true },
+            ParamDef { name: "value", description: "The new value, as a string (e.g. \"70\" for volume, \"toggle\" for mute)", required: true },
+        ],
     },
     // ── Recording → skill (WP3.3; requires [capabilities] recording = true) ──
     ToolDef {
@@ -10425,10 +10507,18 @@ pub(crate) async fn handle_tools_call(
             | "os_wifi_scan"
             | "os_wifi_connect"
             | "os_apply_update"
+            | "os_boot_assessment"
+            | "os_update_rollback"
             | "os_backup_create"
             | "os_power"
             | "os_factory_reset"
             | "os_doctor_repair"
+            | "os_display_get"
+            | "os_display_set"
+            // Y10-1: agent→audio bridge — same "audit every os_* call on
+            // success" rule as the rest of the O-0 system-operator face.
+            | "os_audio_get"
+            | "os_audio_set"
     );
     let result = match tool_name {
         "send_message" => handle_send_message(&arguments, home_dir, http, default_agent).await,
@@ -10676,19 +10766,27 @@ pub(crate) async fn handle_tools_call(
         // see `mcp_os_ops.rs` module doc.
         "os_device_status" => crate::mcp_os_ops::handle_os_device_status(home_dir).await,
         "os_system_status" => crate::mcp_os_ops::handle_os_system_status(home_dir).await,
-        "os_check_update" => crate::mcp_os_ops::handle_os_check_update().await,
+        "os_check_update" => crate::mcp_os_ops::handle_os_check_update(home_dir).await,
         "os_backup_list" => crate::mcp_os_ops::handle_os_backup_list(home_dir).await,
         "os_network_info" => crate::mcp_os_ops::handle_os_network_info().await,
         "os_wifi_status" => crate::mcp_os_ops::handle_os_wifi_status().await,
         "os_wifi_scan" => crate::mcp_os_ops::handle_os_wifi_scan(&arguments).await,
         "os_wifi_connect" => crate::mcp_os_ops::handle_os_wifi_connect(&arguments, home_dir).await,
-        "os_apply_update" => crate::mcp_os_ops::handle_os_apply_update(&arguments, home_dir).await,
+        "os_apply_update" => {
+            crate::mcp_os_ops::handle_os_apply_update(&arguments, home_dir, default_agent).await
+        }
+        "os_boot_assessment" => crate::mcp_os_ops::handle_os_boot_assessment().await,
+        "os_update_rollback" => crate::mcp_os_ops::handle_os_update_rollback(&arguments).await,
         "os_backup_create" => crate::mcp_os_ops::handle_os_backup_create(home_dir).await,
         "os_power" => crate::mcp_os_ops::handle_os_power(&arguments).await,
         "os_factory_reset" => {
             crate::mcp_os_ops::handle_os_factory_reset(&arguments, home_dir, caller_client_id).await
         }
         "os_doctor_repair" => crate::mcp_os_ops::handle_os_doctor_repair(home_dir).await,
+        "os_display_get" => crate::mcp_os_ops::handle_os_display_get().await,
+        "os_display_set" => crate::mcp_os_ops::handle_os_display_set(&arguments).await,
+        "os_audio_get" => crate::mcp_os_ops::handle_os_audio_get().await,
+        "os_audio_set" => crate::mcp_os_ops::handle_os_audio_set(&arguments).await,
         // Recording → skill tools (WP3.3). The [capabilities] recording gate +
         // Scope::Recording are enforced upstream in mcp_dispatch (fail-closed);
         // these handlers are the mechanism. Recording ownership follows the

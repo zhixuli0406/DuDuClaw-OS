@@ -6,10 +6,38 @@
 #   - No User=duduclaw / ReadWritePaths=/data -- this Yocto image doesn't
 #     provision a non-root service user or a /data mount yet (that's
 #     product-layer work for a later ticket). Runs as root for now.
-#   - No After=/Wants= on duduclaw-firstboot-provision.service or
-#     duduclaw-data-migrate.service -- neither exists in this image (those
-#     are appliance/'s Debian-line concepts, frozen per the map's decision
-#     ⑤, not yet ported to the Yocto product layer).
+#   - No After=/Wants=/Environment=DUDUCLAW_HOME on/for
+#     duduclaw-firstboot-provision.service in THIS base unit -- STALE CLAIM
+#     CORRECTED (WP3, 2026-08-29, DESIGN-installer-settings-integration-
+#     2026-08.md): this bullet used to say those Debian-line concepts were
+#     "not yet ported to the Yocto product layer", which is no longer true.
+#     duduclaw-firstboot-provision.service DOES exist as a Yocto concept
+#     since Y9-1 (recipes-duduclaw/duduclaw-firstboot/), and
+#     Environment=DUDUCLAW_HOME=/data/duduclaw IS already wired on every
+#     Yocto image that actually has a /data partition (duduclaw-image-data.bb,
+#     -flatpak.bb, -ab.bb, and -appliance.bb -- the actual shipping target)
+#     -- just not by editing THIS file. Two systemd drop-ins do it instead,
+#     each installed only by the recipe that owns the feature and only onto
+#     the image that also carries the matching /data partition:
+#     recipes-duduclaw/duduclaw-ab-update/files/10-ab-home.conf and
+#     recipes-duduclaw/duduclaw-firstboot/files/10-data.conf (both under
+#     duduclaw-gateway.service.d/). 10-data.conf's own header already gives
+#     the reason this base unit stays untouched: it is shared, unmodified,
+#     by every image that installs duduclaw-cli -- including THIS bring-up
+#     image (duduclaw-image.bb itself), which still has no /data partition
+#     or duduclaw-firstboot recipe at all -- so a Requires= baked in here
+#     would fail that image's boot outright (Requires= on a unit whose
+#     .service file was never installed does not resolve, unlike a merely-
+#     unresolvable Wants=/After=). Re-verified this round (WP3): no
+#     .bbappend anywhere under meta-duduclaw overrides this file (grepped).
+#     Net effect for WP3's own goal -- the gateway reading
+#     /data/duduclaw/pending-account.json on first boot,
+#     crates/duduclaw-gateway/src/pending_account.rs -- is already satisfied
+#     on every image the graphical installer actually targets; this base
+#     file is deliberately left without those two directives rather than
+#     re-adding, for a weaker (ordering-only) directive, the exact
+#     base-unit coupling 10-data.conf's own header already reasoned against
+#     and rejected once for the stronger (Requires=) one.
 #   - Kept: After=duduclaw-sysd.service ordering (the gateway talks to sysd
 #     over a Unix socket, matches the appliance unit's own reasoning), and
 #     the Type=notify + WatchdogSec=60 contract (the app-side sd_notify
@@ -31,8 +59,9 @@
 # WRONG for this unit specifically -- `crates/duduclaw-core/src/appliance.rs`
 # `pick_default_bind()` only defaults to `0.0.0.0` when `DUDUCLAW_APPLIANCE=1`
 # is set in the process environment; with no env and no `config.toml
-# [gateway] bind` (neither exists on this bring-up image, no firstboot-
-# provision-equivalent has been ported here yet per the comment above), the
+# [gateway] bind` (this bring-up image still has neither -- WP3's
+# correction above is that duduclaw-firstboot-provision.service now exists
+# as a Yocto concept elsewhere, not that THIS image installs it), the
 # code default is `127.0.0.1` -- confirmed live: `journalctl -u
 # duduclaw-gateway` showed "Gateway starting on 127.0.0.1:18789", and a host
 # -> guest connection (QEMU hostfwd, which relays to the guest's real NIC,

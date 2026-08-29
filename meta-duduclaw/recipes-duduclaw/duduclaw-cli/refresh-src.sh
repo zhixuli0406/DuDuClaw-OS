@@ -122,4 +122,15 @@ PYEOF
 # versions instead of just pruning unreachable entries).
 cp "$REPO_ROOT/Cargo.lock" "$OUT_DIR/Cargo.lock"
 
-echo "Wrote $OUT_DIR (root Cargo.toml narrowed to ${#MEMBERS[@]} members, Cargo.lock copied verbatim -- NOT pruned yet, run the build step separately, it's slow)"
+# Prune the lock NOW, not "in a separate build step someone remembers to run"
+# (2026-08-29 incident: a refresh without the prune shipped a lock still
+# carrying entries for workspace members OUTSIDE the narrowed set -- e.g.
+# duduclaw-pets and its kamadak-exif/mutate_once deps -- and bitbake's
+# `cargo build --frozen` refused with "cannot update the lock file", failing
+# the whole image bake). `cargo metadata` runs the exact same resolver a
+# build would (same conservative pin-respecting behavior the comment above
+# wants) and rewrites the lock without compiling anything, so the prune is
+# cheap enough to fold in here instead of trusting a follow-up step.
+(cd "$OUT_DIR" && cargo metadata --format-version 1 >/dev/null)
+
+echo "Wrote $OUT_DIR (root Cargo.toml narrowed to ${#MEMBERS[@]} members, Cargo.lock pruned via cargo metadata to this narrowed workspace)"

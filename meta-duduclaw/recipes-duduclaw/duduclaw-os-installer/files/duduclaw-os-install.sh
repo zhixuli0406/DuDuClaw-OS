@@ -57,7 +57,11 @@
 # data=4):
 #   $DUDUCLAW_INSTALL_OOBE_STATE_FILE      -> duduclaw-kiosk/shell/oobe_state.json
 #   $DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE -> duduclaw/pending-account.json
-# Both unset (an operator who backed out of the account step, or a build
+#   $DUDUCLAW_INSTALL_PENDING_NETWORK_FILE -> duduclaw/pending-network.json
+#     (phase 2, design doc §5 plan b: Wi-Fi SSID/passphrase collected as a
+#     pure form in the live wizard, connected by the target's own gateway
+#     on first boot — the live image carries no iwd stack, deliberately)
+# All unset (an operator who backed out of the account step, or a build
 # from before this WP) -> §7 is skipped entirely, byte-identical to before
 # this round.
 set -eu
@@ -278,7 +282,8 @@ sync
 # 7. Inject the live wizard's collected settings onto the target /data
 #    partition (WP2, 2026-08-29 — see this script's own header comment for
 #    the full `DUDUCLAW_INSTALL_OOBE_STATE_FILE`/
-#    `DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE` env-var contract).
+#    `DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE`/
+#    `DUDUCLAW_INSTALL_PENDING_NETWORK_FILE` env-var contract).
 #
 #    Failure semantics here are FAIL-LOUD, not silent: by this point `dd`
 #    has already written the whole target disk, so a failed injection costs
@@ -287,7 +292,7 @@ sync
 #    machine with no way to log in, which is strictly worse than an
 #    installer that stops and says so.
 # ---------------------------------------------------------------------------
-if [ -n "${DUDUCLAW_INSTALL_OOBE_STATE_FILE:-}" ] || [ -n "${DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE:-}" ]; then
+if [ -n "${DUDUCLAW_INSTALL_OOBE_STATE_FILE:-}" ] || [ -n "${DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE:-}" ] || [ -n "${DUDUCLAW_INSTALL_PENDING_NETWORK_FILE:-}" ]; then
     log "寫入初始設定至目標系統..."
 
     # /data is partition 4 of the wks layout regardless of disk naming
@@ -338,6 +343,17 @@ if [ -n "${DUDUCLAW_INSTALL_OOBE_STATE_FILE:-}" ] || [ -n "${DUDUCLAW_INSTALL_PE
         mkdir -p "$MNT/duduclaw" || inject_fail "建立 ${MNT}/duduclaw 失敗"
         cp "$DUDUCLAW_INSTALL_PENDING_ACCOUNT_FILE" "$MNT/duduclaw/pending-account.json" || inject_fail "寫入 pending-account.json 失敗"
         chmod 600 "$MNT/duduclaw/pending-account.json" || inject_fail "設定 pending-account.json 權限失敗"
+    fi
+
+    # Phase 2 (Wi-Fi, design doc §5 plan b): the wizard only COLLECTS
+    # SSID/passphrase in the live environment (no iwd stack on the live
+    # image, deliberately) — the target system's own gateway connects on
+    # first boot (`duduclaw-gateway`'s `pending_network.rs`), then deletes
+    # this file. Same carry-the-bytes-only role as the two files above.
+    if [ -n "${DUDUCLAW_INSTALL_PENDING_NETWORK_FILE:-}" ]; then
+        mkdir -p "$MNT/duduclaw" || inject_fail "建立 ${MNT}/duduclaw 失敗"
+        cp "$DUDUCLAW_INSTALL_PENDING_NETWORK_FILE" "$MNT/duduclaw/pending-network.json" || inject_fail "寫入 pending-network.json 失敗"
+        chmod 600 "$MNT/duduclaw/pending-network.json" || inject_fail "設定 pending-network.json 權限失敗"
     fi
 
     sync

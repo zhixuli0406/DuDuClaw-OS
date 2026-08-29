@@ -70,28 +70,27 @@ IMAGE_INSTALL:append = " duduclaw-os-installer"
 # unprivileged duduclaw-kiosk to root (see duduclaw-live-tweaks.bb's own
 # header for why root is required at all).
 #
-# COPIED, not `require`d, from duduclaw-image.bb's own five desktop-stack
-# IMAGE_INSTALL:append lines (comp/shell/mesa, dbus/fcitx5, pipewire) --
-# deliberate, not an oversight: extracting a shared
-# duduclaw-image-desktop.inc now would put this throwaway spike recipe in
-# the same edit blast radius as the production image line before P1 has even
-# proven the desktop stack works here at all. Deduping into an .inc is
-# explicitly deferred to P4 (see DESIGN-live-installer-iso-2026-08.md).
-# kernel-modules is copied too (needed at runtime for the same audio/crypto
-# module-splitting reasons duduclaw-image.bb's own comment documents, not
-# specific to the installer).
+# Y20-P4 (2026-08-29): now `require`d, no longer COPIED. P1's own original
+# wording here (git blame this file for it) explicitly deferred the shared
+# `duduclaw-image-desktop.inc` extraction until "P1 has proven the desktop
+# stack works here at all" — P1/P2/P3 have since each independently proven
+# exactly that (boots, renders the wizard, drives a real disk write), so
+# this ticket does the extraction. Same five concerns as before (comp/
+# shell/mesa/vulkan/xkb, fcitx5 IME, PipeWire/WirePlumber, kernel-modules,
+# plus the Y20-P4 Japanese CJK fallback font this live environment's own
+# language step needs just as much as the production OOBE does) — see
+# `duduclaw-image-desktop.inc` itself for every package's full rationale.
 #
-# Wi-Fi is the one deliberate CUT, not copied: `iwd wireless-regdb-static
-# duduclaw-network-config` from duduclaw-image.bb's Y7-3 block is left out
-# entirely -- the graphical installer wizard this stack is being spiked for
-# writes a local A/B image already carried inside the ISO (see
-# populate_live:append below), it has no network-dependent step, and cutting
-# it saves ISO/squashfs bytes on a recipe whose whole point is to stay small
-# enough to fit on optical media.
-IMAGE_INSTALL:append = " duduclaw-comp duduclaw-shell mesa-megadriver mesa-vulkan-drivers vulkan-loader libegl-mesa xkeyboard-config"
-IMAGE_INSTALL:append = " dbus fcitx5 fcitx5-chewing"
-IMAGE_INSTALL:append = " pipewire wireplumber"
-IMAGE_INSTALL:append = " kernel-modules"
+# Wi-Fi stays the one deliberate CUT, unaffected by this extraction: `iwd
+# wireless-regdb-static duduclaw-network-config` from duduclaw-image.bb's
+# own Y7-3 block was never part of the copied/shared set in the first place
+# (it lives in duduclaw-image.bb, outside the `require`d .inc) -- the
+# graphical installer wizard this stack is being spiked for writes a local
+# A/B image already carried inside the ISO (see populate_live:append
+# below), it has no network-dependent step, and cutting it saves ISO/
+# squashfs bytes on a recipe whose whole point is to stay small enough to
+# fit on optical media.
+require recipes-core/images/duduclaw-image-desktop.inc
 
 # duduclaw-live-tweaks (meta-duduclaw/recipes-duduclaw/duduclaw-live-tweaks/)
 # -- the User=root kiosk override + the /etc/duduclaw-live marker file. Live-

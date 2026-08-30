@@ -1,0 +1,29 @@
+# DuDuClaw OS — compat.d declaration: Waydroid (Android app container,
+# design §2.4). CP-0's LINE PoC (2026-08-21, see
+# commercial/docs/DESIGN-app-compat-layer-2026-08.md §8) proved the full
+# chain end to end on arm64 (install → boot → Play sign-in → LINE QR
+# login) — this declaration is the compat.d front door onto that same
+# stack, not a fresh unverified claim.
+#
+# Deliberately NOT bundled in this image: GApps and any ARM-translation
+# library (libhoudini/libndk). Their provenance is grey-market (pulled
+# from Windows Subsystem for Android reversal work, not something DuDuClaw
+# can legally redistribute) — see design §2.4's "不預裝" decision. Without
+# them, Google Play Store sign-in/cert and any x86_64-only-app scenario
+# depend on the user completing their own opt-in setup — the
+# `install_hint` below points at that self-install path, not at a
+# bundled package this recipe ships.
+#
+# require_tool lists BOTH the waydroid CLI and lxc-start deliberately: the
+# CLI can be present while its LXC backend is not fully wired (this is
+# exactly CP-1's expected honest state before the kernel binder module
+# (wave A1) and the LXC/gbinder packaging chain (wave A5) land — see
+# commercial/docs/TODO-compat-cp1-2026-08.md).
+
+id = "waydroid"
+display_name = "Waydroid（Android 應用容器）"
+from_os = "android"
+entrypoint = "waydroid"
+require_tool = ["waydroid", "lxc-start"]
+install_hint = "見 docs/guides/app-compat.md 的 Waydroid 自裝入口段：需自行完成 Google Play 裝置認證（每裝置一次），DuDuClaw 不預裝 GApps 與 ARM 轉譯元件。"
+notes = "出貨僅含 Waydroid 本體，不含 GApps／ARM 轉譯（libhoudini 等，來源灰色，法務上不可預裝）；缺件與風險見設計文件 §2.4。"

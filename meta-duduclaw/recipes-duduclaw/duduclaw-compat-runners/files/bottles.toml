@@ -1,0 +1,25 @@
+# DuDuClaw OS — compat.d declaration: Bottles (Windows desktop app
+# translation layer, design §2.3 路 A).
+#
+# Scope (read this before assuming "Bottles means Office/LINE work"):
+# path A is for OLD/single-file/portable Windows tools and apps that
+# already rate Silver-or-better on the Wine AppDB (e.g. Photoshop CC-era
+# releases, older Acrobat). It explicitly does NOT cover — and this
+# declaration must never be read as promising — recent (last ~3 years)
+# Microsoft Office (Wine AppDB rates it Garbage; CrossOver's own vendor has
+# delisted Office 365 support), LINE for Windows (26.x tested Garbage), or
+# AutoCAD 2018+ (Garbage across the board). Those belong to the future
+# self-packaged VM+RemoteApp path (design §2.3 路 B, not shipped yet) —
+# the app-store surface is expected to route those apps there once that
+# path exists, not silently offer this Bottles declaration for them.
+#
+# See commercial/docs/DESIGN-app-compat-layer-2026-08.md §2.3 and
+# docs/guides/app-compat.md for the user-facing explanation.
+
+id = "bottles"
+display_name = "Bottles（Windows 應用轉譯）"
+from_os = "windows-app"
+entrypoint = "flatpak run com.usebottles.bottles"
+require_tool = ["flatpak"]
+install_hint = "尚未安裝 Bottles：於 App Store 搜尋「Bottles」透過 Flathub 安裝（或執行 `flatpak install flathub com.usebottles.bottles`）。"
+notes = "只承諾舊版/單機/綠色版工具，且需在 Wine AppDB 評級 Silver 以上；近三年 Microsoft Office、LINE Windows 版、AutoCAD 2018+ 明文不承諾，見設計文件 §2.3。"

@@ -67,3 +67,17 @@ SRC_URI:append = " file://duduclaw-live-squashfs.cfg"
 # capability both machines need, not something specific to real target
 # hardware.
 SRC_URI:append = " file://duduclaw-binder.cfg"
+
+# --- KVM host + docker container runtime support for the self-contained
+# --- Windows VM path (CP-2 wave-1 B1, 2026-08-30) ---
+# Unscoped (both machines) — see duduclaw-kvm.cfg and duduclaw-
+# container.cfg's own header comments for the full sourcing/rationale
+# writeup (DESIGN-app-compat-layer-2026-08.md §2.3 路 B: self-packaged
+# dockur/windows VM + FreeRDP 3 RemoteApp). Same "both machines" logic as
+# binder/live-squashfs above: the QEMU target exercises this wave's own
+# fail-closed acceptance criteria (no nested KVM, by design), while real
+# target hardware (N305/8845HS) is where the VM actually runs — neither
+# is a real-hardware-only capability the way the N305/8845HS/gaming
+# fragments are.
+SRC_URI:append = " file://duduclaw-kvm.cfg"
+SRC_URI:append = " file://duduclaw-container.cfg"

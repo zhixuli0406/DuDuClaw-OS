@@ -1,0 +1,51 @@
+# DuDuClaw OS — compat.d declaration: self-packaged Windows VM +
+# RemoteApp bridge (design §2.3 路 B, CP-2). See
+# commercial/docs/DESIGN-app-compat-layer-2026-08.md §2.3/§5 and
+# commercial/docs/TODO-compat-cp2-2026-08.md's B3 row for the full plan;
+# crates/duduclaw-cli/src/compat_windows_vm.rs for the entrypoint's
+# implementation.
+#
+# Scope (design §2.3 路 B): the *other* Windows-app path from Bottles
+# (see bottles.toml's own scope note) — this one is for the software
+# Bottles explicitly does NOT cover: recent Microsoft 365, AutoCAD 2018+,
+# and Taiwan accounting/ERP software that needs a real Windows kernel
+# (printer drivers, USB smart-card readers, etc.). It wraps
+# `dockur/windows` (a Docker-Compose-managed Windows-in-a-container VM) +
+# FreeRDP 3 RemoteApp so one Windows application appears as a native
+# seamless window — the WinApps/WinBoat architecture, self-packaged
+# rather than vendored.
+#
+# Nothing here bundles a Windows installation image or a license key:
+# `entrypoint`'s `setup` subcommand only writes a compose file and starts
+# the container; the container downloads its own Windows install media on
+# first boot (dockur's own "not bundled, user-triggered" mechanism), and
+# `setup` refuses to proceed past its license-responsibility disclosure
+# without an explicit operator confirmation (`--yes` or typing the
+# confirmation phrase) — see the disclosure text in
+# crates/duduclaw-cli/src/compat_windows_vm.rs for the three mandated
+# elements (Windows 11 Pro+ required; Home edition cannot do RemoteApp,
+# per WinApps' own documented requirement; a machine's OEM Windows license
+# typically excludes virtualization rights, per Microsoft's own licensing
+# terms).
+#
+# require_tool names `xfreerdp3`, not `xfreerdp` (one-hand-verified
+# 2026-08-30 against FreeRDP's own `cmake/AddTargetWithResourceFile.cmake`
+# macro: this image's `freerdp3_3.24.2.bb` builds with
+# `-DWITH_BINARY_VERSIONING=ON`, which appends the major version to the
+# client binary's OUTPUT_NAME — `client/X11/CMakeLists.txt`'s
+# `MODULE_NAME` is `"xfreerdp"`, so the installed binary is `xfreerdp3`;
+# Debian testing's independent `freerdp3-x11` package corroborates this,
+# its own manpage being titled `xfreerdp3(1)`). `compat_windows_vm`'s
+# `app` subcommand also tries `xfreerdp3` first and falls back to
+# `xfreerdp` at runtime, in case a future packaging choice changes which
+# name lands on `$PATH` — but this declaration's own honesty check
+# (`compat list`'s `missing_tools`) is pinned to the name that will
+# actually be present on day one.
+
+id = "windows-vm"
+display_name = "Windows 應用程式（完整 Windows 虛擬機）"
+from_os = "windows-app"
+entrypoint = "duduclaw compat windows-vm app"
+require_tool = ["docker", "xfreerdp3"]
+install_hint = "尚未設定：先執行 `duduclaw compat windows-vm setup`（會走過資源門檻建議、硬體虛擬化檢查、授權責任揭露，再啟動容器）。"
+notes = "適用 Bottles 明文不承諾的軟體：近三年 Microsoft 365、AutoCAD 2018+、需印表機／USB 憑證載具的記帳或 ERP 軟體——這些是真 Windows，相容性 100%，見設計文件 §2.3 路 B。需自備 Windows 11 Pro 以上授權，DuDuClaw 不提供、不代購、不代管授權金鑰。"

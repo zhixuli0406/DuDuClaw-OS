@@ -48,6 +48,7 @@ SRC_URI += " \
     crate://crates.io/drm-ffi/0.9.1 \
     crate://crates.io/drm-fourcc/2.2.0 \
     crate://crates.io/drm-sys/0.8.1 \
+    crate://crates.io/encoding_rs/0.8.35 \
     crate://crates.io/equivalent/1.0.2 \
     crate://crates.io/errno/0.3.14 \
     crate://crates.io/fastrand/2.5.0 \
@@ -152,6 +153,7 @@ SRC_URI += " \
     crate://crates.io/rustversion/1.0.23 \
     crate://crates.io/same-file/1.0.6 \
     crate://crates.io/scoped-tls/1.0.1 \
+    crate://crates.io/scopeguard/1.2.0 \
     crate://crates.io/semver/1.0.28 \
     crate://crates.io/serde/1.0.229 \
     crate://crates.io/serde_core/1.0.229 \
@@ -202,7 +204,7 @@ SRC_URI += " \
     crate://crates.io/wayland-csd-frame/0.3.0 \
     crate://crates.io/wayland-cursor/0.31.14 \
     crate://crates.io/wayland-egl/0.32.11 \
-    crate://crates.io/wayland-protocols/0.32.13 \
+    crate://crates.io/wayland-protocols/0.32.12 \
     crate://crates.io/wayland-protocols-misc/0.3.12 \
     crate://crates.io/wayland-protocols-plasma/0.3.12 \
     crate://crates.io/wayland-protocols-wlr/0.3.12 \
@@ -296,6 +298,7 @@ SRC_URI[drm-0.14.1.sha256sum] = "80bc8c5c6c2941f70a55c15f8d9f00f9710ebda3ffda980
 SRC_URI[drm-ffi-0.9.1.sha256sum] = "51a91c9b32ac4e8105dec255e849e0d66e27d7c34d184364fb93e469db08f690"
 SRC_URI[drm-fourcc-2.2.0.sha256sum] = "0aafbcdb8afc29c1a7ee5fbe53b5d62f4565b35a042a662ca9fecd0b54dae6f4"
 SRC_URI[drm-sys-0.8.1.sha256sum] = "ecc8e1361066d91f5ffccff060a3c3be9c3ecde15be2959c1937595f7a82a9f8"
+SRC_URI[encoding_rs-0.8.35.sha256sum] = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 SRC_URI[equivalent-1.0.2.sha256sum] = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 SRC_URI[errno-0.3.14.sha256sum] = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 SRC_URI[fastrand-2.5.0.sha256sum] = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
@@ -400,6 +403,7 @@ SRC_URI[rustix-1.1.4.sha256sum] = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7
 SRC_URI[rustversion-1.0.23.sha256sum] = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 SRC_URI[same-file-1.0.6.sha256sum] = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 SRC_URI[scoped-tls-1.0.1.sha256sum] = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
+SRC_URI[scopeguard-1.2.0.sha256sum] = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 SRC_URI[semver-1.0.28.sha256sum] = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 SRC_URI[serde-1.0.229.sha256sum] = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 SRC_URI[serde_core-1.0.229.sha256sum] = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
@@ -450,7 +454,7 @@ SRC_URI[wayland-client-0.31.15.sha256sum] = "e3c36a0f861ad76d0901f2800b46321410d
 SRC_URI[wayland-csd-frame-0.3.0.sha256sum] = "625c5029dbd43d25e6aa9615e88b829a5cad13b2819c4ae129fdbb7c31ab4c7e"
 SRC_URI[wayland-cursor-0.31.14.sha256sum] = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 SRC_URI[wayland-egl-0.32.11.sha256sum] = "9b97bdb7c49e5bd9b7562f38ff84f0dad47079fdc9e926f691a787f6dbc05451"
-SRC_URI[wayland-protocols-0.32.13.sha256sum] = "23d0c813de3daa2ed6520af85a3bd49b0e722a3078506899aa9686fea58dc4b6"
+SRC_URI[wayland-protocols-0.32.12.sha256sum] = "563a85523cade2429938e790815fd7319062103b9f4a2dc806e9b53b95982d8f"
 SRC_URI[wayland-protocols-misc-0.3.12.sha256sum] = "6e9567599ef23e09b8dad6e429e5738d4509dfc46b3b21f32841a304d16b29c8"
 SRC_URI[wayland-protocols-plasma-0.3.12.sha256sum] = "2b6d8cf1eb2c1c31ed1f5643c88a6e53538129d4af80030c8cabd1f9fa884d91"
 SRC_URI[wayland-protocols-wlr-0.3.12.sha256sum] = "eb04e52f7836d7c7976c78ca0250d61e33873c34156a2a1fc9474828ec268234"

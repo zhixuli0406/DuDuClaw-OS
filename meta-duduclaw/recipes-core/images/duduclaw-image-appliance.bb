@@ -50,6 +50,13 @@ LICENSE = "MIT"
 require recipes-core/images/duduclaw-image-ab.bb
 require recipes-core/images/duduclaw-image-data.inc
 require recipes-core/images/duduclaw-image-flatpak.inc
+# CP-1 (2026-08-30): app-compat payload — compat.d runner declarations +
+# Waydroid chain. See duduclaw-image-compat.inc's own header for what ships
+# and what is deliberately absent (GApps/ARM translation; Bottles rides the
+# Flathub channel, not IMAGE_INSTALL). duduclaw-image-appliance-test.bb
+# inherits this via its `require` of this file, so the QEMU harness sees
+# the same payload.
+require recipes-core/images/duduclaw-image-compat.inc
 
 # `serial-autologin-root` / `empty-root-password` (design doc §2.3, "必須
 # 移除，非可選"): duduclaw-image.bb's own IMAGE_FEATURES carries both,

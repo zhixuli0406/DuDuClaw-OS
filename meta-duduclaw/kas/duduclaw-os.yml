@@ -105,6 +105,65 @@
 # DISTRO_FEATURES "polkit" is turned on in duduclaw-os.conf to satisfy
 # flatpak/xdg-desktop-portal/polkit's own REQUIRED_DISTRO_FEATURES gates —
 # see that file's comment for why "wayland"/"pam" stay off for now.
+#
+# --- meta-virtualization pin (A5, 2026-08-30) — app-compat CP-1 Waydroid
+# chain (commercial/docs/DESIGN-app-compat-layer-2026-08.md §2.4 /
+# TODO-compat-cp1-2026-08.md A5). Added for lxc (Waydroid's container
+# runtime — the recipe itself is NOT rewritten, meta-virtualization already
+# carries a working lxc_git.bb; this pin only makes it reachable).
+#
+# Branch verification, one-hand: `git ls-remote --heads
+# https://git.yoctoproject.org/meta-virtualization` (git.yoctoproject.org's
+# cgit HTTP endpoints 403 a plain WebFetch — verified via `git ls-remote`
+# from inside the builder container instead, which has real network egress)
+# DOES have a branch literally named "wrynose" — not a given; meta-
+# virtualization is a lower-traffic layer that has historically NOT always
+# cut a branch per Yocto release (a real mailing-list thread,
+# https://www.mail-archive.com/meta-virtualization@lists.yoctoproject.org/msg04615.html,
+# shows a maintainer being asked in the past whether Wrynose would even get
+# one). This time it did: checking out the branch HEAD and reading
+# conf/layer.conf directly confirms
+# `LAYERSERIES_COMPAT_virtualization-layer = "wrynose"` — an exact
+# generation match with this file's own oe-core pin (5d1aa5c806c0...,
+# Yocto 6.0 "wrynose"), not a guessed adjacent series.
+#   meta-virtualization  aab9c1a0dd6b48776c9f372a32c32486c560b9c9
+# (wrynose branch HEAD as of 2026-08-30, commit dated 2026-08-20 — "container-
+# bundle: select the target arch when fetching multiarch containers"). No
+# `layers:` subkey below (like meta-duduclaw's own entry) because this
+# repo's conf/layer.conf lives at its OWN root, not in a subdirectory —
+# confirmed by fetching that exact commit's tree, not assumed from the
+# meta-oe/meta-yocto shape.
+#
+# LAYERDEPENDS correction found while reading that layer.conf, NOT assumed
+# from the task brief (which asserted meta-networking/meta-filesystems were
+# "already had" — checked build/conf/bblayers.conf inside the builder
+# container and they were NOT there; only meta-oe/meta-multimedia/meta-
+# python were): `LAYERDEPENDS_virtualization-layer = "core openembedded-
+# layer networking-layer filesystems-layer meta-python"` — networking-layer
+# (meta-networking) and filesystems-layer (meta-filesystems) are hard
+# `bitbake-layers`-enforced dependencies, not soft recommendations skipping
+# them would fail bblayers parsing outright, not just leave lxc
+# unreachable. Both are free additions, not a new repo/commit pin: they are
+# sibling directories inside the SAME meta-openembedded checkout already
+# pinned above (confirmed present on disk in the builder container at the
+# already-pinned commit), and both declare `LAYERSERIES_COMPAT = "whinlatter
+# wrynose"` in their own layer.conf — safe to mix, same reasoning as the
+# meta-oe/meta-multimedia/meta-python additions already on file here.
+#
+# DISTRO_FEATURES "virtualization" — checked, NOT added. meta-
+# virtualization's own sanity-meta-virt.bbclass only *warns* (and only when
+# `SKIP_META_VIRT_SANITY_CHECK` is explicitly set to "0" — it defaults to
+# "1", i.e. the warning is suppressed by default) that some bbappend files
+# "may not take effect" without it; separately, `recipes-containers/lxc/
+# lxc_git.bb` itself carries no `REQUIRED_DISTRO_FEATURES` line at all (only
+# container-image-host.bb and the vcontainer rootfs images do, neither of
+# which this appliance builds). Both read directly off the pinned commit's
+# recipe/class source, not inferred. Left for the integration wave to
+# decide if a future virt-tooling recipe needs it — not required for lxc
+# alone, so not added here to keep this wave's blast radius narrow.
+#
+# `local_conf_header` below is unchanged by this pin — meta-virtualization
+# needs no new TMPDIR/DL_DIR/parallelism knobs.
 
 header:
   version: 14
@@ -219,6 +278,21 @@ repos:
       meta-oe:
       meta-multimedia:
       meta-python:
+      # A5 (2026-08-30) — meta-virtualization's own LAYERDEPENDS requires
+      # both of these (see this file's header comment). Same checkout,
+      # same pinned commit, no new url/commit — just two more sibling
+      # directories inside meta-openembedded added to bblayers.
+      meta-networking:
+      meta-filesystems:
+
+  # A5 (2026-08-30) — Waydroid's container runtime (lxc). Root-layer repo
+  # (conf/layer.conf at repo root, confirmed by reading the pinned commit's
+  # tree directly) — no `layers:` subkey, same convention as meta-duduclaw
+  # below. See this file's header comment for the wrynose-branch and
+  # LAYERDEPENDS verification trail.
+  meta-virtualization:
+    url: https://git.yoctoproject.org/meta-virtualization
+    commit: aab9c1a0dd6b48776c9f372a32c32486c560b9c9
 
   # This layer. No url — kas treats a repo with no `url` as already checked
   # out at `path` relative to $KAS_WORK_DIR (repo root when kas is invoked

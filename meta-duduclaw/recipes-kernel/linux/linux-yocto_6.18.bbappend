@@ -56,3 +56,14 @@ SRC_URI:append:duduclaw-genericx86-64 = " \
 # is intentional and unavoidable: the QEMU machine is this ticket's own
 # verification target.
 SRC_URI:append = " file://duduclaw-live-squashfs.cfg"
+
+# --- Android binder IPC support for Waydroid (CP-1 A1, 2026-08-30) ---
+# Unscoped (both machines) — see duduclaw-binder.cfg's own header comment
+# for the root cause (2026-08-30 G4 live QEMU probe: `modprobe
+# binder_linux` fails, module not found, on 6.18.24-yocto-standard) and
+# for why this follows the live-squashfs precedent above rather than the
+# real-hardware-only N305/8845HS/gaming scoping: the probe that found the
+# gap ran on duduclaw-qemux86-64 itself, and Waydroid is a general OS
+# capability both machines need, not something specific to real target
+# hardware.
+SRC_URI:append = " file://duduclaw-binder.cfg"

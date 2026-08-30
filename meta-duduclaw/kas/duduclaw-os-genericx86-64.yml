@@ -20,6 +20,15 @@
 #
 # Usage (from the Docker builder container, cwd = /workspace = repo root):
 #   kas build meta-duduclaw/kas/duduclaw-os-genericx86-64.yml
+#
+# A5 (2026-08-30) — meta-virtualization + the meta-networking/meta-
+# filesystems layer additions for Waydroid (see duduclaw-os.yml's own
+# header comment for the full pin/rationale trail) needed NO edit here:
+# `repos:` is not overridden by this file at all, so `header.includes`
+# already merges the base config's full repo/layer table into this
+# machine's build — both kas ymls pick up the new layers from the single
+# edit in duduclaw-os.yml. Verified, not assumed: this file's own body
+# below has never had a `repos:` key since it was written (Y2-2).
 
 header:
   version: 14

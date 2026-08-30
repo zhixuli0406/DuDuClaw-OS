@@ -275,3 +275,51 @@ IMAGE_INSTALL:append = " pipewire wireplumber"
 # because unlike firmware there is no per-chip package split cheap enough
 # to enumerate confidently without the real hardware in hand.
 IMAGE_INSTALL:append = " kernel-modules"
+
+# --- XWayland (CP-1/A2, 2026-08-30) ---------------------------------------
+# Ships XWayland itself, closing the R-P7 risk from DESIGN-app-compat-layer-
+# 2026-08.md §6 ("Wayland-only 下 Wine 的 X11 優先怪癖" -- Bottles/Wine only
+# ever probes an X11 DISPLAY, never a native Wayland one, so without an X11
+# server available on the compositor side Bottles/Wine cannot start at all)
+# and the empirical gap the 2026-08-29/30 compat verification round (G1/G2
+# probes, see TODO-compat-cp1-2026-08.md's own front-matter) actually hit
+# live: "無 Xwayland 二進位；X11 client 起不來" -- there was no
+# `/usr/bin/Xwayland` on the image at all, not just an unconfigured one.
+#
+# Package name/version verified against this kas config's own pinned
+# openembedded-core checkout, not guessed: `recipes-graphics/xwayland/
+# xwayland_24.1.11.bb` is oe-core's own ready-made recipe (SUMMARY "XWayland
+# is an X Server that runs under Wayland"), REQUIRED_DISTRO_FEATURES = "x11
+# opengl" -- both already satisfied on this distro without any further
+# change here: "opengl" is explicit in duduclaw-os.conf's own Y3-1
+# `DISTRO_FEATURES:append`, and "x11" ships in oe-core's own
+# DISTRO_FEATURES_DEFAULTS (default-distrovars.inc) which this distro never
+# opts out of (checked: no DISTRO_FEATURES_OPTED_OUT entry anywhere under
+# meta-duduclaw/conf/).
+#
+# xkbcomp -- checked, NOT added explicitly here despite XWayland calling it
+# at runtime to compile X11 keymaps (the same runtime-vs-link-time gap the
+# Y3-1 xkeyboard-config comment above documents for comp/shell's own keymap
+# path): xwayland_24.1.11.bb's own `RDEPENDS:${PN} += "xkbcomp ..."` line
+# already carries it as a real runtime package dependency (xkbcomp itself
+# confirmed present as a real oe-core recipe, `recipes-graphics/xorg-app/
+# xkbcomp_1.5.0.bb` -- not a guessed package name), so the package manager
+# pulls it in automatically. Unlike xkeyboard-config above (which comp/
+# shell's libxkbcommon needs but neither DEPENDS/RDEPENDS on, so had to be
+# hand-added), this one does not need its own IMAGE_INSTALL entry.
+#
+# Why here, in the shared desktop.inc, not a compat-layer-specific image:
+# XWayland is a compositor-side companion binary, not an application --
+# duduclaw-comp (smithay 0.7) is the component that will spawn/manage it,
+# via smithay's own `xwayland` feature plus an `X11Wm`/`XwaylandShell`
+# integration into comp's existing Space/decor/focus code, the same way it
+# already owns mesa-megadriver/vulkan-loader/libegl-mesa above for its own
+# GPU stack. That wiring is CP-1/A4's job, NOT this ticket's -- A2 only
+# lands the payload (the `xwayland` package itself, proving `/usr/bin/
+# Xwayland` exists on the rootfs); duduclaw-comp does not invoke it yet as
+# of this line (checked: no X11Wm/Xwayland reference anywhere in duduclaw-
+# comp's own source at this ticket's time). Landing the payload ahead of
+# the compositor wiring is deliberate -- A4 needs a real `/usr/bin/
+# Xwayland` on a booted image to test against, and there is no reason for
+# the two to block on the same commit.
+IMAGE_INSTALL:append = " xwayland"

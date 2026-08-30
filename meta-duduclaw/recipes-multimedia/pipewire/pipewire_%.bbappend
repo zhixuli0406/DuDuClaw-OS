@@ -101,7 +101,24 @@
 #                   — no consumer on this appliance for any of them; see (2)
 #                     above.
 #
+# pulseaudio — RE-ADDED for CP-1 (2026-08-30, TODO-compat-cp1-2026-08.md):
+#               the original drop's premise ("no libpulse-speaking app
+#               here") is no longer true once Waydroid ships — the CP-0
+#               LINE PoC (DESIGN-app-compat-layer-2026-08.md §8) hit this
+#               exact wall live: the Android container's audio HAL speaks
+#               the PulseAudio protocol, and without `pipewire-pulse` the
+#               LXC container refuses to start ("音訊坑＝需 pipewire-pulse
+#               否則 LXC 起不來"). The waydroid recipe RDEPENDS on
+#               `pipewire-pulse`, which only exists when this PACKAGECONFIG
+#               token is on — without it, adding waydroid to any image
+#               fails dependency resolution outright (found by the CP-1/A5
+#               packaging wave's cross-check, not guessed). Same mechanism
+#               note as the alsa fix in (1) above: setting the token here
+#               explicitly bypasses the base recipe's DISTRO_FEATURES
+#               bb.utils.filter default — no global "pulseaudio" distro
+#               feature is added, blast radius stays this one recipe.
+#
 # `:class-target` matches the base recipe's own override scope (it uses
 # `PACKAGECONFIG:class-target ??=`, i.e. native/nativesdk builds are
 # untouched by this file either way).
-PACKAGECONFIG:class-target = "alsa udev volume systemd systemd-system-service systemd-user-service wireplumber pw-cat sndfile"
+PACKAGECONFIG:class-target = "alsa udev volume systemd systemd-system-service systemd-user-service wireplumber pw-cat sndfile pulseaudio"

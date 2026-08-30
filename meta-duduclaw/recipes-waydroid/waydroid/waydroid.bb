@@ -159,7 +159,33 @@ RDEPENDS:${PN} += " \
     polkit \
     pipewire-pulse \
     iptables \
+    python3-ctypes \
+    python3-multiprocessing \
+    python3-json \
+    python3-logging \
+    python3-threading \
+    python3-compression \
+    python3-crypt \
+    python3-io \
+    python3-shell \
 "
+
+# The nine python3-* stdlib subpackages above are the blind spot of the
+# debian/control port documented before RDEPENDS: Debian's `python3`
+# metapackage ships the entire stdlib in one package, so upstream's
+# Depends line never needs to name stdlib modules — OE splits the stdlib
+# into subpackages and a straight port silently loses them (first live
+# QEMU `waydroid init` died on `import ctypes`, 2026-08-30). List built
+# from ground truth, not guessed: every `^import|^from` in the pinned
+# tag's tools/ + waydroid.py, each module then mapped to its owning
+# package via this build's own pkgdata (queue->python3-threading,
+# tarfile/zipfile->python3-compression, hashlib->python3-crypt,
+# tempfile/ssl->python3-io, shlex->python3-shell; the rest of the scan —
+# os/re/urllib.request/etc — landed in python3-core, already present).
+# `pyclip` (clipboard sharing) is NOT here on purpose: upstream's own
+# tools/services/clipboard_manager.py wraps it in try/except and logs
+# "Skipping clipboard manager service" — a soft dependency, and no
+# python3-pyclip recipe exists in the pinned layers to recommend.
 
 # Soft dependency: `waydroid.py`'s own tools/helpers/arguments.py wraps
 # `import argcomplete` in try/except (confirmed by reading that file
@@ -169,22 +195,13 @@ RDEPENDS:${PN} += " \
 # recommend even though it is not upstream's own hard Depends.
 RRECOMMENDS:${PN} += "python3-argcomplete"
 
-# KNOWN GAP, for the integration wave (this recipe deliberately does NOT
-# touch it — out of this ticket's file scope, and it is a cross-cutting
-# distro-audio-policy decision, not a Waydroid-packaging one): this
-# layer's own meta-duduclaw/recipes-multimedia/pipewire/pipewire_%.bbappend
-# (Y7-3, 2026-08-26) explicitly DROPS the "pulseaudio" PACKAGECONFIG token
-# from pipewire's build ("no libpulse-speaking app here either" — true at
-# the time it was written) — which is also the exact PACKAGECONFIG that
-# produces the `pipewire-pulse` package this recipe now RDEPENDS on above.
-# Left as-is (not silently patched around) because re-opening that
-# bbappend's own PACKAGECONFIG selection is squarely an image/audio-policy
-# call, not something an app-compat packaging ticket should decide alone.
-# The integration wave needs to append "pulseaudio" back onto that
-# recipe's `PACKAGECONFIG:class-target` line (and update its own comment,
-# which currently states the opposite) before `pipewire-pulse` actually
-# exists to install — until then, adding `waydroid` to any IMAGE_INSTALL
-# would fail dependency resolution on this exact package.
+# RESOLVED (was "KNOWN GAP"): the pipewire-pulse dependency chain this
+# block used to flag is closed — the CP-1 integration wave re-added the
+# "pulseaudio" PACKAGECONFIG token to pipewire_%.bbappend's
+# PACKAGECONFIG:class-target line (with its own comment updated; see that
+# file's "RE-ADDED for CP-1" entry for the full reasoning), so the
+# `pipewire-pulse` package this recipe RDEPENDS on exists and images
+# carrying waydroid resolve cleanly (proven by the CP-1 bakes).
 
 # NOT packaged here — left explicit rather than silently absent:
 #   waydroid-data (Android system.img/vendor.img) — fetched by `waydroid

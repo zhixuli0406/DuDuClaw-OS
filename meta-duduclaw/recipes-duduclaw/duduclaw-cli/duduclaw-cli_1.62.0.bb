@@ -80,12 +80,18 @@ CFLAGS:append = " -ffile-prefix-map=${WORKDIR}=${TARGET_DBGSRC_DIR}"
 CXXFLAGS:append = " -ffile-prefix-map=${WORKDIR}=${TARGET_DBGSRC_DIR}"
 
 SRC_URI += "file://duduclaw-gateway.service"
+SRC_URI += "file://duduclaw-home-profile.sh"
 
 do_install:append() {
     install -d ${D}${systemd_system_unitdir}
     # UNPACKDIR, not WORKDIR -- see duduclaw-sysd's recipe for the exact
     # error this fixes (hit it for real there first).
     install -m 0644 ${UNPACKDIR}/duduclaw-gateway.service ${D}${systemd_system_unitdir}/duduclaw-gateway.service
+    # Interactive-shell DUDUCLAW_HOME — see the file's own header for the
+    # live-fire divergence (root CLI writing /root/.duduclaw while the
+    # launcher reads /data/duduclaw) this closes.
+    install -d ${D}${sysconfdir}/profile.d
+    install -m 0644 ${UNPACKDIR}/duduclaw-home-profile.sh ${D}${sysconfdir}/profile.d/duduclaw-home.sh
 }
 
 inherit systemd

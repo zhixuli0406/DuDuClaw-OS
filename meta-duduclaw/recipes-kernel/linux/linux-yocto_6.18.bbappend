@@ -81,3 +81,11 @@ SRC_URI:append = " file://duduclaw-binder.cfg"
 # fragments are.
 SRC_URI:append = " file://duduclaw-kvm.cfg"
 SRC_URI:append = " file://duduclaw-container.cfg"
+
+# --- Waydroid LXC bridge DHCP checksum-fill (CP-2 wave-2, 2026-08-31) ---
+# Unscoped (both machines), same logic as binder above — the live QEMU
+# trace that isolated the missing symbol ran on duduclaw-qemux86-64, and
+# Waydroid networking is a general OS capability. One symbol; the full
+# root-cause trace and the "this is the complete fix, not the first of
+# several" verification live in the .cfg's own header comment.
+SRC_URI:append = " file://duduclaw-waydroid-net.cfg"

@@ -139,6 +139,38 @@ start_audio_session() {
     else
         log "note: wireplumber not installed -- PipeWire is running but has no session manager, so there will be no default sink"
     fi
+
+    # PulseAudio-protocol shim (CP-2 wave-2 debt clearance, 2026-08-31).
+    # CP-1 turned the `pulseaudio` PACKAGECONFIG back on so the
+    # pipewire-pulse PACKAGE exists in the image (Waydroid's audio HAL
+    # speaks the pulse protocol — see pipewire_%.bbappend's "RE-ADDED for
+    # CP-1" entry), but nothing ever STARTED the daemon: this script is
+    # the image's only session-audio launcher (no logind/`systemd --user`,
+    # see the header comment above), so the socket it creates —
+    # $RUNTIME_DIR/pulse/native — simply never existed. Found live, not
+    # deduced: `waydroid session start`'s generated LXC session config
+    # bind-mounts that exact socket path into the Android container, and
+    # lxc-start's mount_entry step died on the missing source ("Failed to
+    # mount /run/duduclaw-kiosk/pulse/native ... No such file or
+    # directory"), which was the wave2-C run-6 "container failed to start"
+    # verdict. Same guard/wait shape as the pipewire block above.
+    if command -v pipewire-pulse >/dev/null 2>&1; then
+        if [[ -S "$RUNTIME_DIR/pulse/native" ]]; then
+            log "note: pulse socket already present at $RUNTIME_DIR/pulse/native -- not starting a second pipewire-pulse"
+        else
+            log "starting pipewire-pulse (PulseAudio-protocol socket; Waydroid's audio HAL and any libpulse app need it)"
+            pipewire-pulse >/dev/null 2>&1 &
+            for (( i = 0; i < AUDIO_WAIT_SECS * 10; i++ )); do
+                [[ -S "$RUNTIME_DIR/pulse/native" ]] && break
+                sleep 0.1
+            done
+            if [[ ! -S "$RUNTIME_DIR/pulse/native" ]]; then
+                log "WARNING: pipewire-pulse produced no socket within ${AUDIO_WAIT_SECS}s -- Waydroid audio (and its container start) will fail until it appears"
+            fi
+        fi
+    else
+        log "note: pipewire-pulse not installed -- libpulse apps and Waydroid audio unavailable"
+    fi
 }
 
 # ── fcitx5 configuration seed (Y6-1, ported from the Debian appliance

@@ -101,6 +101,32 @@ do_install() {
     # packages as root-owned — byte-identical to what a plain `install`
     # would have produced for each file.
     chown -R root:root ${D}
+
+    # Drop the AppArmor line from the LXC config template (CP-2 wave-2
+    # debt clearance, 2026-08-31). Root cause from a live QEMU trace, not
+    # guessed: upstream's data/configs/config_3 UNCONDITIONALLY carries
+    # `lxc.apparmor.profile = unconfined` — a safe no-op wherever lxc is
+    # built with AppArmor support (the Debian/Ubuntu world upstream lives
+    # in; tools/helpers/lxc.py's get_apparmor_status only decides whether
+    # to UPGRADE "unconfined" to the dedicated profile, never whether to
+    # emit the line at all). This distro's lxc 6.0.6 (meta-virtualization)
+    # is built WITHOUT AppArmor, and such an lxc hard-rejects the key at
+    # config-parse time — `set_config_apparmor_profile: Invalid argument -
+    # Built without AppArmor support` → "Failed to load config" → every
+    # `waydroid session start` dies with "OSError: container failed to
+    # start" (the wave2-C run-5 PARTIAL). Editing the installed template
+    # is the right layer: set_lxc_config() re-concatenates these snippets
+    # into the live config on every init/upgrade, so patching the
+    # generated file would be undone, while this distro never ships an
+    # AppArmor stack (see the "NOT packaged here" note below) so dropping
+    # the line here is unconditionally correct for every image this
+    # recipe can reach. config_1's `lxc.aa_profile` twin is deliberately
+    # left alone — that snippet is only ever concatenated for lxc v1/v2,
+    # which this layer cannot produce.
+    sed -i '/^lxc\.apparmor\.profile/d' ${D}${libdir}/waydroid/data/configs/config_3
+    if grep -q "apparmor" ${D}${libdir}/waydroid/data/configs/config_3; then
+        bbfatal "config_3 still references apparmor after the drop-line edit"
+    fi
 }
 
 # Beyond oe-core's default FILES:${PN} globs (which already cover

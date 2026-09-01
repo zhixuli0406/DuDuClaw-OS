@@ -37,19 +37,32 @@
 set -euo pipefail
 
 STAMP=/var/lib/duduclaw/.repart-grown
-mkdir -p "$(dirname "$STAMP")"
+# Best-effort, NOT set -e-fatal (VER-RO, 2026-09-02): on a read-only root
+# (duduclaw-ro-root.inc images) /var/lib is unwritable and this unit runs
+# Before=local-fs-pre.target -- i.e. before /data (the only writable
+# persistent fs) is mounted, so there is nowhere durable to stamp at all.
+# The QEMU round-3 probe caught the old unconditional mkdir failing the
+# whole unit with "mkdir: can't create directory '/var/lib/duduclaw':
+# Read-only file system" -- which then cascaded (failed unit -> health
+# gate -> rescue-boot oneshot on the NEXT boot). Degrading the stamp to
+# best-effort keeps the once-only optimization on rw-root images
+# byte-identically, while ro-root images simply re-run this script every
+# boot -- safe by design: the grow operation below is idempotent (nothing
+# to grow => explicit no-op) and its own comment already declares failure
+# non-fatal.
+mkdir -p "$(dirname "$STAMP")" 2>/dev/null || true
 
 ROOT_SOURCE="$(findmnt -n -o SOURCE / || true)"
 if [[ -z "$ROOT_SOURCE" ]]; then
     echo "duduclaw-firstboot-repart: could not resolve the root filesystem source, skipping" >&2
-    touch "$STAMP"
+    touch "$STAMP" 2>/dev/null || true
     exit 0
 fi
 
 ROOT_DISK="$(lsblk -no PKNAME "$ROOT_SOURCE" 2>/dev/null | head -n1)"
 if [[ -z "$ROOT_DISK" ]]; then
     echo "duduclaw-firstboot-repart: could not resolve the parent disk of $ROOT_SOURCE, skipping" >&2
-    touch "$STAMP"
+    touch "$STAMP" 2>/dev/null || true
     exit 0
 fi
 
@@ -65,5 +78,7 @@ if ! systemd-repart --dry-run=no --definitions=/usr/lib/repart.d "/dev/${ROOT_DI
 fi
 
 # Stamp regardless so this doesn't re-run (and re-log the same outcome)
-# every boot -- ConditionPathExists=! on the stamp gates the unit.
-touch "$STAMP"
+# every boot -- ConditionPathExists=! on the stamp gates the unit. On a
+# read-only root the stamp cannot be written (see the STAMP comment above)
+# and the unit deliberately re-runs each boot instead of failing.
+touch "$STAMP" 2>/dev/null || true

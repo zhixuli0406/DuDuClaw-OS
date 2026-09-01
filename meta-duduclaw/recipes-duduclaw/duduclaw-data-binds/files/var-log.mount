@@ -1,0 +1,57 @@
+# DuDuClaw OS — bind /data/system/log onto /var/log (VER-RO round 2,
+# 2026-09-02, DESIGN-os-trust-chain-2026-09.md "依賴鏈補記").
+#
+# ROUND-2 SHAPE CHANGE (was: var-log-journal.mount binding only the
+# journal subdirectory) — two real, QEMU-evidenced reasons:
+#
+#   (1) "Mount path /var/log/journal is not canonical (contains a
+#       symlink)" — verbatim journal output from the round-1 boot. On a
+#       stock build /var/log is a SYMLINK to /var/volatile/log (base-files
+#       VOLATILE_LOG_DIR default), and systemd refuses to operate mount
+#       units on symlinked paths. duduclaw-ro-root.inc's rootfs hook now
+#       converts /var/log into a real empty directory at image-build time
+#       (also fixing the latent WS-3/B2 defect that "persistent" journal
+#       storage was aimed at tmpfs the whole time); THIS unit then binds
+#       the whole /var/log so every log writer (journald's journal/,
+#       wtmp/btmp, any straggler) lands on /data instead of EROFS-failing
+#       against the read-only root.
+#   (2) Binding the WHOLE of /var/log (not just journal/) removes the need
+#       for any tmpfiles-managed subdirectory to exist before journald
+#       starts — journald itself mkdirs /var/log/journal (mode 2755,
+#       root:systemd-journal) on first persistent-storage write, and
+#       systemd's own stock tmpfiles var.conf re-asserts the same later in
+#       boot. The /data-side source directory is provisioned by
+#       duduclaw-data-binds-early.service (see that unit's header for why
+#       tmpfiles-setup CANNOT be the provisioning primitive here — the
+#       round-1 ordering cycle through tmpfiles-setup's own
+#       After=systemd-journald.service).
+#
+# ORDERING — still the one genuinely delicate part of this wave (harness
+# RO3 exists to prove it): journald normally starts before local-fs.target;
+# [Install] RequiredBy= below (plus Before= here) delays it until
+# data.mount + this bind are up. Early boot messages survive the delay via
+# systemd-journald.socket's kernel-side queueing and journald's kmsg
+# backfill (ReadKMsg=yes default) — systemd's own documented
+# socket-activation deferred-start guarantee.
+#
+# nosuid,nodev,noexec: log files are data, never executed; same
+# capability-narrowing convention as this recipe's other mounts.
+[Unit]
+Description=Bind /data/system/log onto /var/log (VER-RO, dm-verity prerequisite)
+Documentation=file:///usr/share/doc/duduclaw/DESIGN-os-trust-chain-2026-09.md
+After=data.mount duduclaw-data-binds-early.service
+Requires=data.mount duduclaw-data-binds-early.service
+Before=systemd-journald.service systemd-journal-flush.service
+
+[Mount]
+What=/data/system/log
+Where=/var/log
+Type=none
+Options=bind,nosuid,nodev,noexec
+
+[Install]
+# RequiredBy, not WantedBy — a failed bind must stop journald from
+# silently EROFS-failing against the read-only root slot. Same
+# "diagnosable failure over silent wrong-behavior" reasoning as
+# var-lib-iwd.mount.
+RequiredBy=systemd-journald.service

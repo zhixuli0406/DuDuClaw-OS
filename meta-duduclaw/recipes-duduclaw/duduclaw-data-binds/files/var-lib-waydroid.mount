@@ -1,0 +1,46 @@
+# DuDuClaw OS — bind /data/system/waydroid onto /var/lib/waydroid (VER-RO,
+# 2026-09-02, DESIGN-os-trust-chain-2026-09.md "依賴鏈補記").
+#
+# Waydroid's own tools/config/__init__.py hardcodes `defaults["work"] =
+# "/var/lib/waydroid"` (this layer's own pinned SRCREV
+# 5b7e2e71be3f6bfaaaab3b461251dacaf1ce4991 — read directly from the actual
+# vendored source, not assumed from upstream docs) and every other path
+# (images_path/rootfs/overlay/overlay_rw/overlay_work/data/lxc/host_perms)
+# is derived from it. `waydroid init` downloads the Android system/vendor
+# images into this tree at first run (this recipe's own waydroid.bb header:
+# "nothing Android lands in this rootfs" — that promise only holds if the
+# actual download target is /data, not root) and every subsequent container
+# session reads/writes its lxc config + overlay data here too. There is a
+# `-w`/`--work` CLI override, but every call site this layer ships
+# (duduclaw-compat-runners' waydroid.toml declaration, invoked via the
+# duduclaw binary's own `compat` subcommand — crates/, not touched by this
+# recipe) assumes the stock /var/lib/waydroid default; a bind mount is
+# zero-touch for that call surface, an argv override would not be.
+#
+# waydroid-container.service is not ours to edit (this layer's own
+# waydroid.bb ships it verbatim from upstream's Makefile install target,
+# USE_SYSTEMD=1); ordering wired the same Before=/[Install] RequiredBy=
+# pair as the other three units in this recipe.
+[Unit]
+Description=Bind /data/system/waydroid onto /var/lib/waydroid (VER-RO, dm-verity prerequisite)
+Documentation=file:///usr/share/doc/duduclaw/DESIGN-os-trust-chain-2026-09.md
+After=data.mount duduclaw-data-binds-early.service
+Requires=data.mount duduclaw-data-binds-early.service
+Before=waydroid-container.service
+
+[Mount]
+What=/data/system/waydroid
+Where=/var/lib/waydroid
+Type=none
+Options=bind,nosuid
+
+[Install]
+# RequiredBy, not WantedBy — a failed bind must stop the Waydroid LXC
+# container from starting against a discarded root-slot state tree
+# (Android system images alone run multiple GB; root has no room for that
+# even before considering it is about to become read-only). `nodev` is
+# deliberately NOT set (unlike iwd/journal): waydroid's own lxc config
+# creates device nodes under this tree for the Android container's /dev
+# (binder/ashmem passthrough) — same reasoning as var-lib-docker.mount's
+# own nodev omission.
+RequiredBy=waydroid-container.service

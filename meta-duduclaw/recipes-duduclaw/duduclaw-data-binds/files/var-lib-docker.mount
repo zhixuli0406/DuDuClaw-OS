@@ -1,0 +1,48 @@
+# DuDuClaw OS — bind /data/system/docker onto /var/lib/docker (VER-RO,
+# 2026-09-02, DESIGN-os-trust-chain-2026-09.md "依賴鏈補記").
+#
+# dockerd's own default `data-root` is /var/lib/docker (moby's compiled-in
+# default; meta-virtualization's docker-moby_git.bb ships upstream's own
+# src/import/contrib/init/systemd/docker.service verbatim — grepped this
+# layer, zero --data-root override anywhere in docker.inc or any bbappend,
+# confirmed one-hand against the pinned recipe source, not assumed). This
+# is where every image layer, container filesystem, and volume dockerd
+# manages actually lives — by far the largest, most write-heavy target in
+# this whole VER-RO wave, and the reason CP-2's own docker/waydroid/
+# windows-vm compat payload cannot function at all on a read-only root
+# without this bind.
+#
+# docker.service is not ours to edit (meta-virtualization's own recipe —
+# see duduclaw-data-binds.bb's header for the evidence trail); ordering
+# wired the same Before=/[Install] RequiredBy= pair as the other three
+# units in this recipe, zero edits to docker's own package.
+#
+# 0711 root:root: dockerd's own umask/chmod convention on a fresh
+# /var/lib/docker (verified against the upstream README.rootless's own
+# `ls /var/lib/docker/` walkthrough, which shows a root-owned, non-
+# group/world-readable top level) — harmless if dockerd re-tightens
+# permissions on its subtrees at first start, which it always does
+# regardless of what this bind mount's own directory started as.
+[Unit]
+Description=Bind /data/system/docker onto /var/lib/docker (VER-RO, dm-verity prerequisite)
+Documentation=file:///usr/share/doc/duduclaw/DESIGN-os-trust-chain-2026-09.md
+After=data.mount duduclaw-data-binds-early.service
+Requires=data.mount duduclaw-data-binds-early.service
+Before=docker.service
+
+[Mount]
+What=/data/system/docker
+Where=/var/lib/docker
+Type=none
+Options=bind,nosuid
+
+[Install]
+# RequiredBy, not WantedBy — a failed bind must stop dockerd from writing
+# container/image state onto the discarded root slot. `nodev,noexec` are
+# deliberately NOT set here (unlike the other three units in this recipe):
+# container image layers under /var/lib/docker legitimately contain device
+# nodes (overlay2's whiteout files use character-device markers) and every
+# executable a container runs is read out of this tree via overlayfs —
+# noexec/nodev on the bind mount would break container execution outright,
+# not just harden an unused capability.
+RequiredBy=docker.service

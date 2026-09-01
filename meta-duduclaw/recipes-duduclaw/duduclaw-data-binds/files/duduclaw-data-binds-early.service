@@ -1,0 +1,48 @@
+# DuDuClaw OS — early bind-source provisioning for the journal chain
+# (VER-RO round 2, 2026-09-02).
+#
+# WHY THIS EXISTS (round-1 QEMU failure, real evidence): the first cut had
+# var-log-journal.mount order itself After=systemd-tmpfiles-setup.service
+# so tmpfiles could create the /data-side source directory first — but
+# upstream systemd-tmpfiles-setup.service is itself
+# After=systemd-journald.service (read from the pinned systemd 259 unit),
+# and the bind is RequiredBy=systemd-journald.service, which closes a hard
+# ordering cycle:
+#   journald -> (After) var-log.mount -> (After) tmpfiles-setup
+#            -> (After) journald
+# systemd broke it by dropping jobs; the observable symptom was
+# "var-log-journal.mount: Start request repeated too quickly" plus journald
+# down for the whole boot. tmpfiles is therefore the WRONG provisioning
+# primitive for a directory the journald chain itself depends on — this
+# tiny oneshot (DefaultDependencies=no, ordered only against data.mount)
+# replaces it. Round 4 widened it from the journal chain's directory to
+# ALL FOUR bind sources (see the [Service] comment below for the iwd
+# first-boot race that motivated the widening); tmpfiles.d
+# (duduclaw-data-binds-dirs.conf) remains as the later-boot permission
+# self-heal only.
+[Unit]
+Description=Provision /data/system bind sources (VER-RO)
+DefaultDependencies=no
+After=data.mount
+Requires=data.mount
+Before=var-log.mount var-lib-iwd.mount var-lib-docker.mount var-lib-waydroid.mount
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# All four bind sources, not just the journal chain's (round-4 QEMU
+# evidence): iwd.service showed a first-boot-only, non-reproducible
+# failure consistent with its bind mount being D-Bus-activation-pulled
+# before tmpfiles-setup had created /data/system/iwd. Creating every
+# source here — ordered strictly between data.mount and every consumer
+# mount — removes that whole race class deterministically instead of
+# betting on activation timing; tmpfiles
+# (duduclaw-data-binds-dirs.conf) stays as the permission self-heal.
+ExecStart=/bin/mkdir -p /data/system/log /data/system/iwd /data/system/docker /data/system/waydroid
+ExecStart=/bin/chmod 0755 /data/system/log /data/system/waydroid
+ExecStart=/bin/chmod 0700 /data/system/iwd
+ExecStart=/bin/chmod 0711 /data/system/docker
+
+[Install]
+RequiredBy=var-log.mount var-lib-iwd.mount var-lib-docker.mount var-lib-waydroid.mount

@@ -1,0 +1,46 @@
+# DuDuClaw OS — bind /data/system/iwd onto /var/lib/iwd (VER-RO, 2026-09-02,
+# DESIGN-os-trust-chain-2026-09.md "依賴鏈補記").
+#
+# Same problem, same mechanism the Debian appliance line already
+# QEMU-verified for this EXACT service (appliance/mkosi.extra/etc/systemd/
+# system/var-lib-iwd.mount, DESIGN-network-settings-2026-08.md §4): iwd's
+# own upstream unit declares `StateDirectory=iwd`, which systemd resolves
+# to /var/lib/iwd relative to the (real, on-disk) root filesystem — there
+# is no StateDirectory= redirection knob, so the only way to keep it off a
+# read-only root is a bind mount over that exact path. Path chosen here is
+# /data/system/iwd (this Yocto line's own flat "/data/system/<component>"
+# convention — see duduclaw-data-binds-dirs.conf's own header), NOT the
+# Debian line's /data/network/iwd: the two OS lines have separate /data
+# trees with no shared state or cross-reference, and Yocto's /data has no
+# prior "network" subtree convention to match.
+#
+# iwd.service itself is NOT ours to edit (meta-openembedded/meta-oe's own
+# iwd_3.12.bb, built with --with-systemd-unitdir — see this recipe's own
+# duduclaw-data-binds.bb header for the pinned-source unit-file evidence
+# trail), so ordering is wired the same way as var-log-journal.mount:
+# Before= here + [Install] RequiredBy= there together give both the
+# ordering and the requirement, with zero edits to iwd's own package.
+#
+# Ownership (0700 root:root) matches iwd's own convention for this
+# directory — it stores joined-network passphrases in CLEARTEXT
+# (duduclaw-data-binds-dirs.conf's own comment has the full disclosure,
+# ported verbatim from the Debian line's identical note).
+[Unit]
+Description=Bind /data/system/iwd onto /var/lib/iwd (VER-RO, dm-verity prerequisite)
+Documentation=file:///usr/share/doc/duduclaw/DESIGN-os-trust-chain-2026-09.md
+After=data.mount duduclaw-data-binds-early.service
+Requires=data.mount duduclaw-data-binds-early.service
+Before=iwd.service
+
+[Mount]
+What=/data/system/iwd
+Where=/var/lib/iwd
+Type=none
+Options=bind,nosuid,nodev,noexec
+
+[Install]
+# RequiredBy, not WantedBy — a failed bind must stop iwd from writing (and
+# failing to write, under ro root) Wi-Fi credentials onto the discarded
+# root slot instead of the durable /data one. Exact mirror of the Debian
+# line's own var-lib-iwd.mount [Install] reasoning.
+RequiredBy=iwd.service

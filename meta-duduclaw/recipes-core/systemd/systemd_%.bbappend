@@ -76,8 +76,11 @@
 # differently-named flag for "just the libcurl feature detection", so this
 # is the correct (if confusingly-named) flag to add for ENABLE_IMPORTD's
 # HAVE_LIBCURL requirement. Its side effect (systemd-journal-upload/-remote
-# tools become buildable) is harmless — this image does not enable or
-# install those services.
+# tools become buildable) turned out NOT to be harmless as originally
+# asserted here: the services DO ship and systemd's enable-all preset
+# activates systemd-journal-upload, which crash-loops without an upload
+# URL — masked by duduclaw-journald.bb since VER-RO round 3 (2026-09-02),
+# see that recipe's do_install comment.
 #
 # `sysupdate` PACKAGECONFIG does not exist in the base recipe at all
 # (verified: `grep -i sysupdate systemd_259.5.bb` has zero hits before this

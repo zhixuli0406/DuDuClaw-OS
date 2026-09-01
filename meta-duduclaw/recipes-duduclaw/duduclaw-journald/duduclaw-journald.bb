@@ -24,9 +24,27 @@ S = "${UNPACKDIR}"
 do_install() {
     install -d ${D}${sysconfdir}/systemd/journald.conf.d
     install -m 0644 ${UNPACKDIR}/duduclaw.conf ${D}${sysconfdir}/systemd/journald.conf.d/duduclaw.conf
+
+    # Mask systemd-journal-upload (VER-RO round 3, 2026-09-02). The
+    # systemd_%.bbappend that enabled PACKAGECONFIG[journal-upload] (for
+    # ENABLE_IMPORTD's libcurl requirement) asserted "this image does not
+    # enable or install those services" -- QEMU probes proved that stale:
+    # the service ships AND systemd's enable-all preset activates it, and
+    # with no upload URL configured it crash-loops to 'failed' on every
+    # boot (restart counter 4-5, then "Start request repeated too
+    # quickly"). It has been silently failing since B2 landed; the VER-RO
+    # zero-failed-units gate (wavero RO2) is simply the first thing to
+    # look. Masked here (journald config ownership) rather than in the
+    # bbappend: a preset edit would fight systemd's packaging, and /dev/null
+    # masking is the one mechanism that survives both preset evaluation
+    # and daemon-reload. Unmask + configure a real upload URL if a future
+    # wave actually wants remote journal shipping.
+    install -d ${D}${sysconfdir}/systemd/system
+    ln -sf /dev/null ${D}${sysconfdir}/systemd/system/systemd-journal-upload.service
 }
 
-FILES:${PN} += "${sysconfdir}/systemd/journald.conf.d/duduclaw.conf"
+FILES:${PN} += "${sysconfdir}/systemd/journald.conf.d/duduclaw.conf \
+                ${sysconfdir}/systemd/system/systemd-journal-upload.service"
 
 # Config-only, no compiled payload, nothing arch-specific -- reusable on
 # either machine this layer targets, matching this layer's other

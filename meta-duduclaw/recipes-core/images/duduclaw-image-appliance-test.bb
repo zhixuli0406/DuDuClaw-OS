@@ -27,6 +27,16 @@ DUDUCLAW_IMAGE_TEST_LOGIN = "1"
 
 require duduclaw-image-appliance.bb
 
+# VER-RO (2026-09-02, DESIGN-os-trust-chain-2026-09.md "依賴鏈補記"): this
+# is the ONLY image in this layer that carries read-only root this round --
+# see recipes-core/images/duduclaw-ro-root.inc's own header for the full
+# rollout-gating reasoning (dm-verity's hard prerequisite, promoted to
+# duduclaw-image-appliance.bb itself only after this harness goes green).
+# Required AFTER duduclaw-image-appliance.bb above so its own
+# UKI_CMDLINE:append=" ro" composes on top of the real shipping cmdline,
+# not a stale copy of it.
+require recipes-core/images/duduclaw-ro-root.inc
+
 SUMMARY = "DuDuClaw OS appliance image -- QEMU-test variant (root serial autologin; never shipped)"
 
 # wic only. The shipping recipe also emits tar.zst/ext4 companions (release

@@ -111,6 +111,7 @@ SRC_URI = " \
     file://duduclaw-steam-kiosk-verify.sh \
     file://duduclaw-steam-kiosk-verify.service \
     file://duduclaw-zenity-stub \
+    file://verify-data-dir.conf \
 "
 
 S = "${UNPACKDIR}"
@@ -170,6 +171,12 @@ do_install() {
     install -d ${D}/opt/duduclaw-steam-stubs
     install -m 0755 ${UNPACKDIR}/duduclaw-zenity-stub \
         ${D}/opt/duduclaw-steam-stubs/zenity
+
+    # VER-RO (2026-09-02): the /data-side directory verify.conf's own
+    # Path= now points at -- see verify-data-dir.conf's own header.
+    install -d ${D}${nonarch_libdir}/tmpfiles.d
+    install -m 0644 ${UNPACKDIR}/verify-data-dir.conf \
+        ${D}${nonarch_libdir}/tmpfiles.d/duduclaw-flatpak-verify-data-dir.conf
 }
 
 FILES:${PN} += " \
@@ -179,6 +186,7 @@ FILES:${PN} += " \
     /usr/local/sbin/duduclaw-steam-kiosk-verify.sh \
     ${systemd_unitdir}/system/duduclaw-steam-kiosk-verify.service \
     /opt/duduclaw-steam-stubs/zenity \
+    ${nonarch_libdir}/tmpfiles.d/duduclaw-flatpak-verify-data-dir.conf \
 "
 
 SYSTEMD_SERVICE:${PN} = "duduclaw-flatpak-kiosk-verify.service duduclaw-steam-kiosk-verify.service"

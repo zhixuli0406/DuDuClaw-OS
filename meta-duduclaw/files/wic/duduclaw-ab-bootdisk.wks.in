@@ -212,7 +212,22 @@ part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-pat
 # reasoning for why NoAuto exists at all (§1.1: "gpt-auto-generator 看到兩個
 # 候選 root 會歧義" was a REAL incident on the Debian line before that bit was
 # added).
-part --fstype=ext4 --label "root-b" --align 1024 --part-name="_empty" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB} --no-fstab-update
+#
+# --uuid="${DUDUCLAW_AB_ROOTB_PARTUUID}" (T4, 2026-09-02 修正案 --
+# commercial/docs/DESIGN-os-trust-chain-2026-09.md's 2026-09-02 拍板紀錄
+# entry): root-B's GPT PARTUUID is now ALSO fixed at build time, the same
+# way p2's --uuid= already fixes root-A's -- see
+# classes/duduclaw-ab-partflags.bbclass's own comment on
+# DUDUCLAW_AB_ROOTB_PARTUUID for the full Secure-Boot-compatibility
+# reasoning (short version: patching a UKI's .cmdline bytes on the device,
+# which is what a random root-B PARTUUID used to require, breaks the
+# Authenticode signature Secure Boot checks over the whole PE image). This
+# constant is what recipes-core/images/duduclaw-image-ab.bb's
+# UKI_SLOTB_CMDLINE override bakes into the second, slot-B-targeted signed
+# UKI (classes/duduclaw-ab-dualsign-uki.bbclass's do_uki_slotb task) — the
+# same single-source-of-truth pairing p2's own comment already documents
+# for root-A.
+part --fstype=ext4 --label "root-b" --align 1024 --part-name="_empty" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB} --no-fstab-update --uuid="${DUDUCLAW_AB_ROOTB_PARTUUID}"
 
 # p4: /data — update staging + gateway state, grows to fill whatever is left
 # of the real disk (GPT attribute bit 59 / GrowFileSystem, same

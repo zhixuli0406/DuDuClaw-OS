@@ -17,6 +17,19 @@ the 5 GiB root slot and cannot hold a 5 GiB root payload):
                                              built for slot A (matches
                                              20-duduclaw-uki.transfer's
                                              MatchPattern=)
+    duduclaw-os_<version>.slot-b.efi        OPTIONAL (T4, 2026-09-02 修正案,
+                                             --uki-slot-b): the root-B-
+                                             targeted, independently signed
+                                             UKI variant. Deliberately does
+                                             NOT match 20-duduclaw-uki.
+                                             transfer's [Source] MatchPattern=
+                                             — os_update.rs downloads it
+                                             separately, selects the correct
+                                             variant on the device, and stages
+                                             the WINNER under the canonical
+                                             duduclaw-os_<version>.efi name;
+                                             this file itself never reaches a
+                                             machine's staging directory.
     SHA256SUMS / SHA256SUMS.minisig         the integrity chain sysupdate
                                              itself does NOT provide for
                                              Type=regular-file sources (see
@@ -88,6 +101,25 @@ Yocto caller supply meta-duduclaw's own version directly, e.g.:
 This has NOT been run end to end against a real Yocto .wic in this session
 (see the Y8-1 handoff notes) — the reasoning above is a code-level
 compatibility argument, not a verified result.
+
+T4 (2026-09-02 修正案 — commercial/docs/DESIGN-os-trust-chain-2026-09.md's
+2026-09-02 拍板紀錄 entry): the on-device rewrite of `root=PARTUUID=`
+described above corrupts a Secure Boot signature, because SB's Authenticode
+signature covers the entire UKI PE image. The fix ships one pre-signed UKI
+PER SLOT instead — this script's optional `--uki-slot-b` argument packages
+the second (root-B-targeted) variant a Yocto build's
+`classes/duduclaw-ab-dualsign-uki.bbclass` `do_uki_slotb` task produces,
+alongside the existing slot-A `--uki`, as
+`duduclaw-os_<version>.slot-b.efi` — the exact suffix
+`crates/duduclaw-gateway/src/os_update.rs`'s `select_release_files` looks
+for. Omitting `--uki-slot-b` (the default) is byte-for-byte the pre-T4
+behavior: a legacy single-UKI payload, still valid input for
+`os_update.rs`'s fallback rewrite path. The template's baked
+`root=PARTUUID=` is STILL provenance-only for the slot-A `--uki` (this
+script never validates it against slot A, same reasoning as before); the
+slot-B variant's baked value is recorded the same way, under its own
+manifest.json key, since a *different* PARTUUID is exactly what makes it
+the slot-B variant.
 """
 
 from __future__ import annotations
@@ -305,11 +337,12 @@ def copy_uki_template(uki_path: Path, dest_path: Path) -> tuple[int, str, uuid.U
 def write_sha256sums(outdir: Path, entries: list[tuple[str, str]]) -> Path:
     """Write SHA256SUMS listing basenames only, in the given fixed order.
 
-    Fixed (root-then-efi) order rather than sorting is deliberate: it makes
-    the file byte-for-byte reproducible across runs given the same inputs,
-    which is worth more here than alphabetical tidiness. Two-space
-    separator is the shasum(1)/sha256sum(1) "binary mode" convention, so a
-    plain `sha256sum -c SHA256SUMS` on any of these files works unmodified.
+    Fixed (root-then-efi, then the T4 slot-B efi when present) order rather
+    than sorting is deliberate: it makes the file byte-for-byte reproducible
+    across runs given the same inputs, which is worth more here than
+    alphabetical tidiness. Two-space separator is the
+    shasum(1)/sha256sum(1) "binary mode" convention, so a plain
+    `sha256sum -c SHA256SUMS` on any of these files works unmodified.
     """
     path = outdir / "SHA256SUMS"
     path.write_text("".join(f"{sha}  {name}\n" for name, sha in entries))
@@ -365,6 +398,7 @@ def write_manifest(
     source_image: Path,
     files: list[tuple[str, int, str]],
     baked_partuuid: uuid.UUID,
+    slot_b_baked_partuuid: uuid.UUID | None = None,
 ) -> Path:
     """Write manifest.json.
 
@@ -373,6 +407,12 @@ def write_manifest(
     trust. manifest.json is convenience metadata a human or dashboard can
     read without re-deriving anything from the binaries — treat any value in
     it as informational, never as an integrity claim.
+
+    `slot_b_baked_partuuid` (T4, 2026-09-02 修正案): recorded under its own
+    key, never conflated with `uki_template_root_partuuid` — the whole point
+    of the slot-B variant is that it carries a DIFFERENT baked PARTUUID (see
+    the module docstring's T4 note), so merging the two fields would erase
+    the one fact a reader of this manifest most wants to check.
     """
     manifest = {
         "format": 1,
@@ -381,7 +421,8 @@ def write_manifest(
         "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "files": [{"name": name, "size": size, "sha256": sha} for name, size, sha in files],
         # Provenance only — see copy_uki_template()'s docstring for why this
-        # is expected to be rewritten by whatever stages the update.
+        # is expected to be rewritten (legacy path) or matched against
+        # (T4 selection path) by whatever stages the update.
         "uki_template_root_partuuid": str(baked_partuuid),
         "source_image": source_image.name,
         # source_image_sha256 is intentionally omitted: hashing the full
@@ -390,6 +431,8 @@ def write_manifest(
         # carry their own verified sha256 in `files`, which is what actually
         # matters for installing this payload.
     }
+    if slot_b_baked_partuuid is not None:
+        manifest["uki_slot_b_root_partuuid"] = str(slot_b_baked_partuuid)
     path = outdir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n")
     return path
@@ -422,6 +465,13 @@ def main() -> int:
                      help="whole-disk image built by mkosi (default: %(default)s)")
     ap.add_argument("--uki", type=Path, default=_APPLIANCE / "mkosi.output" / "duduclaw-os.efi",
                      help="standalone UKI mkosi emitted (default: %(default)s)")
+    ap.add_argument("--uki-slot-b", type=Path, default=None,
+                     help="T4 (2026-09-02 修正案): the slot-B pre-signed UKI variant "
+                          "(classes/duduclaw-ab-dualsign-uki.bbclass's do_uki_slotb output on "
+                          "the Yocto line), packaged as duduclaw-os_<version>.slot-b.efi. "
+                          "Omit (the default) to publish a legacy single-UKI payload — "
+                          "byte-for-byte the pre-T4 behavior, still a valid input for "
+                          "os_update.rs's rewrite fallback.")
     ap.add_argument("--version", default=None,
                      help="payload version to publish under; defaults to appliance/mkosi.version's "
                           "content. May differ from the image's baked version to stage a test "
@@ -443,6 +493,7 @@ def main() -> int:
 
     raw_path = args.raw.expanduser()
     uki_path = args.uki.expanduser()
+    uki_slot_b_path = args.uki_slot_b.expanduser() if args.uki_slot_b else None
     outdir = args.outdir.expanduser()
     sign_key = args.sign_key.expanduser()
 
@@ -450,6 +501,8 @@ def main() -> int:
         raise uki_slots.Fail(f"{raw_path}: no such file (build the image first)")
     if not uki_path.exists():
         raise uki_slots.Fail(f"{uki_path}: no such file (build the image first)")
+    if uki_slot_b_path is not None and not uki_slot_b_path.exists():
+        raise uki_slots.Fail(f"{uki_slot_b_path}: no such file (build the image first)")
 
     if args.image_version is not None:
         image_version = args.image_version.strip()
@@ -498,10 +551,39 @@ def main() -> int:
     efi_size, efi_sha, baked_partuuid = copy_uki_template(uki_path, efi_path)
     print(
         f"[make-payload] UKI template bakes root=PARTUUID={baked_partuuid} "
-        "(provenance only — the on-machine installer rewrites this before staging)"
+        "(provenance only — see this file's own T4 note for how this is used "
+        "downstream: rewritten on-device for a legacy payload, matched "
+        "against for a per-slot one)"
     )
 
-    sums_path = write_sha256sums(final_dir, [(root_path.name, root_sha), (efi_path.name, efi_sha)])
+    sums_entries = [(root_path.name, root_sha), (efi_path.name, efi_sha)]
+    manifest_files = [(root_path.name, root_size, root_sha), (efi_path.name, efi_size, efi_sha)]
+    slot_b_baked_partuuid: uuid.UUID | None = None
+
+    if uki_slot_b_path is not None:
+        # T4: the second, root-B-targeted pre-signed UKI. Same shape as the
+        # canonical copy above — the only thing that makes it "slot B" is
+        # its baked root=PARTUUID= (checked here as provenance only, exactly
+        # like the canonical copy; os_update.rs is what actually verifies it
+        # against a live device's destination slot).
+        efi_slot_b_path = final_dir / f"duduclaw-os_{payload_version}.slot-b.efi"
+        print(f"[make-payload] copying slot-B UKI template -> {efi_slot_b_path.name}")
+        efi_b_size, efi_b_sha, slot_b_baked_partuuid = copy_uki_template(uki_slot_b_path, efi_slot_b_path)
+        print(f"[make-payload] slot-B UKI template bakes root=PARTUUID={slot_b_baked_partuuid}")
+        if slot_b_baked_partuuid == baked_partuuid:
+            # Not fatal by itself (a caller could deliberately test the
+            # legacy single-value shape this way), but it defeats the whole
+            # point of shipping two variants, so it must not pass silently.
+            print(
+                f"[make-payload] WARNING: the canonical and slot-B UKI templates bake the "
+                f"SAME root=PARTUUID= ({baked_partuuid}) — os_update.rs's selection would "
+                "refuse this release as ambiguous. Check the two --uki/--uki-slot-b inputs.",
+                file=sys.stderr,
+            )
+        sums_entries.append((efi_slot_b_path.name, efi_b_sha))
+        manifest_files.append((efi_slot_b_path.name, efi_b_size, efi_b_sha))
+
+    sums_path = write_sha256sums(final_dir, sums_entries)
     print(f"[make-payload] wrote {sums_path.name}")
 
     if args.no_sign:
@@ -512,8 +594,9 @@ def main() -> int:
 
     manifest_path = write_manifest(
         final_dir, payload_version, arch, raw_path,
-        [(root_path.name, root_size, root_sha), (efi_path.name, efi_size, efi_sha)],
+        manifest_files,
         baked_partuuid,
+        slot_b_baked_partuuid,
     )
     print(f"[make-payload] wrote {manifest_path.name}")
     print(f"[make-payload] OK: {final_dir}")

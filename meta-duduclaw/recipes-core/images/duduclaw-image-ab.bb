@@ -27,6 +27,10 @@ LICENSE = "MIT"
 require recipes-core/images/duduclaw-image.bb
 
 inherit duduclaw-ab-partflags
+# T4 (2026-09-02 修正案): per-slot signed UKI variant -- see
+# classes/duduclaw-ab-dualsign-uki.bbclass's own header for the full
+# Secure-Boot-compatibility rationale.
+inherit duduclaw-ab-dualsign-uki
 
 WKS_FILE = "duduclaw-ab-bootdisk.wks.in"
 
@@ -51,6 +55,21 @@ WKS_FILE = "duduclaw-ab-bootdisk.wks.in"
 # wic's usual random UUID, is what makes this work at all (do_uki runs
 # before do_image_wic).
 UKI_CMDLINE = "rootwait root=PARTUUID=${DUDUCLAW_AB_ROOTA_PARTUUID} console=${KERNEL_CONSOLE}"
+
+# T4 (2026-09-02 修正案): the slot-B twin of UKI_CMDLINE immediately above --
+# same cmdline shape, only the baked PARTUUID differs
+# (DUDUCLAW_AB_ROOTB_PARTUUID instead of DUDUCLAW_AB_ROOTA_PARTUUID, both
+# defined in classes/duduclaw-ab-partflags.bbclass). Consumed by
+# classes/duduclaw-ab-dualsign-uki.bbclass's do_uki_slotb task to build a
+# SECOND, independently Secure-Boot-signed UKI at
+# UKI_SLOTB_FILENAME (that class's own default:
+# duduclaw-os_${DISTRO_VERSION}.slot-b.efi) -- see that class's header
+# comment for why this exists (device-side .cmdline rewrite breaks SB's
+# Authenticode signature) and why it is deliberately NOT added to
+# IMAGE_EFI_BOOT_FILES (this variant is a release artifact for a FUTURE
+# update into root-B, never bootable on THIS build's own disk, where root-B
+# is still the empty `_empty` reserved slot).
+UKI_SLOTB_CMDLINE = "rootwait root=PARTUUID=${DUDUCLAW_AB_ROOTB_PARTUUID} console=${KERNEL_CONSOLE}"
 
 # See duduclaw-ab-partflags.bbclass's own comment for what these control and
 # why the inherited defaults (calibrated for duduclaw-image.bb's ~1.2G

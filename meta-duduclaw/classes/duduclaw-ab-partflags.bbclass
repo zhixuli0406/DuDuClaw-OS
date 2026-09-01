@@ -76,17 +76,89 @@ DEPENDS:append = " util-linux-native"
 #
 # This is a real, build-tested value (not a template placeholder that
 # still needs patching): root-A boots directly from it on THIS factory
-# image. Slot B keeps its wic-assigned random PARTUUID — sysupdate/
-# uki_patch.rs read that real value off the live disk at update time and
-# rewrite the shipped UKI template's `root=PARTUUID=<this constant>` to
-# point at it, on the device, exactly as designed
-# (recipes-duduclaw/duduclaw-ab-update/files/20-duduclaw-uki.transfer's
-# own comment). Deliberately NOT all-zeros
+# image. STALE AS OF T4 (2026-09-02), kept here only as history, NOT as
+# current behavior: this paragraph used to say slot B keeps its
+# wic-assigned random PARTUUID and that sysupdate/uki_patch.rs read that
+# real value off the live disk at update time and rewrite the shipped UKI
+# template's `root=PARTUUID=<this constant>` to point at it, on the
+# device. That is no longer true — root-B is ALSO a build-time constant
+# now (DUDUCLAW_AB_ROOTB_PARTUUID, immediately below) for Secure Boot
+# compatibility reasons that constant's own comment explains in full; the
+# on-device rewrite path survives only as uki_patch::rewrite_root_partuuid's
+# legacy fallback for a release that ships no slot-B UKI variant. Deliberately
+# NOT all-zeros
 # (`00000000-0000-0000-0000-000000000000`) — the DESIGN doc's T3 test
 # case reserves that exact string as the deliberately-unmountable
 # fault-injection value; reusing it for a real, working slot A would make
 # the two indistinguishable by grep in a serial log.
 DUDUCLAW_AB_ROOTA_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000a"
+
+# Root-B's GPT PARTUUID, ALSO fixed at build time (T4, 2026-09-02 修正案 --
+# commercial/docs/DESIGN-os-trust-chain-2026-09.md's 2026-09-02 拍板紀錄
+# entry). Root-B was deliberately left at wic's random default from Y9-2
+# through the WS-3 wave -- the comment on DUDUCLAW_AB_ROOTA_PARTUUID above
+# says as much ("Slot B keeps its wic-assigned random PARTUUID... uki_patch.rs
+# read that real value off the live disk at update time and rewrite the
+# shipped UKI template's root=PARTUUID=<this constant> to point at it, on the
+# device"). That plan turned out to be incompatible with Secure Boot: SB's
+# Authenticode signature covers the ENTIRE UKI PE image (stub + kernel +
+# initrd + every embedded section, .cmdline included), so uki_patch.rs's
+# device-side byte rewrite of .cmdline -- which never touched the signature
+# itself -- corrupts it. An SB-enforcing firmware verifies the signature
+# against the file AS SHIPPED and refuses to load a UKI whose bytes changed
+# even by 36 ASCII characters. Discovered only once the SB pillar actually
+# landed (DESIGN-os-security-line-2026-09.md's WS-3 wave), not at design
+# time -- §3.2/§5.1 of the trust-chain design doc were written before this
+# contradiction surfaced.
+#
+# THE FIX: stop rewriting root-B's PARTUUID on the device at all. Fix it to a
+# build-time constant, exactly like root-A already is, so BOTH slots' UKIs
+# can be fully assembled and Secure-Boot-signed on the BUILD HOST --
+# recipes-core/images/duduclaw-image-ab.bb's do_uki_slotb task (see
+# classes/duduclaw-ab-dualsign-uki.bbclass) bakes
+# root=PARTUUID=${DUDUCLAW_AB_ROOTB_PARTUUID} into a SECOND signed UKI at
+# build time, the same way the existing do_uki bakes
+# root=PARTUUID=${DUDUCLAW_AB_ROOTA_PARTUUID} into the first one.
+# crates/duduclaw-gateway/src/os_update.rs then SELECTS whichever pre-signed
+# variant's baked PARTUUID already matches the live destination slot
+# (uki_patch::verify_root_partuuid) instead of patching bytes --
+# uki_patch::rewrite_root_partuuid is kept only as a fallback for a release
+# that ships just one legacy UKI template (pre-T4, or a device without SB
+# enforcement, where a corrupted-but-unverified signature still boots).
+#
+# Same "sacrifice global GPT uniqueness for build simplicity" trade-off
+# DUDUCLAW_AB_ROOTA_PARTUUID's own comment already accepts, now applied
+# symmetrically to both slots -- every device built from the same image
+# shares the same two PARTUUIDs, which is fine precisely BECAUSE the boot
+# selector is `root=PARTUUID=` baked into a per-slot UKI, never a
+# device-unique identifier read back from live hardware (see that same
+# comment's closing paragraph). Referenced from BOTH
+# files/wic/duduclaw-ab-bootdisk.wks.in (p3's `--uuid=`) and
+# recipes-core/images/duduclaw-image-ab.bb (its UKI_SLOTB_CMDLINE's
+# `root=PARTUUID=`) so the two can never drift independently -- identical
+# single-source-of-truth pattern to root-A's constant, one paragraph up.
+# Deliberately NOT all-zeros for the same T3 fault-injection reason root-A's
+# comment states, and deliberately ending in `...00b` (not `...00c`/`...00d`,
+# reserved below for the dm-verity wave) so the two root slots' constants
+# are visually adjacent and impossible to transpose by accident.
+DUDUCLAW_AB_ROOTB_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000b"
+
+# RESERVED, NOT YET IMPLEMENTED (dm-verity wave -- DESIGN-os-trust-chain-
+# 2026-09.md §3.1/§3.2, P1): once root-a-verity/root-b-verity hash-tree
+# partitions exist, their PARTUUIDs will need the same build-time-constant
+# treatment as the two root slots above, for the identical reason --
+# systemd.verity_root_data=/systemd.verity_root_hash= are device-path UUID
+# tokens baked into a signed UKI cmdline, so they cannot be a wic-random
+# value either. Naming continues the same suffix sequence deliberately (a
+# reader diffing the four constants side by side should see they are one
+# family, not four unrelated UUIDs): DUDUCLAW_AB_ROOTA_VERITY_PARTUUID would
+# be "...00c", DUDUCLAW_AB_ROOTB_VERITY_PARTUUID "...00d". Comment-only on
+# purpose -- this wave (T4) does not touch verity at all; see the design
+# doc's own §8 拍板 T4 row ("P1 延伸 uki_patch.rs" was decided independently
+# of this SB-compatibility fix, and P2 root-verity-sig remains a v3
+# candidate).
+#DUDUCLAW_AB_ROOTA_VERITY_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000c"
+#DUDUCLAW_AB_ROOTB_VERITY_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000d"
 
 # Partition numbers are 1-indexed positions in
 # files/wic/duduclaw-ab-bootdisk.wks.in's declaration order (GPT partition

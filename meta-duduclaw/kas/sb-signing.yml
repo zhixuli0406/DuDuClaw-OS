@@ -1,0 +1,107 @@
+# kas build config overlay — Secure Boot signing, WS-3/SB-2/SB-3
+# (2026-09-02).
+#
+# Composes on top of duduclaw-os.yml (or duduclaw-os-genericx86-64.yml) via
+# kas's CLI colon-syntax (see Usage below), NOT `header.includes` the way
+# duduclaw-os-genericx86-64.yml composes on duduclaw-os.yml -- see the "NO
+# header.includes here on purpose" note further down for why this file
+# uses the other of kas's two supported merge mechanisms. Either way, this
+# file changes ONLY what actually differs (three local.conf variables),
+# never the repo/layer pin table.
+#
+# --- Usage ---------------------------------------------------------------
+#
+#   kas build meta-duduclaw/kas/duduclaw-os.yml:meta-duduclaw/kas/sb-signing.yml
+#
+# or, for real hardware:
+#
+#   kas build meta-duduclaw/kas/duduclaw-os-genericx86-64.yml:meta-duduclaw/kas/sb-signing.yml
+#
+# kas merges multiple `:`-separated config files left-to-right, later files
+# overriding/extending earlier ones for the SAME key -- this file's own
+# `local_conf_header` block is additive (a new named key, `sb-signing`,
+# alongside whichever base config's own `duduclaw-bringup` key), so it
+# never has to repeat or fight the base local_conf_header content.
+#
+# NO `header.includes` here on purpose -- this file is a pure fragment,
+# only ever meant to be merged via the CLI colon-syntax above alongside a
+# real base config (duduclaw-os.yml or duduclaw-os-genericx86-64.yml, both
+# of which already carry the full repos:/machine:/target: table). Every kas
+# config file still needs its own `header.version` regardless (kas 5.5
+# user guide: "every kas file needs to contain a header ... used by kas to
+# figure out if it is compatible with this file") -- matched to this
+# layer's existing kas files' own value (duduclaw-os-genericx86-64.yml's
+# `header.version: 14`) for consistency, not independently chosen.
+#
+# --- Key material precondition (NOT produced by this file) ---------------
+#
+# meta-duduclaw/scripts/sb-keygen.sh (a separate ticket's own deliverable)
+# produces the directory this overlay points at, with this exact contract:
+#
+#   sb-keys/
+#     PK.key   PK.crt   PK.auth
+#     KEK.key  KEK.crt  KEK.auth
+#     db.key   db.crt   db.auth
+#     GUID.txt
+#
+# Run it BEFORE `kas build` with this overlay -- UKI_SB_KEY/UKI_SB_CERT
+# below point at db.key/db.crt (the leaf signing key that actually signs
+# the UKI + the systemd-boot binary; PK/KEK never sign anything themselves
+# in this design, they only ever get ENROLLED as trust anchors), and
+# DUDUCLAW_SB_ENROLL_KEYDIR points at the directory holding all three
+# *.auth files together. If sb-keys/ does not exist yet, every consumer of
+# these three variables degrades gracefully and loudly (see
+# classes/duduclaw-secure-boot.bbclass's own do_deploy_duduclaw_sb_keys:
+# bbwarn + skip on a missing directory, bbfatal on a PARTIAL one) rather
+# than silently shipping a broken or half-signed image.
+#
+# --- Why /workspace/sb-keys, an absolute path outside any layer ----------
+#
+# Deliberately NOT `file://` SRC_URI-fetched into a recipe WORKDIR: this is
+# per-build-environment key material (production signing keys must never
+# be committed to this repo, dev/test keys are regenerated per builder),
+# not a versioned layer source. `/workspace` is this project's own
+# established builder-container mount point (see duduclaw-os.yml's own
+# DL_DIR/SSTATE_DIR comments for the same "big host-relevant paths live
+# under /workspace or a host bind mount, not inside a layer" convention) --
+# matches where sb-keygen.sh is expected to write, per that script's own
+# ticket.
+header:
+  version: 14
+
+local_conf_header:
+  sb-signing: |
+    # Leaf signing key/cert -- consumed directly by oe-core's uki.bbclass
+    # (do_uki) and classes/duduclaw-rescue-boot.bbclass (do_uki_rescue) to
+    # sign both UKIs, and by recipes-core/systemd/systemd-boot_%.bbappend
+    # to sign the systemd-boot EFI binary itself with the SAME key -- one
+    # signing identity across the whole chain, matching uki.bbclass's own
+    # documented requirement ("systemd-boot also need to be signed with
+    # the same key").
+    UKI_SB_KEY = "/workspace/sb-keys/db.key"
+    UKI_SB_CERT = "/workspace/sb-keys/db.crt"
+
+    # Enrollment assets (PK.auth/KEK.auth/db.auth together) -- staged onto
+    # the ESP at /loader/keys/auto/ by classes/duduclaw-secure-boot.bbclass
+    # for factory auto-enrollment. Same directory as the two vars above
+    # (sb-keygen.sh's contract keeps *.key/*.crt/*.auth/GUID.txt colocated)
+    # -- kept as its OWN named variable rather than derived from
+    # UKI_SB_KEY's dirname, matching this layer's existing preference for
+    # explicit named bitbake variables over string-manipulated derived
+    # paths (see e.g. duduclaw-ab-partflags.bbclass's own separately-named
+    # DUDUCLAW_AB_ESP_SIZE_MB/DUDUCLAW_AB_SLOT_SIZE_MB/DUDUCLAW_AB_DATA_SIZE_MB
+    # rather than one size split by convention).
+    DUDUCLAW_SB_ENROLL_KEYDIR = "/workspace/sb-keys"
+
+    # ovmf (QEMU's own OVMF/edk2 UEFI firmware, recipes-core/ovmf/ovmf_git.bb)
+    # only builds+deploys the `ovmf.secboot.*` firmware variant used to test
+    # this whole chain under QEMU when PACKAGECONFIG[secureboot] is on --
+    # confirmed by reading that recipe directly: the flag gates a SECOND
+    # `OvmfPkg/build.sh` invocation with `${OVMF_SECURE_BOOT_FLAGS}` plus
+    # openssl-native in DEPLOYDEP, and deploys ovmf.secboot.fd/
+    # ovmf.secboot.code.fd only inside that same conditional block. Never
+    # forced on for a build that isn't testing Secure Boot -- QEMU runs
+    # (runqemu) that want the SB-enabled firmware select it explicitly via
+    # QB_* / runqemu's own -- ovmf.secboot invocation, out of scope for this
+    # overlay, which only makes the firmware variant buildable at all.
+    PACKAGECONFIG:append:pn-ovmf = " secureboot"

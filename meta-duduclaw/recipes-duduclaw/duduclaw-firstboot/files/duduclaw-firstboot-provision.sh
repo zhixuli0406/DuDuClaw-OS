@@ -240,4 +240,50 @@ if [[ -d "$MIGRATIONS_SRC_DIR" ]]; then
 fi
 chown -R "$DUDUCLAW_OWNER" "$MIGRATIONS_MARKER_DIR"
 
+# --- Secure Boot factory-enroll downgrade (WS-3/SB-3, 2026-09-02) --------
+# The factory loader.conf (recipes-core/images/duduclaw-image-ab/
+# duduclaw-ab-loader.conf) ships `secure-boot-enroll force` UNCONDITIONALLY
+# (see that file's own header for why this is provably inert -- not merely
+# assumed safe -- on any image built without Secure Boot enrollment keys:
+# systemd-boot's own secure_boot_discover_keys() silently no-ops when
+# /loader/keys/ does not exist at all). On a device that DOES carry keys
+# (classes/duduclaw-secure-boot.bbclass's DUDUCLAW_SB_ENROLL_KEYDIR ->
+# /loader/keys/auto/), `force` is a STANDING "auto-enroll whatever I find
+# under auto/" instruction -- correct for the very first boot (enrolling
+# the factory PK/KEK/db with zero operator interaction), but wrong to leave
+# in place forever: a later factory-reset or key-rotation flow that drops a
+# DIFFERENT key set into auto/ should never be silently re-enrolled without
+# an operator decision. This downgrades `force` to `off` exactly once,
+# after this device's own first successful boot.
+#
+# Self-guarded by the loader.conf's OWN current content (grep, not merely
+# this script's outer .provisioned stamp) -- stays correct even if some
+# future image ships a loader.conf that never had `force` in it at all
+# (a plain no-op), and is safe to re-run to completion if a previous first
+# boot was interrupted mid-write (the `mv` below is the atomic commit
+# point; a crash before it leaves the original file, matched by grep,
+# untouched for the next boot to retry).
+#
+# ESP mount point is `/boot` on this line, not a guess -- confirmed by
+# reading files/wic/duduclaw-ab-bootdisk.wks.in's own p1 line
+# (`part /boot --source bootimg_efi ...`), the same convention every other
+# image in this require chain (efi-uki-bootdisk.wks.in) already uses.
+# duduclaw-firstboot-provision.service carries an explicit
+# RequiresMountsFor=/boot (same wave) so this step never races the ESP
+# mount, rather than relying on local-fs.target's ordinarily-earlier
+# position in the boot sequence going untested.
+#
+# `grep -q`/`sed s///` (not `head -c`/`base64`, which this image's BusyBox
+# build lacks -- see this script's own device-key block above for the
+# confirmed-missing-applet incident) are default-enabled BusyBox applets in
+# virtually every defconfig; NOT independently re-confirmed against this
+# exact image's busybox config the way head -c/base64 were (no live boot
+# available during this ticket) -- flagged rather than silently assumed,
+# verify alongside the next real QEMU/hardware boot of this script.
+ESP_LOADER_CONF=/boot/loader/loader.conf
+if [[ -f "$ESP_LOADER_CONF" ]] && grep -q '^secure-boot-enroll force$' "$ESP_LOADER_CONF"; then
+    sed 's/^secure-boot-enroll force$/secure-boot-enroll off/' "$ESP_LOADER_CONF" > "${ESP_LOADER_CONF}.tmp"
+    mv "${ESP_LOADER_CONF}.tmp" "$ESP_LOADER_CONF"
+fi
+
 touch "$SYSTEM_DIR/.provisioned"

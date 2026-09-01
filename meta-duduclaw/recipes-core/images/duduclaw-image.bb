@@ -201,6 +201,17 @@ IMAGE_INSTALL:append = " iwd wireless-regdb-static duduclaw-network-config"
 # DRAFT item 5 (emergency.target) mask decision.
 inherit duduclaw-rescue-boot
 
+# WS-3/SB-2/SB-3 (2026-09-02, trust-chain wave). Secure Boot signing-chain
+# wiring for both this image's product UKI (do_uki, above) and the rescue
+# UKI (duduclaw-rescue-boot's own do_uki_rescue, just inherited) -- makes
+# `sbsign` reachable on this recipe's own native-sysroot PATH and stages
+# ESP enrollment assets, ALL conditional on bitbake variables that default
+# unset (see classes/duduclaw-secure-boot.bbclass's own header for the
+# full "zero behaviour change" contract) -- unconditionally inherited here
+# for the same reason duduclaw-rescue-boot is: the class's own internals do
+# the gating, not the inherit site.
+inherit duduclaw-secure-boot
+
 # Y7-1 (2026-08-26) real parse-time fix, hit while rebuilding
 # duduclaw-image-flatpak (this ticket's own deliverable, which `require`s
 # this file): "Unable to get checksum for duduclaw-image-flatpak SRC_URI

@@ -13,10 +13,20 @@
 # guard is kept too (belt-and-braces): if power is lost between the script
 # succeeding and the disable call landing, the stamp file still prevents
 # re-running.
+#
+# RequiresMountsFor=/boot (WS-3/SB-3, 2026-09-02): the script's own Secure
+# Boot factory-enroll downgrade step (same wave) reads/rewrites
+# /boot/loader/loader.conf -- ESP mount point on this line, confirmed via
+# files/wic/duduclaw-ab-bootdisk.wks.in's own p1 line. This is a real,
+# named ordering dependency rather than trusting local-fs.target's usual
+# earlier position in the boot graph to happen to hold, matching this
+# recipe's own existing discipline one line down (explicit
+# Requires=data.mount rather than an implicit multi-user.target ordering).
 [Unit]
 Description=DuDuClaw OS first-boot: device identity + minimal config (Yocto)
 After=data.mount duduclaw-firstboot-repart.service
 Requires=data.mount
+RequiresMountsFor=/boot
 ConditionPathExists=!/data/duduclaw/system/.provisioned
 
 [Service]

@@ -1,0 +1,21 @@
+# DuDuClaw OS — scheduled quick secaudit self-scan timer (WS-3, 2026-09-01,
+# DESIGN-os-security-line-2026-09.md §2 secaudit 遷入 D2' / 拍板 D4:
+# "預設開、每日 quick").
+#
+# RandomizedDelaySec spreads the actual fire time across a window instead
+# of every appliance in a fleet waking up and hammering disk/CPU at
+# exactly the same wall-clock instant (systemd.timer(5)'s own documented
+# purpose for this directive — thundering-herd avoidance, not a security
+# property). Persistent=true catches up a missed daily run if the machine
+# was off at the scheduled time (appliances are not assumed to be
+# powered on 24/7) rather than silently skipping a whole day's scan.
+[Unit]
+Description=DuDuClaw OS scheduled quick secaudit self-scan (daily)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

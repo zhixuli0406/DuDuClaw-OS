@@ -105,6 +105,71 @@ if [[ ! -s "$SYSTEM_DIR/device.key" ]]; then
     chmod 600 "$SYSTEM_DIR/device.key"
 fi
 
+# --- journald FSS (Forward Secure Sealing) key generation ---------------
+# WS-3/B2 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱二 B2).
+# `Seal=yes` (recipes-duduclaw/duduclaw-journald/files/duduclaw.conf, same
+# wave) makes journald WANT a sealing key, but does not generate one
+# itself -- `journalctl --setup-keys` is a separate, one-time, one-shot
+# admin action (systemd's own journalctl.xml: "generate a new key pair...
+# The sealing key is stored in the journal data directory and shall
+# remain on the host. The verification key should be stored externally").
+# This is that one-time action, run automatically here because this line
+# has no interactive operator at first boot to run it by hand.
+#
+# Idempotent: guarded by the verification key file's own existence, NOT
+# by re-invoking `--setup-keys` and relying on ITS OWN idempotency --
+# read journalctl's source directly before writing this
+# (src/journal/journalctl-authenticate.c::action_setup_keys(), this
+# line's pinned SRCREV): without `--force`, a second invocation after the
+# sealing key file already exists on disk returns an EEXIST error and
+# prints NOTHING to stdout -- re-running it harmlessly no-ops on the
+# SEALING side, but would silently overwrite this script's own verify-key
+# file with an EMPTY string if this script blindly captured stdout every
+# boot without its own guard. Checking for our own output file first
+# avoids ever calling the command a second time at all, which is simpler
+# and more obviously correct than depending on that upstream failure mode
+# staying empty-stdout-on-EEXIST across future systemd versions.
+#
+# STDOUT-ONLY KEY CAPTURE: confirmed by reading the same function -- when
+# stdout is not a TTY (always true here, run non-interactively from a
+# systemd unit) and JSON output is not requested, action_setup_keys()
+# takes an early-return branch that ONLY calls `puts(key)` on stdout and
+# skips the entire human-readable narrative/QR-code block (which would
+# otherwise go to stderr) -- `$(...)` command substitution below captures
+# exactly and only the key string, no parsing/stripping needed beyond
+# what command substitution already does (trailing newline removal).
+# `2>/dev/null` additionally discards the `log_info("Generating
+# seed...")`-class progress lines systemd's own logging framework prints
+# to stderr by default (not silenced by the stdout/TTY branch above,
+# which only affects the narrative block).
+#
+# GCRYPT PREREQUISITE (verified, not assumed): this command hard-depends
+# on systemd having been built with gcrypt support --
+# recipes-core/systemd/systemd_%.bbappend now turns that on (same wave;
+# it was OFF before this ticket, `journalctl --setup-keys` would have
+# printed "Forward-secure sealing not available." and exited non-zero
+# every single boot without that fix). If that build-time prerequisite
+# ever regresses, the guard below degrades gracefully (empty $key,
+# warning logged, script continues) rather than failing the whole
+# first-boot provisioning run over a non-essential hardening feature.
+FSS_VERIFY_KEY="$DUDUCLAW_HOME/journal-verify.key"
+if [[ ! -s "$FSS_VERIFY_KEY" ]]; then
+    fss_key="$(journalctl --setup-keys 2>/dev/null || true)"
+    if [[ -n "$fss_key" ]]; then
+        printf '%s\n' "$fss_key" > "${FSS_VERIFY_KEY}.tmp"
+        chmod 600 "${FSS_VERIFY_KEY}.tmp"
+        mv "${FSS_VERIFY_KEY}.tmp" "$FSS_VERIFY_KEY"
+    else
+        echo "duduclaw-firstboot-provision: journalctl --setup-keys produced no" \
+             "key (gcrypt support missing, /var/log/journal not yet initialised," \
+             "or a sealing key already exists from an earlier, non-idempotent-" \
+             "guarded run) -- journal Seal=yes stays configured but effectively" \
+             "unverifiable until this is investigated. Not treated as a fatal" \
+             "first-boot error: FSS is defense-in-depth, not core device" \
+             "identity." >&2
+    fi
+fi
+
 # --- gateway home + service-account ownership -----------------------------
 mkdir -p "$DUDUCLAW_HOME"
 chown -R "$DUDUCLAW_OWNER" "$DUDUCLAW_HOME"

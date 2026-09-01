@@ -43,7 +43,57 @@ require recipes-core/images/duduclaw-image-minimal.bb
 # would then reject anyway (no password set on root at all in
 # core-image-minimal). Caught by reading the class before burning a boot
 # cycle on a login prompt this recipe's own comment claimed didn't exist.
-IMAGE_FEATURES += "serial-autologin-root empty-root-password"
+#
+# WS-3/A1 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱一 A1):
+# this line used to be an unconditional `+=`, which meant EVERY image that
+# `require`s this file -- not just duduclaw-image itself, but
+# duduclaw-image-data.bb / duduclaw-image-ab.bb / duduclaw-image-flatpak.bb
+# and (transitively, through -ab.bb) duduclaw-image-appliance.bb -- shipped
+# root-serial-autologin-with-no-password by default, with only
+# duduclaw-image-appliance.bb's own IMAGE_FEATURES:remove (below this
+# file's require chain) turning it back off again for THAT one image. The
+# comment directly above already says "MUST NOT ship with this on"; the
+# unconditional `+=` contradicted its own comment for every OTHER image in
+# the require chain (duduclaw-image-flatpak.bb in particular has no
+# removal step at all -- confirmed by reading it, see its own header note
+# added the same day). Fixed at the root of the inheritance tree instead of
+# patching each downstream image separately: this now mirrors
+# duduclaw-image-appliance.bb's own DUDUCLAW_IMAGE_TEST_LOGIN gate
+# (inverted -- ADD only when the var is "1", vs. that file's REMOVE only
+# when it's not "1"), sharing the exact same variable name and semantics so
+# a single `DUDUCLAW_IMAGE_TEST_LOGIN=1` (local.conf or `bitbake -D`) still
+# lights up serial autologin end to end for manual QEMU verification of
+# ANY image in this chain, and duduclaw-image-appliance-test.bb's existing
+# `DUDUCLAW_IMAGE_TEST_LOGIN = "1"` (set before its own require chain
+# reaches this file) needs zero changes to keep working -- verified by
+# inspection of bitbake's require-is-textual-inline + `?=`-only-sets-once
+# semantics, NOT by an actual build (this ticket is recipe-only, no
+# bitbake run). Default "0" (nothing has set the var yet at this point in
+# the require chain for every other image) yields IMAGE_FEATURES with
+# neither token, matching duduclaw-image-appliance.bb's own "MUST NOT ship"
+# intent for the whole tree, not just the one image that used to bother
+# removing it again downstream. duduclaw-image-appliance.bb's own
+# IMAGE_FEATURES:remove (unedited by this fix) becomes a no-op most of the
+# time now (removing a token nothing added) but is deliberately left in
+# place as defense-in-depth against a future recipe re-adding the tokens
+# between here and there in the require chain.
+#
+# duduclaw-image-live.bb is NOT affected by this change -- verified by
+# reading it (recipes-core/images/duduclaw-image-live.bb): it `require`s
+# core-image-minimal.bb directly, never this file, and carries its own,
+# independently-declared `IMAGE_FEATURES += "allow-empty-password
+# allow-root-login empty-root-password serial-autologin-root"` for its own
+# disposable, unsigned, not-part-of-the-trust-chain live-installer
+# environment (that recipe's own header: "not the trusted production
+# system"). Its root-shell story is unconditional serial autologin from
+# core-image-minimal upward, same as always; the live wizard's kiosk
+# session identity (duduclaw-live-tweaks' `User=root` drop-in) is a
+# SEPARATE, unrelated mechanism for the graphical Wayland kiosk surface,
+# not the serial console this A1 change touches -- the two never intersect
+# in this recipe's require chain, so the live installer wizard is
+# unaffected by this fix regardless of which mechanism is asked about.
+DUDUCLAW_IMAGE_TEST_LOGIN ?= "0"
+IMAGE_FEATURES += "${@'serial-autologin-root empty-root-password' if d.getVar('DUDUCLAW_IMAGE_TEST_LOGIN') == '1' else ''}"
 
 # Y2-3 (2026-08-25) fix: this list was missing duduclaw-cli, the package
 # that actually installs /usr/bin/duduclaw (and duduclaw-gateway.service,
@@ -170,3 +220,24 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/duduclaw-image:"
 SRC_URI += "file://duduclaw-loader.conf"
 
 IMAGE_INSTALL:append = " duduclaw-rescue"
+
+# WS-3/B2 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱二 B2 /
+# G17: "journald 現況零配置"). Added at this base level, not scoped to the
+# appliance payload the way A4's firewall was (that recipe's own comment
+# in duduclaw-image-appliance.bb explains the different reasoning) --
+# journald hardening is a base-OS-service default every image in this
+# require chain should carry, the same "push the safe default to the
+# root of the inheritance tree" reasoning this file's own A1 fix (above)
+# already established for IMAGE_FEATURES, and matching duduclaw-rescue's
+# own placement one line up. See recipes-duduclaw/duduclaw-journald/
+# files/duduclaw.conf for the full per-directive reasoning and the one
+# known limitation (journal not yet bound onto /data).
+IMAGE_INSTALL:append = " duduclaw-journald"
+
+# WS-3/自掃 timer (2026-09-01, DESIGN-os-security-line-2026-09.md §2
+# secaudit 遷入 D2' / 拍板 D4). Same base-level placement reasoning as
+# duduclaw-journald immediately above -- ConditionPathExists=/data/duduclaw
+# in the .service unit itself (recipes-duduclaw/duduclaw-secaudit-scan/)
+# makes this a clean no-op on the bare bring-up image, which has no /data
+# partition to scan.
+IMAGE_INSTALL:append = " duduclaw-secaudit-scan"

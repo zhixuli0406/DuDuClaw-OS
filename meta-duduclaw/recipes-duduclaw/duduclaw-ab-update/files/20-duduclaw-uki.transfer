@@ -26,6 +26,16 @@
 # bytes and knows nothing about which build tool produced them.
 #
 # Staging path: /data/duduclaw/updates — see 10-duduclaw-root.transfer.
+#
+# ProtectVersion=%A: same WS-3/A6 (2026-09-01) fix as
+# 10-duduclaw-root.transfer's own header describes in full — %A now
+# actually resolves to a real value (recipes-core/os-release/
+# os-release.bbappend adds the previously-missing IMAGE_VERSION= field to
+# /etc/os-release) and matches this UKI's own on-ESP filename
+# (recipes-core/images/duduclaw-image-ab.bb's UKI_FILENAME, switched from
+# the bare platform version to the full DISTRO_VERSION the same wave) —
+# see that recipe's own A6 comment for the complete writeup, not
+# duplicated here.
 [Transfer]
 ProtectVersion=%A
 

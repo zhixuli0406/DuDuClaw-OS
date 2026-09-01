@@ -110,6 +110,18 @@ require recipes-core/images/duduclaw-image-compat.inc
 # recipe sets. Default ("0") keeps this shipping image bit-identical to the
 # unconditional remove above: `bitbake -e duduclaw-image-appliance` still
 # yields IMAGE_FEATURES="ssh-server-dropbear".
+#
+# WS-3/A1 (2026-09-01): duduclaw-image.bb (required transitively via
+# duduclaw-image-ab.bb, above) now guards the same two tokens' ADDITION
+# behind this identical DUDUCLAW_IMAGE_TEST_LOGIN variable (see that
+# file's own A1 comment), so for a plain `bitbake duduclaw-image-appliance`
+# build the tokens are never added in the first place and this :remove
+# line is a no-op removing nothing -- kept anyway, unedited, as
+# defense-in-depth against a future require-chain change re-adding them
+# between here and the base, and because duduclaw-image-appliance-test.bb
+# still needs its own `?=`-compatible read of this var to keep working
+# without changes (verified by inspection of bitbake's require-is-
+# textual-inline semantics, not by a build -- this ticket is recipe-only).
 DUDUCLAW_IMAGE_TEST_LOGIN ?= "0"
 IMAGE_FEATURES:remove = "${@'' if d.getVar('DUDUCLAW_IMAGE_TEST_LOGIN') == '1' else 'serial-autologin-root empty-root-password'}"
 
@@ -204,3 +216,61 @@ DUDUCLAW_AB_DATA_SIZE_MB = "8192"
 
 # COMPATIBLE_MACHINE is inherited unchanged from duduclaw-image-ab.bb
 # (genericx86-64|qemux86-64) -- no re-declaration needed (design doc §2.2).
+
+# --- OS security line P0 (WS-3/A4, 2026-09-01) ----------------------------
+# DESIGN-os-security-line-2026-09.md §2 支柱一 A4 / G10: "Yocto 線零防火
+# 牆" -- this image had no default-deny firewall at all before this line.
+# duduclaw-firewall (recipes-duduclaw/duduclaw-firewall/) ships /etc/
+# nftables.conf (ported from the Debian appliance line's own already-
+# shipping ruleset, see that recipe's files/nftables.conf for the exact
+# divergences checked and one known-risk item flagged for QEMU
+# verification -- Waydroid's own bridge-forwarded Android-app internet
+# access against this ruleset's `chain forward { policy drop }`).
+#
+# Added directly here (IMAGE_INSTALL:append on THIS recipe), not on the
+# shared base duduclaw-image.bb the way A1's IMAGE_FEATURES fix was: A1's
+# own gap was a security DEFAULT that every image in the require chain
+# inherited unconditionally and had to opt back INTO for testing (so
+# fixing it at the root was the only way to close it everywhere at once).
+# The firewall is the opposite shape -- an ADDITIVE payload this ticket's
+# own scope names specifically as "appliance payload" (this recipe is the
+# shipping convergence target, per release-os.sh's own DEFAULT_IMAGE) --
+# so it follows this file's own established pattern of appending payload
+# directly at the image level that actually ships (same shape as this
+# file's own DUDUCLAW_AB_SLOT_SIZE_MB/DATA_SIZE_MB tuning, which is also
+# appliance-specific, not pushed to the shared base). duduclaw-image-
+# appliance-test.bb inherits this via its own `require` of this file, so
+# the QEMU harness sees the same firewall duduclaw-image-appliance itself
+# ships -- consistent with how it already inherits every other payload
+# line in this file.
+#
+# nftables' kernel backend (CONFIG_NF_TABLES / CONFIG_NF_TABLES_INET /
+# CONFIG_NFT_CT) is wired unscoped (both machines) via linux-yocto_6.18.
+# bbappend + recipes-kernel/linux/linux-yocto/duduclaw-nftables.cfg, same
+# wave -- no additional kernel wiring needed here.
+IMAGE_INSTALL:append = " duduclaw-firewall"
+
+# --- OS security line P0 (WS-3/S1+S3, 2026-09-01) --------------------------
+# DESIGN-os-security-line-2026-09.md §2 secaudit 遷入 D1' P0. `duduclaw
+# secaudit`'s own S1/S3 gaps (§1.1 table: "gitleaks... meta-duduclaw 全無"
+# / "IMAGE_INSTALL 無 git → intake 熱點分析降級") -- both scanner backend
+# and its own git-hotspot-analysis dependency, added together since both
+# are one-line IMAGE_INSTALL additions with no partition-layout or
+# kernel-config coupling (unlike A4/A5/A6 above).
+#
+# gitleaks (recipes-security/gitleaks/): NEW recipe this same wave, see
+# its own header for the full sourcing/verification trail and its own
+# EXPLICIT, NOT-SILENTLY-HIDDEN gap (the go-mod dependency checksum list
+# is left for the next session with real bitbake/network access -- this
+# recipe will not successfully build as committed, by design, rather than
+# ship fabricated checksums).
+#
+# git: plain oe-core recipe (meta/recipes-devtools/git/git_2.53.0.bb on
+# this line's pinned branch, confirmed present, no new layer needed).
+# Bare `git` PACKAGES (not `git-perltools`/`git-tk`/`gitweb`, all split
+# into separate optional packages upstream — checked the recipe's own
+# PACKAGES =+ lines before deciding the plain `git` IMAGE_INSTALL entry
+# is the minimal footprint, not a guess) -- restores intake's own
+# git-hotspot-analysis step (S3), which silently degrades without a git
+# binary on $PATH.
+IMAGE_INSTALL:append = " gitleaks git"

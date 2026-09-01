@@ -7,22 +7,61 @@
 # maintenance-mode-2026-08.md §3.4: "即使拿到機器的人在當下不受即時稽核
 # ...進入 rescue 環境本身也要留痕").
 #
-# Honest limit (2026-08-26, Y7-2): the design doc's own recommendation is
-# to write this marker to a `/data`-style persistent state partition so
-# gateway can read it back and report to dashboard on the NEXT normal
-# boot. This Yocto line does not have that partition yet (duduclaw-
-# gateway.service's own comment already flags "/data mount" as a separate,
-# not-yet-landed product-layer ticket) — wiring gateway-side ingestion
-# against a path that is about to move house would be manufacturing
-# technical debt, not paying it down. This unit therefore writes to the
-# local rootfs only (survives a REBOOT, not necessarily an A/B slot
-# switch/re-flash) — real forensic value today, full gateway/dashboard
-# wiring tracked as a follow-up once /data lands.
+# WS-3/B3 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱二 B3):
+# the "/data does not exist yet" honest limit this comment originally
+# recorded (2026-08-26, Y7-2) no longer holds — /data landed on this line
+# via Y8-1/Y9-1 (files/wic/duduclaw-ab-bootdisk.wks.in p4, present on
+# every A/B-layout image including duduclaw-image-appliance, the shipping
+# target). duduclaw-rescue-audit.sh now writes to
+# /data/duduclaw/audit/rescue/ (durable across an A/B slot switch, unlike
+# root, which the update mechanism replaces wholesale), with a same-script
+# fallback to the old /var/log/duduclaw/ path if /data turns out to be
+# unavailable — see the script's own header for why the fallback exists
+# and is not merely theoretical.
+#
+# RequiresMountsFor=/data (new): makes the dependency on /data being
+# mounted EXPLICIT rather than relying purely on the implicit
+# basic.target→sysinit.target→local-fs.target ordering chain
+# duduclaw-rescue.target's own (DefaultDependencies-on) Requires=
+# basic.target already provides — checked, not assumed: /data's own
+# fstab entry (wks p4, `--use-uuid`, no `noauto`) generates a normal
+# data.mount unit pulled into local-fs.target by default, which THIS
+# target already implicitly waits for before activating (confirmed by
+# duduclaw-rescue-root-lock.service's own pre-existing `After=
+# local-fs.target`, same target, same implicit chain). RequiresMountsFor=
+# adds systemd's own explicit wait-for-this-specific-mount semantics on
+# top of that inference — most valuable exactly in the failure case
+# rescue mode itself exists for (a disk/boot problem serious enough to
+# need Entry B), where /data mounting cleanly should never be assumed. A
+# failed RequiresMountsFor= only fails THIS service (Wants=, not
+# Requires=, from duduclaw-rescue.target — see that target's own [Unit]
+# section), never the rescue target itself or the shell units, so rescue
+# mode stays reachable even if /data is genuinely gone; the script's own
+# fallback additionally covers the case where /data mounts but is
+# read-only/full/otherwise unwritable, which RequiresMountsFor= alone
+# would not catch.
+#
+# ORDERING FINDING (2026-09-01, found while implementing B3, not part of
+# B3's own original scope but directly relevant): duduclaw-rescue-root-
+# lock.service's own `Before=...duduclaw-rescue-audit.service` means `/`
+# is ALREADY remounted read-only by the time this unit's ExecStart runs —
+# on the OLD /var/log/duduclaw/ target (root-resident, no /var overlay on
+# this line yet per G3/P1), `mkdir -p`/`touch` would hit EROFS and, under
+# this script's own `set -e`, fail the ENTIRE unit before a single byte
+# was ever written — the audit marker this unit exists to guarantee could
+# never actually land. Moving the primary write target to /data (a
+# separately-mounted partition, unaffected by root's own read-only
+# remount) is not merely a persistence improvement, it is what makes this
+# unit succeed at all under the existing, unchanged root-lock ordering —
+# not independently re-verified against a real boot in this ticket
+# (recipe-only, no bitbake/QEMU run), flagged as a concrete item for the
+# next real rescue-mode boot test.
 [Unit]
 Description=DuDuClaw rescue mode: write boot audit marker
 DefaultDependencies=no
 Requisite=duduclaw-rescue.target
 After=local-fs.target systemd-journald.service
+RequiresMountsFor=/data
 Before=duduclaw-rescue-shell@.service
 
 [Service]

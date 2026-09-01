@@ -64,8 +64,19 @@ require recipes-core/images/duduclaw-image-data.bb
 # IMAGE_ROOTFS_EXTRA_SPACE's final expansion is byte-identical.
 require recipes-core/images/duduclaw-image-flatpak.inc
 
-# IMAGE_FEATURES already carries serial-autologin-root + empty-root-password
-# from duduclaw-image.bb (Y2-3) -- this milestone's QEMU verification (item
-# 3: flatpak remote-add + install + dbus-run-session-wrapped --kiosk launch)
-# is run as an interactive shell over that same serial console, no separate
-# feature needed here.
+# IMAGE_FEATURES used to carry serial-autologin-root + empty-root-password
+# unconditionally from duduclaw-image.bb (Y2-3) -- this milestone's QEMU
+# verification (item 3: flatpak remote-add + install + dbus-run-session-
+# wrapped --kiosk launch) was run as an interactive shell over that same
+# serial console, no separate feature needed here.
+#
+# WS-3/A1 (2026-09-01, DESIGN-os-security-line-2026-09.md): this was a real
+# G4 gap -- unlike duduclaw-image-appliance.bb, this recipe never removed
+# the two tokens again, so a plain `bitbake duduclaw-image-flatpak` shipped
+# root-serial-autologin-with-no-password with no override at all. Fixed at
+# the source (duduclaw-image.bb's own IMAGE_FEATURES line is now gated
+# behind DUDUCLAW_IMAGE_TEST_LOGIN, default off) rather than here, so this
+# file needs no edit to inherit the safe default -- manual QEMU
+# verification of this recipe now needs an explicit
+# `DUDUCLAW_IMAGE_TEST_LOGIN=1` (local.conf or `bitbake -D`) to get the
+# interactive shell back.

@@ -85,7 +85,41 @@
 # pre-declared, so this .bbappend both DEFINES it and activates it.
 PACKAGECONFIG[sysupdate] = "-Dsysupdate=enabled,-Dsysupdate=disabled"
 
-PACKAGECONFIG:append = " efi openssl importd journal-upload zlib xz repart sysupdate"
+# `gcrypt` PACKAGECONFIG — WS-3/B2 (2026-09-01, DESIGN-os-security-line-
+# 2026-09.md §2 支柱二 B2, journald FSS/Seal=yes). Same "flag does not exist
+# in the base recipe at all" shape as `sysupdate` above, verified the same
+# way (`grep -n gcrypt systemd_259.5.bb` before this append: the ONLY hit is
+# a stray comment — "# Sign the journal for anti-tampering" — sitting above
+# the unrelated PACKAGECONFIG[gshadow] line, an apparent leftover from an
+# upstream refactor that dropped the explicit oe-core PACKAGECONFIG[gcrypt]
+# toggle at some point; no functioning flag survived it). The underlying
+# systemd BUILD SUPPORT is real and unaffected by that oe-core packaging
+# gap — read directly from this line's own pinned systemd source
+# (SRCREV b3d8fc43e9cb531d958c17ef2cd93b374bc14e8a): meson_options.txt
+# still declares `option('gcrypt', type: 'feature', ...)`, and meson.build's
+# own `have = libgcrypt.found() and libgpg_error.found(); conf.set10(
+# 'HAVE_GCRYPT', have)` gates journald's Forward Secure Sealing entirely —
+# `src/journal/journalctl-authenticate.c::action_setup_keys()` (the code
+# behind `journalctl --setup-keys`) is wrapped in `#if HAVE_GCRYPT` / `#else
+# return log_error_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "Forward-secure
+# sealing not available.")` — without this, `Seal=yes` in journald.conf
+# would be silently unenforceable and duduclaw-firstboot-provision.sh's own
+# key-generation step (same wave) would fail every boot. oe-core's own
+# meson.bbclass sets no `-Dauto_features=disabled` default (checked, not
+# assumed — grepped MESONOPTS directly), so meson's own 'feature'-type
+# default (`auto`) would have silently resolved to disabled anyway since
+# nothing pulls `libgcrypt` into this recipe's DEPENDS today — defining the
+# flag explicitly (rather than only adding `libgcrypt` to DEPENDS and
+# hoping auto-detection catches it) keeps this deterministic and
+# self-documenting, same reasoning `sysupdate` above already established.
+# `libgcrypt` itself is a plain oe-core recipe (meta/recipes-support/
+# libgcrypt/libgcrypt_1.12.1.bb on this line's pinned branch — confirmed
+# present, no new layer needed), and its own RDEPENDS/DEPENDS on
+# libgpg-error is standard oe-core packaging, not something this bbappend
+# needs to name separately.
+PACKAGECONFIG[gcrypt] = "-Dgcrypt=enabled,-Dgcrypt=disabled,libgcrypt"
+
+PACKAGECONFIG:append = " efi openssl importd journal-upload zlib xz repart sysupdate gcrypt"
 
 # PARTIALLY VERIFIED BY AN ACTUAL REBUILD (2026-08-27): `bitbake -c
 # write_wks_template duduclaw-image-ab` was run in the shared builder

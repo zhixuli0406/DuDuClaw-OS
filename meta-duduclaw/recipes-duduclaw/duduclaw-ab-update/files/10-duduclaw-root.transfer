@@ -40,19 +40,28 @@
 # files/wic/duduclaw-ab-bootdisk.wks.in (root-A / root-B) — same reasoning
 # as the Debian line's mkosi.repart pair.
 [Transfer]
-# %A is the running image's IMAGE_VERSION from /usr/lib/os-release. This
-# Yocto line bakes that from DISTRO_VERSION
-# (meta-duduclaw/conf/distro/duduclaw-os.conf), which is
-# `${DUDUCLAW_PLATFORM_VERSION}-y1-bringup` — NOT the bare
-# DUDUCLAW_PLATFORM_VERSION this ticket's own root-A GPT label uses. This is
-# a real, currently-unresolved mismatch (flagged, not silently carried):
-# ProtectVersion=%A protects whatever os-release's IMAGE_VERSION= actually
-# says, while the wks bakes the partition LABEL from the bare platform
-# version with no "-y1-bringup" suffix. The two must be made to agree
-# (either drop the milestone suffix from DISTRO_VERSION once this line
-# leaves bring-up, or bake the same full DISTRO_VERSION string into the
-# label) before relying on ProtectVersion= actually protecting the running
-# slot on this line — tracked as a Y8-1 followup, not fixed in this wave.
+# %A is the running image's IMAGE_VERSION from /usr/lib/os-release
+# specifically (systemd's own man/standard-specifiers.xml: "%A ... as read
+# from the IMAGE_VERSION= field" — a DIFFERENT field from VERSION_ID=,
+# which is the separate %w specifier).
+#
+# WS-3/A6 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱一 A6)
+# RESOLVED this Y8-1 followup, with a deeper root cause than this comment
+# originally described (corrected here, not just the label). oe-core's own
+# os-release.bb never wrote an IMAGE_VERSION= field to /etc/os-release at
+# all until this same wave's recipes-core/os-release/os-release.bbappend
+# added one (OS_RELEASE_FIELDS += "IMAGE_VERSION"; IMAGE_VERSION =
+# "${DISTRO_VERSION}") — before that fix, %A resolved to an EMPTY string
+# on every boot (not merely a mismatched-but-present one), so
+# ProtectVersion=%A was comparing against "" and protecting nothing. The
+# wks's own root-A GPT `--part-name` (files/wic/duduclaw-ab-bootdisk.wks.in
+# p2) and the factory UKI's own filename
+# (recipes-core/images/duduclaw-image-ab.bb's UKI_FILENAME) were ALSO
+# switched, same wave, from the bare DUDUCLAW_PLATFORM_VERSION to the full
+# DISTRO_VERSION — so all three (running os-release, root partition GPT
+# name, factory UKI filename) now derive from the same variable and stay
+# self-consistent across future builds regardless of whether the
+# "-y1-bringup" milestone suffix is still present.
 ProtectVersion=%A
 
 [Source]

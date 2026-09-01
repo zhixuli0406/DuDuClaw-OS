@@ -146,9 +146,23 @@ IMAGE_INSTALL:append = " duduclaw-firstboot"
 # UKI_RESCUE_FILENAME, untouched by this override) still never matches
 # either glob, so 判準①(rescue never becomes the ambient default) holds
 # on both the pre- and post-A/B loader.conf.
+#
+# WS-3/A6 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱一 A6):
+# `${DISTRO_VERSION}`, not the bare `${DUDUCLAW_PLATFORM_VERSION}` this
+# line used from Y9-2 through the WS-3 wave. Same root cause and same fix
+# as p2's `--part-name` in files/wic/duduclaw-ab-bootdisk.wks.in (see that
+# file's own A6 comment for the full writeup) — this UKI's filename is
+# what `20-duduclaw-uki.transfer`'s own `[Transfer] ProtectVersion=%A` /
+# `[Source] MatchPattern=duduclaw-os_@v.efi` compares against, the exact
+# same %A-vs-baked-in-string mismatch class as the root partition's GPT
+# name, just on the ESP side instead of the root-partition side. Fixed the
+# same way, for the same self-consistency reason: whatever DISTRO_VERSION
+# is at build time is, by construction, what THAT build's own os-release
+# IMAGE_VERSION= reports too (recipes-core/os-release/os-release.bbappend,
+# same wave).
 FILESEXTRAPATHS:prepend := "${THISDIR}/duduclaw-image-ab:"
 DUDUCLAW_LOADER_CONF_SRC = "duduclaw-ab-loader.conf"
 SRC_URI += "file://duduclaw-ab-loader.conf"
-UKI_FILENAME = "duduclaw-os_${DUDUCLAW_PLATFORM_VERSION}.efi"
+UKI_FILENAME = "duduclaw-os_${DISTRO_VERSION}.efi"
 
 COMPATIBLE_MACHINE = "duduclaw-genericx86-64|duduclaw-qemux86-64"

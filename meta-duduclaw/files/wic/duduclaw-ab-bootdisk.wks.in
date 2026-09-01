@@ -123,6 +123,39 @@ part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label 
 # for it either) so `e2label`/`lsblk -o LABEL` still show something
 # human-readable.
 #
+# WS-3/A6 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱一 A6):
+# `${DISTRO_VERSION}` here, NOT the bare `${DUDUCLAW_PLATFORM_VERSION}` this
+# line used from Y9-2 through the WS-3 wave. Root cause this closes (fully
+# documented in recipes-duduclaw/duduclaw-ab-update/files/
+# 10-duduclaw-root.transfer's own header, flagged there as an explicit Y8-1
+# followup, not silently carried): `[Transfer] ProtectVersion=%A` in that
+# same file compares against `%A`, systemd-sysupdate's specifier for the
+# RUNNING image's `IMAGE_VERSION=` from /usr/lib/os-release — and oe-core's
+# own os-release.bbclass sets `IMAGE_VERSION = "${DISTRO_VERSION}"`
+# (verified against the pinned openembedded-core source, not assumed), i.e.
+# the FULL `${DUDUCLAW_PLATFORM_VERSION}-y1-bringup` string
+# (conf/distro/duduclaw-os.conf), not the bare platform number this wks line
+# used to bake into the GPT name. The two strings never matched, silently
+# defeating `ProtectVersion=%A`'s entire purpose (protecting the running
+# slot from ever being treated as sysupdate's own free update target).
+# Fixed at the root by baking the SAME `${DISTRO_VERSION}` os-release
+# already uses, rather than patching the comparison on the sysupdate side —
+# this makes the fix self-consistent across time for free: whatever
+# DISTRO_VERSION happens to be at ANY future build (with or without a
+# milestone suffix, once this line leaves bring-up) is, by construction,
+# always what THAT SAME build's own os-release reports too, so
+# ProtectVersion=%A keeps working without needing to be revisited again
+# when the "-y1-bringup" suffix is eventually dropped.
+#
+# Length checked, not assumed safe: GPT's own partition-name field is
+# 36 UTF-16 code units (systemd's own `#define GPT_LABEL_MAX 36`,
+# src/shared/gpt.h, read directly at this line's pinned SRCREV before
+# making this change) — "duduclaw-os_1.62.0-y1-bringup" is 29 characters,
+# comfortably under the limit even with the milestone suffix attached; no
+# fallback "strip the suffix instead" scheme (the design doc's own stated
+# alternative, for if the length/charset budget did not allow the full
+# string) was needed.
+#
 # --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" (Y9-2, 2026-08-27): fixes root-A's
 # actual GPT PARTUUID to a build-time-known constant instead of wic's
 # default `uuid.uuid4()` random value — see
@@ -138,7 +171,7 @@ part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label 
 # see p2's own comment two paragraphs up and DESIGN-ab-update-rollback-
 # 2026-08.md §4.2's "Not a boot-selection input any more" finding on the
 # Debian line, which applies identically here).
-part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-path boot/ --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DUDUCLAW_PLATFORM_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
+part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-path boot/ --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DISTRO_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
 
 # p3: root-B — the reserved, empty update target. `_empty` is the ONE
 # string systemd-sysupdate's `Type=partition` target recognises as "free to

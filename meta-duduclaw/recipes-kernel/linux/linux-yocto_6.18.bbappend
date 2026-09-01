@@ -89,3 +89,15 @@ SRC_URI:append = " file://duduclaw-container.cfg"
 # root-cause trace and the "this is the complete fix, not the first of
 # several" verification live in the .cfg's own header comment.
 SRC_URI:append = " file://duduclaw-waydroid-net.cfg"
+
+# --- OS security line P0 (WS-3, 2026-09-01) ---------------------------
+# DESIGN-os-security-line-2026-09.md §2 支柱一 A4 (nftables default-deny
+# firewall) + A5 (Landlock/Yama LSM). Unscoped (both machines), same
+# reasoning as binder/kvm/container/waydroid-net above: this is a general
+# OS security capability the QEMU verification target and real target
+# hardware both need identically, not something specific to either one.
+# Full symbol-selection reasoning (what's added, what's deliberately
+# deferred, and why) lives in each .cfg's own header comment — not
+# duplicated here.
+SRC_URI:append = " file://duduclaw-nftables.cfg"
+SRC_URI:append = " file://duduclaw-lsm.cfg"

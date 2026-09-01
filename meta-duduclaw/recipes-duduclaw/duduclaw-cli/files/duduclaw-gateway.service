@@ -104,5 +104,93 @@ Restart=on-failure
 RestartSec=5
 WatchdogSec=60
 
+# WS-3/A2 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱一 A2 /
+# G11): first systemd sandboxing pass on the gateway unit. Still runs as
+# root (User=root is NOT added here -- A3/G12's own service-user work is a
+# separate, larger ticket per that design doc's own scoping: "涉及 /data
+# 權限遷移與 spawn 鏈，是 P0 裡最大的一件，可獨立票"), so these four
+# directives only remove privilege-escalation and filesystem-write surface
+# that this root process does not actually need, they do not attempt to
+# drop uid 0 itself.
+#
+# NoNewPrivileges=yes: blocks setuid/setgid/file-capability escalation on
+# every exec() this unit or its children perform (systemd.exec(5)). Since
+# the unit already runs as uid 0, this cannot "lose" any privilege the
+# process already has (exec'ing a setuid-root helper as root grants no NEW
+# privilege) -- it only closes the escalation path an attacker inside this
+# process would otherwise have via a setuid/setcap binary reachable on
+# $PATH. No functional dependency found on privilege escalation via exec:
+# this unit spawns duduclaw's own subprocess tree (agent CLI runtimes,
+# office-doc converters, compat-runner wrappers) as plain children, and the
+# one component that DOES need privilege separation
+# (recipes-duduclaw/duduclaw-sysd/files/duduclaw-sysd.service) is already a
+# SEPARATE unit reached over /run/duduclaw/sysd.sock precisely so this unit
+# never has to escalate itself.
+#
+# ProtectHome=read-only: makes /home, /root, and /run/user read-only for
+# this unit. Verified against the actual DUDUCLAW_HOME resolution before
+# adding this (crates/duduclaw-core/src/platform.rs:38-40 -- precedence is
+# `$DUDUCLAW_HOME` verbatim, else `<home_dir()>/.duduclaw`, i.e. `/root/
+# .duduclaw` for this root-run unit with no override): every image that
+# actually ships or is QEMU-verified today already overrides DUDUCLAW_HOME
+# away from /root via a drop-in under this unit's .d/ directory --
+# recipes-duduclaw/duduclaw-ab-update/files/10-ab-home.conf (duduclaw-
+# image-ab.bb, required by -appliance.bb) and recipes-duduclaw/
+# duduclaw-firstboot/files/10-data.conf (duduclaw-image-data.bb /
+# -flatpak.bb / -appliance.bb, same value) both set
+# `Environment=DUDUCLAW_HOME=/data/duduclaw` -- a top-level mountpoint
+# entirely outside /home and /root, so ProtectHome=read-only never touches
+# it on any of those images. The one exception is the bare, standalone
+# duduclaw-image.bb (no drop-in, no /data partition) falling back to
+# /root/.duduclaw -- that recipe is the superseded Y2-1 bring-up milestone,
+# not part of the current shipping/verification chain (release-os.sh's
+# DEFAULT_IMAGE is duduclaw-image-appliance; the QEMU harnesses target
+# -appliance/-appliance-test), so this is a known, accepted, documented
+# trade-off rather than a silently-assumed one -- flagged here rather than
+# worked around, since working around it would mean weakening the
+# hardening for every image that DOES have /data just to keep a superseded
+# milestone recipe's own standalone build fully functional.
+#
+# PrivateTmp=yes: isolates /tmp and /var/tmp into a private mount namespace
+# for this unit (and its children, which inherit the same namespace on
+# fork/exec -- so agent subprocesses spawned by the gateway see a
+# consistent, shared private /tmp among themselves, just not the host's
+# real /tmp). Checked for cross-process /tmp handoff before adding this (no
+# such pattern found): the gateway's actual cross-process IPC surfaces are
+# `/run/duduclaw/sysd.sock` (duduclaw-sysd, RuntimeDirectory=duduclaw) and
+# `/run/duduclaw-kiosk/duduclaw-shell.sock` (duduclaw-comp's shell_control,
+# crates/duduclaw-gateway/src/display_bridge.rs's own KIOSK_RUNTIME_DIR
+# constant) -- both under /run, untouched by PrivateTmp. The Docker-backed
+# agent container sandbox (crates/duduclaw-container/src/docker.rs) also
+# does not hand the host's /tmp to containers: its own `/tmp` mount is a
+# fresh in-container tmpfs (`tmpfs.insert("/tmp", "rw,noexec,nosuid,
+# size=64m")`), and its host-side bind mounts are agent workspace/`/run/
+# duduclaw` paths, never `/tmp`. Every `std::env::temp_dir()` call actually
+# reached at runtime (secaudit report staging, OAuth PKCE redirect files,
+# skill-install staging, updater scratch space) is per-process private
+# scratch consumed by the same process before or after use, not a file
+# dropped for a DIFFERENT systemd unit to pick up.
+#
+# ProtectSystem=full: /usr, /boot, and /etc become read-only for this
+# unit. Deliberately "full", not "strict" (design doc: "保守起步，strict
+# 留 P1") -- "strict" would make the ENTIRE filesystem read-only by default
+# and require enumerating every writable path via ReadWritePaths=, which is
+# real design work (P1's read-only-root/overlay ticket, G3) this P0 pass
+# does not attempt. Under "full" specifically, /data is untouched (it is
+# not /usr, /boot, or /etc, and is not covered by ProtectHome either) --
+# ReadWritePaths=-/data below is therefore not load-bearing under "full"
+# today; it is added now, with the `-` (systemd.exec(5): ignore if the
+# path does not exist) prefix so it is a harmless no-op on the bare
+# duduclaw-image.bb build that has no /data partition at all, specifically
+# so this line does not need to be revisited the moment a future ticket
+# tightens ProtectSystem to "strict" (at which point it stops being inert
+# and starts being required) -- documented here rather than silently
+# deferred.
+NoNewPrivileges=yes
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=-/data
+
 [Install]
 WantedBy=multi-user.target

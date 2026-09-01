@@ -1,0 +1,29 @@
+# DuDuClaw OS — scheduled quick secaudit self-scan (WS-3, 2026-09-01,
+# DESIGN-os-security-line-2026-09.md §2 secaudit 遷入 D2' / 拍板 D4).
+#
+# ConditionPathExists=/data/duduclaw: this is a basic "does the scan
+# target even exist" sanity guard, NOT the `[secaudit] scheduled_scan`
+# operator on/off toggle the design doc names as a separate ticket's own
+# scope ("CLI 端設定閘由另一包做") — that config-schema gate is
+# deliberately NOT implemented here; this timer ships unconditionally
+# enabled (拍板 D4: "預設開"). An image with no /data partition (the bare
+# duduclaw-image.bb bring-up milestone) simply never fires this unit,
+# cleanly, rather than failing every day against a path that cannot
+# exist there.
+[Unit]
+Description=DuDuClaw OS scheduled quick secaudit self-scan
+ConditionPathExists=/data/duduclaw
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/duduclaw-secaudit-scan.sh
+# secaudit's own scanner orchestration (semgrep/gitleaks/cargo-audit) and
+# repo-walking can be I/O and CPU heavy on modest appliance hardware —
+# Nice/IOSchedulingClass keep a background self-scan from competing with
+# the gateway/kiosk for responsiveness. Not a hard resource cap (no
+# CPUQuota=/MemoryMax=) -- this is a P0 "ship the timer" pass, not a
+# resource-governance design; revisit if a real scan is observed
+# contending for resources on real hardware.
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

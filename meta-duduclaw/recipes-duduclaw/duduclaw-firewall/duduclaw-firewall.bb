@@ -18,28 +18,40 @@ HOMEPAGE = "https://github.com/duduclaw/duduclaw"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-SRC_URI = "file://nftables.conf"
+SRC_URI = "file://nftables.conf \
+           file://nftables.service"
 
 S = "${UNPACKDIR}"
+
+inherit systemd
 
 do_install() {
     install -d ${D}${sysconfdir}
     install -m 0644 ${UNPACKDIR}/nftables.conf ${D}${sysconfdir}/nftables.conf
+    install -d ${D}${systemd_system_unitdir}
+    install -m 0644 ${UNPACKDIR}/nftables.service ${D}${systemd_system_unitdir}/nftables.service
 }
 
-FILES:${PN} += "${sysconfdir}/nftables.conf"
+SYSTEMD_SERVICE:${PN} = "nftables.service"
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
+
+FILES:${PN} += "${sysconfdir}/nftables.conf ${systemd_system_unitdir}/nftables.service"
 
 # RDEPENDS, not DEPENDS: config-only, no compile-time relationship to
 # nftables at all -- same "documentation-as-code" convention
 # duduclaw-network-config.bb's own RDEPENDS comment already establishes
 # for this layer (one explicit source of truth: this package existing
 # means nftables must too, not a bare dependency-resolution assumption).
-# The actual auto-enable override (upstream nftables_1.1.6.bb defaults
-# SYSTEMD_AUTO_ENABLE:nftables to "disable" until a config exists) lives
-# in the separate recipes-filter/nftables/nftables_%.bbappend this same
-# wave adds -- not duplicated here, since SYSTEMD_AUTO_ENABLE is a
-# per-recipe (nftables' own PN) variable this recipe has no direct way to
-# set from outside that recipe's own namespace.
+# Service ownership correction (2026-09-01 SEC2 live-fire FAIL): the
+# original plan put SYSTEMD_AUTO_ENABLE in a nftables_%.bbappend on the
+# assumption upstream ships a unit defaulted to disable -- WRONG: the
+# pinned meta-networking nftables_1.1.6.bb inherits no systemd class and
+# installs NO service file at all (verified by reading it after
+# `systemctl is-active nftables` came back `inactive` on the appliance),
+# so that bbappend was configuring thin air and has been deleted. This
+# recipe now owns the unit outright: a oneshot RemainAfterExit
+# `nft -f /etc/nftables.conf` load, the same shape Debian's own
+# nftables.service uses (already cited in files/nftables.conf's header).
 RDEPENDS:${PN} += "nftables"
 
 # Config-only, no compiled payload, nothing arch-specific -- reusable on

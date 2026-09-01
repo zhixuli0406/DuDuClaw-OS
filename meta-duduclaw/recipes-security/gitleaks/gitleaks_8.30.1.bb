@@ -45,18 +45,35 @@ SRC_URI = "git://github.com/gitleaks/gitleaks.git;protocol=https;nobranch=1;dest
 # "Unable to find revision ... in branch master even from upstream" --
 # release tags on this repo point at commits off the branch tip), and
 # nobranch=1 is bitbake's documented escape hatch for exactly this shape.
-S = "${WORKDIR}/git"
+#
+# No `S =` assignment: wrynose's do_unpack now hard-errors on the old
+# `S = "${WORKDIR}/git"` idiom (bitbake.conf sets the git default itself
+# — live bake error 2026-09-01, not a style preference). basename(S) is
+# still "git", so GO_SRCURI_DESTSUFFIX's layout math is unchanged.
 
-inherit go
+inherit go-mod
+
+# go-mod (not plain go): its `do_compile[dirs] += ${B}/src/${GO_WORKDIR}`
+# is what puts the go tool's cwd inside the module directory (go.bbclass's
+# configure symlinks ${S}/src into ${B}) — plain `inherit go` left cwd at
+# ${B} and died with "go.mod file not found" (live bake 2026-09-01). The
+# class's GOMODCACHE stays empty and unused here: the vendored tree makes
+# the go tool run fully offline, pinned explicitly below rather than
+# relying on auto-detection.
+GOBUILDFLAGS:append = " -mod=vendor"
 
 # go 1.24.11 required by go.mod (checked, not assumed) -- this layer's
 # pinned go_1.26.5.bb (meta/recipes-devtools/go/, wrynose branch) is
 # comfortably newer, no toolchain gap.
 
-# Root package (main.go at repo root, not under a cmd/ subdirectory --
-# checked the actual v8.30.1 tree listing before deciding GO_INSTALL
-# needed no override): go.bbclass's own default `GO_INSTALL ?=
-# "${GO_IMPORT}/..."` already covers this, no override needed.
+# Root package only — NOT the class default `${GO_IMPORT}/...`: the `...`
+# wildcard also builds cmd/generate/config (gitleaks' internal ruleset
+# generator, a second `package main`) and shipped a stray 9.9MB
+# /usr/bin/config into the image (found by extracting the actual built RPM,
+# 2026-09-01, not by reading the tree — the earlier "default covers this"
+# comment here was wrong). main.go at the repo root is the one binary
+# secaudit needs.
+GO_INSTALL = "${GO_IMPORT}"
 
 # Version stamping, mirrors the upstream Makefile's own `$(LDFLAGS)`
 # (`-ldflags "-X=github.com/zricethezav/gitleaks/v8/version.Version=$(VERSION)"`,

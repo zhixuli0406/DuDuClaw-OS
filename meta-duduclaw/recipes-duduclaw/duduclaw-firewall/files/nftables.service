@@ -1,0 +1,21 @@
+# duduclaw-firewall — load the default-deny ruleset at boot (OS security
+# line P0/A4). Same oneshot+RemainAfterExit shape as Debian's own
+# nftables.service (the ruleset itself is ported from the Debian appliance
+# line — see nftables.conf's header). Ordered before the network is up so
+# no pre-firewall window exists on boot.
+[Unit]
+Description=nftables default-deny firewall
+Wants=network-pre.target
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.conf
+ExecReload=/usr/sbin/nft -f /etc/nftables.conf
+ExecStop=/usr/sbin/nft flush ruleset
+
+[Install]
+WantedBy=sysinit.target

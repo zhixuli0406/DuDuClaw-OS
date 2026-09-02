@@ -120,6 +120,38 @@ script never validates it against slot A, same reasoning as before); the
 slot-B variant's baked value is recorded the same way, under its own
 manifest.json key, since a *different* PARTUUID is exactly what makes it
 the slot-B variant.
+
+VER-V (2026-09-02 拍板紀錄 "依賴鏈補記" entry —
+commercial/docs/DESIGN-os-trust-chain-2026-09.md §3.3): dm-verity hash
+tree. Unlike the UKI, the hash tree is content-derived from the root
+payload alone and carries no per-slot state, so there is no slot-B
+variant to ship — one `--verity` input packages as
+`duduclaw-os_<version>.verity-<arch>.raw`. Its root hash cannot be
+cheaply re-derived from the hash-tree bytes alone (that needs the exact
+`veritysetup format` invocation that produced them), so `--verity-roothash`
+takes it as an explicit, build-pipeline-supplied value rather than this
+script computing or guessing it. Two things happen with that value:
+
+1. It ships as its OWN tiny file, `duduclaw-os_<version>.verity-<arch>.roothash`
+   (64 hex characters), added to SHA256SUMS like every other payload —
+   covered by the same minisign signature, unlike manifest.json (see this
+   docstring's earlier note: "manifest.json is convenience metadata...
+   never an integrity claim"). `os_update.rs`'s VER-V consistency gate
+   reads THIS file, never manifest.json.
+2. It is cross-validated (build-time sanity check, not a security gate —
+   the signed roothash companion above is what the DEVICE trusts) against
+   whatever `roothash=` value the UKI cmdline(s) already bake in, IF that
+   token is present. §3.2 P1's cmdline shape (`roothash=` alongside
+   `root=PARTUUID=`) has not landed on every build line yet (the verity
+   initrd module is still pending per the same 拍板紀錄 entry), so a UKI
+   with no `roothash=` token at all is not an error here — nothing to
+   check yet. A UKI that DOES carry the token but disagrees with
+   --verity-roothash IS a build-time failure: that would ship a hash tree
+   next to a UKI that boots expecting a different one.
+
+Omitting `--verity` (the default) is byte-for-byte the pre-verity
+behavior — still valid input for `os_update.rs`, which treats a release
+with no verity artifact as a legitimate (not erroneous) pre-verity release.
 """
 
 from __future__ import annotations
@@ -306,6 +338,55 @@ def extract_root_payload(raw_path: Path, slot: "uki_slots.Partition", dest_path:
     return length, digest.hexdigest()
 
 
+def find_cmdline_roothash(cmdline: str) -> str | None:
+    """Look for `roothash=<64 hex>` in a UKI's decoded .cmdline text.
+
+    Returns None (NOT a Fail) when the token is absent -- most build lines
+    have not yet adopted baking `roothash=` into the cmdline (§3.2 P1's
+    cmdline shape is still pending the initramfs-framework verity module,
+    see the design doc's 2026-09-02 依賴鏈補記 entry), and shipping a
+    verity hash tree ahead of that landing is a legitimate, expected
+    intermediate state -- there is simply nothing to cross-validate yet.
+
+    A token that IS present but malformed is a different story: that is not
+    "not adopted yet", it is a corrupt cmdline, and raises Fail like every
+    other build-time integrity problem this script catches.
+    """
+    token = "roothash="
+    idx = cmdline.find(token)
+    if idx == -1:
+        return None
+    value = cmdline[idx + len(token):idx + len(token) + 64]
+    if len(value) != 64 or not all(c in "0123456789abcdefABCDEF" for c in value):
+        raise uki_slots.Fail(
+            f"UKI cmdline has a {token} token but its value {value!r} is not "
+            "64 hex characters"
+        )
+    return value.lower()
+
+
+def copy_and_hash(src_path: Path, dest_path: Path) -> tuple[int, str]:
+    """Stream-copy src_path to dest_path, returning (size, sha256_hex).
+
+    Same CHUNK_SIZE streaming discipline as extract_root_payload, minus the
+    GPT-offset/sparse-hole handling: a `veritysetup format` hash tree is not
+    a whole-disk image and is not expected to contain the long zero runs an
+    ext4 slot's tail does, so a plain streaming copy is the right amount of
+    machinery here.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with src_path.open("rb") as src, dest_path.open("wb") as dst:
+        while True:
+            chunk = src.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+            dst.write(chunk)
+            size += len(chunk)
+    return size, digest.hexdigest()
+
+
 def copy_uki_template(uki_path: Path, dest_path: Path) -> tuple[int, str, uuid.UUID]:
     """Byte-for-byte copy the standalone UKI, after proving it is usable.
 
@@ -399,6 +480,7 @@ def write_manifest(
     files: list[tuple[str, int, str]],
     baked_partuuid: uuid.UUID,
     slot_b_baked_partuuid: uuid.UUID | None = None,
+    verity_roothash: str | None = None,
 ) -> Path:
     """Write manifest.json.
 
@@ -413,6 +495,11 @@ def write_manifest(
     of the slot-B variant is that it carries a DIFFERENT baked PARTUUID (see
     the module docstring's T4 note), so merging the two fields would erase
     the one fact a reader of this manifest most wants to check.
+
+    `verity_roothash` (VER-V, 2026-09-02 依賴鏈補記): informational only,
+    same as every other field here — `os_update.rs`'s VER-V consistency
+    gate reads the SIGNED `duduclaw-os_<version>.verity-<arch>.roothash`
+    file (a `files` entry, covered by SHA256SUMS.minisig), never this key.
     """
     manifest = {
         "format": 1,
@@ -433,6 +520,8 @@ def write_manifest(
     }
     if slot_b_baked_partuuid is not None:
         manifest["uki_slot_b_root_partuuid"] = str(slot_b_baked_partuuid)
+    if verity_roothash is not None:
+        manifest["verity_roothash"] = verity_roothash
     path = outdir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n")
     return path
@@ -472,6 +561,23 @@ def main() -> int:
                           "Omit (the default) to publish a legacy single-UKI payload — "
                           "byte-for-byte the pre-T4 behavior, still a valid input for "
                           "os_update.rs's rewrite fallback.")
+    ap.add_argument("--verity", type=Path, default=None,
+                     help="VER-V (2026-09-02 依賴鏈補記): the dm-verity hash-tree raw file "
+                          "('veritysetup format's output for the root payload), packaged as "
+                          "duduclaw-os_<version>.verity-<arch>.raw. One per release -- "
+                          "content-derived from the root payload, so there is no per-slot "
+                          "variant the way the UKI has one. Requires --verity-roothash. "
+                          "Omit (the default) to publish a pre-verity release -- "
+                          "byte-for-byte the current behavior, still valid input for "
+                          "os_update.rs (a release with no verity artifact is a legitimate "
+                          "pre-verity release, not an error).")
+    ap.add_argument("--verity-roothash", default=None,
+                     help="the dm-verity root hash 'veritysetup format' printed for --verity's "
+                          "hash tree (64 hex characters). Required exactly when --verity is "
+                          "given. Ships as its own signed companion file and is "
+                          "cross-validated against the UKI cmdline's own roothash= token when "
+                          "that token is present (informational at build time; the signed "
+                          "companion file is what the device actually trusts).")
     ap.add_argument("--version", default=None,
                      help="payload version to publish under; defaults to appliance/mkosi.version's "
                           "content. May differ from the image's baked version to stage a test "
@@ -494,6 +600,7 @@ def main() -> int:
     raw_path = args.raw.expanduser()
     uki_path = args.uki.expanduser()
     uki_slot_b_path = args.uki_slot_b.expanduser() if args.uki_slot_b else None
+    verity_path = args.verity.expanduser() if args.verity else None
     outdir = args.outdir.expanduser()
     sign_key = args.sign_key.expanduser()
 
@@ -503,6 +610,21 @@ def main() -> int:
         raise uki_slots.Fail(f"{uki_path}: no such file (build the image first)")
     if uki_slot_b_path is not None and not uki_slot_b_path.exists():
         raise uki_slots.Fail(f"{uki_slot_b_path}: no such file (build the image first)")
+
+    # VER-V: --verity and --verity-roothash are a pair, never one alone —
+    # exactly the "both or neither" discipline os_update.rs's
+    # select_release_files enforces on the receiving end.
+    if (verity_path is None) != (args.verity_roothash is None):
+        raise uki_slots.Fail("--verity and --verity-roothash must be given together")
+    verity_roothash: str | None = None
+    if args.verity_roothash is not None:
+        verity_roothash = args.verity_roothash.strip().lower()
+        if len(verity_roothash) != 64 or not all(c in "0123456789abcdef" for c in verity_roothash):
+            raise uki_slots.Fail(
+                f"--verity-roothash {args.verity_roothash!r} is not 64 hex characters"
+            )
+    if verity_path is not None and not verity_path.exists():
+        raise uki_slots.Fail(f"{verity_path}: no such file (run veritysetup format first)")
 
     if args.image_version is not None:
         image_version = args.image_version.strip()
@@ -583,6 +705,60 @@ def main() -> int:
         sums_entries.append((efi_slot_b_path.name, efi_b_sha))
         manifest_files.append((efi_slot_b_path.name, efi_b_size, efi_b_sha))
 
+    if verity_path is not None:
+        # VER-V: cross-validate --verity-roothash against whatever the UKI
+        # cmdline(s) already bake in, IF that token is present. Absence is
+        # not an error (§3.2 P1's cmdline shape has not landed everywhere
+        # yet — see this file's VER-V docstring note); a PRESENT but
+        # disagreeing value is a build-time failure, not something to catch
+        # only after a machine tries to install the result.
+        _uoff, _usize, uki_cmdline = uki_slots.uki_cmdline_span(uki_path.read_bytes())
+        baked_roothash = find_cmdline_roothash(uki_cmdline)
+        if baked_roothash is not None and baked_roothash != verity_roothash:
+            raise uki_slots.Fail(
+                f"--verity-roothash {verity_roothash} does not match the roothash= baked "
+                f"into the canonical UKI's cmdline ({baked_roothash})"
+            )
+        if uki_slot_b_path is not None:
+            _boff, _bsize, uki_b_cmdline = uki_slots.uki_cmdline_span(uki_slot_b_path.read_bytes())
+            baked_roothash_b = find_cmdline_roothash(uki_b_cmdline)
+            if baked_roothash_b is not None and baked_roothash_b != verity_roothash:
+                raise uki_slots.Fail(
+                    f"--verity-roothash {verity_roothash} does not match the roothash= "
+                    f"baked into the slot-B UKI's cmdline ({baked_roothash_b})"
+                )
+            if (
+                baked_roothash is not None
+                and baked_roothash_b is not None
+                and baked_roothash != baked_roothash_b
+            ):
+                raise uki_slots.Fail(
+                    "the canonical and slot-B UKI cmdlines bake DIFFERENT roothash= values "
+                    f"({baked_roothash} vs {baked_roothash_b}) — both slots must agree, since "
+                    "the hash tree is slot-independent"
+                )
+
+        verity_final = final_dir / f"duduclaw-os_{payload_version}.verity-{arch}.raw"
+        print(f"[make-payload] copying verity hash tree -> {verity_final.name}")
+        verity_size, verity_sha = copy_and_hash(verity_path, verity_final)
+        sums_entries.append((verity_final.name, verity_sha))
+        manifest_files.append((verity_final.name, verity_size, verity_sha))
+
+        # The signed roothash companion — see this file's VER-V docstring
+        # note for why this rides inside SHA256SUMS rather than only
+        # manifest.json.
+        roothash_final = final_dir / f"duduclaw-os_{payload_version}.verity-{arch}.roothash"
+        roothash_final.write_text(f"{verity_roothash}\n")
+        roothash_sha = hashlib.sha256(roothash_final.read_bytes()).hexdigest()
+        sums_entries.append((roothash_final.name, roothash_sha))
+        manifest_files.append(
+            (roothash_final.name, roothash_final.stat().st_size, roothash_sha)
+        )
+        print(
+            f"[make-payload] wrote {roothash_final.name} (roothash companion, "
+            f"signed via SHA256SUMS: {verity_roothash})"
+        )
+
     sums_path = write_sha256sums(final_dir, sums_entries)
     print(f"[make-payload] wrote {sums_path.name}")
 
@@ -597,6 +773,7 @@ def main() -> int:
         manifest_files,
         baked_partuuid,
         slot_b_baked_partuuid,
+        verity_roothash,
     )
     print(f"[make-payload] wrote {manifest_path.name}")
     print(f"[make-payload] OK: {final_dir}")

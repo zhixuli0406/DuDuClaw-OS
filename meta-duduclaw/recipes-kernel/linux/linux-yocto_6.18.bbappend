@@ -114,3 +114,13 @@ SRC_URI:append = " file://duduclaw-lsm.cfg"
 # between verity-on/off builds — a materially bigger form of
 # "conditional" than every other piece of this wave).
 SRC_URI:append = " file://duduclaw-verity.cfg"
+
+# --- Trust chain P1 wave TPM (2026-09-02) -------------------------------
+# CONFIG_TCG_TPM/CONFIG_TCG_TIS, unscoped (both machines), same reasoning
+# as duduclaw-verity.cfg immediately above: compiled in unconditionally,
+# exercised only when DUDUCLAW_TPM_ENABLE=1 bakes the matching userspace
+# chain (classes/duduclaw-tpm.bbclass) — see duduclaw-tpm.cfg's own header
+# for the full Kconfig dependency-chain citation (drivers/char/tpm/Kconfig
+# at this file's own pinned SRCREV) and for why this one fragment is also
+# deliberately NOT gated behind that variable.
+SRC_URI:append = " file://duduclaw-tpm.cfg"

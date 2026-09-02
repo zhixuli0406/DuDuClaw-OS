@@ -122,7 +122,53 @@ PACKAGECONFIG[sysupdate] = "-Dsysupdate=enabled,-Dsysupdate=disabled"
 # needs to name separately.
 PACKAGECONFIG[gcrypt] = "-Dgcrypt=enabled,-Dgcrypt=disabled,libgcrypt"
 
+# `cryptsetup`/`tpm2` — trust chain P1 wave TPM (2026-09-02, DESIGN-os-
+# trust-chain-2026-09.md §4 + 2026-09-02 拍板紀錄 T5/T6/T7). UNLIKE
+# `sysupdate`/`gcrypt` above, BOTH flags already exist verbatim in the
+# base recipe (`grep -n "PACKAGECONFIG\[cryptsetup\]\|PACKAGECONFIG\[tpm2\]"
+# systemd_259.5.bb` before this append — two real hits, not zero) — this
+# append only ACTIVATES them, it does not define them:
+#
+#   PACKAGECONFIG[cryptsetup] = "-Dlibcryptsetup=enabled,...,cryptsetup,,cryptsetup"
+#   PACKAGECONFIG[tpm2]       = "-Dtpm2=enabled,...,tpm2-tss,tpm2-tss libtss2 libtss2-tcti-device"
+#
+# Confirms this wave's own task-brief premise ("systemd 259.5 目前編譯旗標
+# -TPM2 -LIBCRYPTSETUP") from the recipe source directly, not by trusting
+# the brief's own wording. `cryptsetup`'s DEPENDS points at the `cryptsetup`
+# recipe (cross-compiled target build, providing libcryptsetup.so + headers
+# via sysroot — the SAME recipe classes/duduclaw-verity.bbclass's own
+# `DEPENDS:append` already pulls in as `cryptsetup-native` for a DIFFERENT
+# purpose; this is the target-side link dependency, not a duplicate). Its
+# RDEPENDS ("cryptsetup") lands on the MAIN `systemd` package — the
+# `cryptsetup`/`veritysetup` CLI *binaries* on target are a SEPARATE
+# concern already solved by duduclaw-verity.bbclass's own
+# `IMAGE_INSTALL:append`.
+#
+# `tpm2`'s DEPENDS is the recipe literally named `tpm2-tss` — VERIFIED
+# this does NOT resolve inside any layer this project currently pins
+# (openembedded-core / meta-openembedded / meta-virtualization / meta-
+# yocto — `find . -iname "tpm2-tss*.bb"` across every checked-out layer:
+# zero hits, before assuming "PACKAGECONFIG exists" meant "buildable").
+# classes/duduclaw-tpm.bbclass's own header documents the fix (a new
+# `meta-security`/`meta-tpm` sublayer pin, only added by the
+# `meta-duduclaw/kas/tpm-luks.yml` overlay — NOT this base recipe file,
+# which must stay layer-agnostic).
+#
+# CONSEQUENTLY, unlike every other flag on the PACKAGECONFIG:append line
+# below, `cryptsetup`/`tpm2` are NOT unconditionally appended — self-
+# gated on DUDUCLAW_TPM_ENABLE instead, same pattern classes/
+# duduclaw-verity.bbclass's own `DEPENDS:append`/`IMAGE_INSTALL:append`
+# python-conditionals use. Unconditionally appending `tpm2` here would
+# make `bitbake systemd` — and therefore EVERY image in this layer's
+# `require` chain, not just the TPM wave's own test line — fail outright
+# with "Nothing PROVIDES 'tpm2-tss'" on any kas config that has not ALSO
+# composed `tpm-luks.yml`, exactly the "off ≠ byte-identical" regression
+# classes/duduclaw-verity.bbclass's own header convention ("off = byte-
+# identical to a build where this class were never inherited at all")
+# exists to prevent. An unset/off build's PACKAGECONFIG list is untouched
+# below and `tpm2-tss` is never even looked up.
 PACKAGECONFIG:append = " efi openssl importd journal-upload zlib xz repart sysupdate gcrypt"
+PACKAGECONFIG:append = "${@ ' cryptsetup tpm2' if d.getVar('DUDUCLAW_TPM_ENABLE') == '1' else ''}"
 
 # PARTIALLY VERIFIED BY AN ACTUAL REBUILD (2026-08-27): `bitbake -c
 # write_wks_template duduclaw-image-ab` was run in the shared builder

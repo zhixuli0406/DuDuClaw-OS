@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# duduclaw-data-open-generator — systemd generator deciding, on EVERY
+# boot, whether /data needs the TPM2+LUKS2 unit graph instead of the
+# plain PARTUUID mount that /etc/fstab's static line (classes/
+# duduclaw-verity.bbclass) already provides.
+#
+# Trust chain P1 wave TPM (2026-09-02 — commercial/docs/
+# DESIGN-os-trust-chain-2026-09.md §4). See classes/duduclaw-tpm.bbclass's
+# own header ("WHY A GENERATOR, NOT A STATIC /etc/crypttab") for the full
+# read-only-root constraint this design works around, and for the
+# one-hand citation that `.../generator.early` output overrides BOTH the
+# static `/etc/fstab` line AND whatever the normal-priority
+# systemd-fstab-generator would derive from it (man/systemd.generator.xml
+# at this project's pinned systemd SRCREV) — this script only needs to
+# know THAT it wins, not re-derive why, every time it runs.
+#
+# Installed to ${nonarch_libdir}/systemd/system-generators/ — the exact
+# directory systemd's OWN recipe installs its own generators to
+# (confirmed by reading systemd_259.5.bb directly: `systemd-gpt-auto-
+# generator` lands at literally `${nonarch_libdir}/systemd/
+# system-generators/systemd-gpt-auto-generator`).
+#
+# CONTRACT with systemd (man/systemd.generator.xml, read in full before
+# writing this): invoked with three directory-path positional args
+# (normal-dir early-dir late-dir); "for tests, generators may be called
+# with just one argument; the generator should assume that all three
+# paths are the same in that case" — handled below via the `${2:-$1}`
+# fallback, matching that documented single-arg contract rather than
+# assuming three args are always present.
+#
+# THIS SCRIPT ONLY DECIDES; IT NEVER FORMATS/ENROLLS/UNLOCKS ANYTHING
+# ITSELF. Generators run very early in boot and must be fast/robust — all
+# actual cryptsetup/cryptenroll work lives in duduclaw-data-open.sh (a
+# REGULAR service this generator's own written unit references), which
+# runs later, in the normal service-execution phase, where taking a few
+# seconds for a first-boot LUKS format is an acceptable cost. This
+# script's own bounded device-node wait below exists ONLY to make the
+# tpm-presence/luks-presence PROBE itself reliable, not to wait out any
+# conversion work.
+set -euo pipefail
+
+# Sed-substituted at package build time (do_install, see this recipe's
+# own .bb) — a build-time GPT constant (classes/duduclaw-ab-partflags
+# .bbclass's own DUDUCLAW_AB_DATA_PARTUUID, "dedec1a0-...-000f"), not a
+# per-device runtime value, so baking it in at install time (rather than
+# reading it from some runtime config this line has no equivalent of) is
+# correct and matches how every other build-time-constant PARTUUID in
+# this layer is handled (e.g. classes/duduclaw-verity.bbclass's own
+# cmdline injection of the SAME constant family).
+DATA_PARTUUID="@DUDUCLAW_AB_DATA_PARTUUID@"
+DATA_DEV="/dev/disk/by-partuuid/${DATA_PARTUUID}"
+
+NORMAL_DIR="${1:?duduclaw-data-open-generator: missing normal-dir argument (systemd.generator(7) contract)}"
+EARLY_DIR="${2:-$NORMAL_DIR}"
+
+# --- bounded wait for the device node ------------------------------------
+# Generators run very early in the main system's own boot (distinct from
+# the initrd, where 01-udev's own trigger+settle already ran ahead of the
+# verity module before it ever reads /dev/disk/by-partuuid/* — see
+# recipes-core/initrdscripts/initramfs-module-duduclaw-verity's own
+# header for that DIFFERENT, already-settled context). Here, on the MAIN
+# system, systemd-udevd may not have finished processing add events for
+# every partition yet. Whole-second sleeps only (NOT fractional --
+# recipes-duduclaw/duduclaw-firstboot/files/duduclaw-firstboot-provision
+# .sh's own header documents this exact image's BusyBox build lacking
+# `head -c`/`base64`; fractional `sleep 0.1` support was NOT independently
+# re-verified this round either, so this script does not lean on it),
+# bounded at 5s to match the initramfs verity module's own default
+# roottimeout=5 precedent rather than inventing a new budget.
+i=0
+while [[ ! -e "$DATA_DEV" && "$i" -lt 5 ]]; do
+    sleep 1
+    i=$((i + 1))
+done
+
+# --- cheap presence probe -------------------------------------------------
+# /dev/tpm0 / /dev/tpmrm0 — kernel-driver-created device nodes (drivers/
+# char/tpm/tpm-chip.c's own `dev_set_name(&chip->dev, "tpm%d", ...)` and
+# drivers/char/tpm/tpm2-space.c's own `dev_set_name(&chip->devs,
+# "tpmrm%d", ...)`, both read directly at this project's pinned kernel
+# SRCREV before writing this) — populated by devtmpfs as soon as the
+# TCG_TIS driver probes hardware, with NO udev dependency (unlike the
+# by-partuuid symlink above, which genuinely needs udev to have run).
+tpm_present=0
+if [[ -e /dev/tpm0 || -e /dev/tpmrm0 ]]; then
+    tpm_present=1
+fi
+
+luks_present=0
+if [[ -e "$DATA_DEV" ]]; then
+    fstype="$(blkid -o value -s TYPE "$DATA_DEV" 2>/dev/null || true)"
+    if [[ "$fstype" == "crypto_LUKS" ]]; then
+        luks_present=1
+    fi
+fi
+
+# --- the decision ---------------------------------------------------------
+# override = tpm_present || luks_present (classes/duduclaw-tpm.bbclass's
+# own header has the full four-cell truth table this formula encodes —
+# not re-derived here). Plain case (both false, e.g. no TPM chip on this
+# unit): write NOTHING, exit 0 — the existing verity-wave-tested
+# `/etc/fstab`-derived data.mount stands completely unmodified. This is
+# what makes "TPM physically absent" byte-identical to a build where this
+# whole wave were never inherited, even though DUDUCLAW_TPM_ENABLE=1 was
+# baked in at build time — T7's own "TPM 缺席不拒絕開機" mandate is
+# enforced at RUNTIME, not just by the build-time flag.
+if [[ "$tpm_present" -eq 0 && "$luks_present" -eq 0 ]]; then
+    # T7's OTHER half (round-1 wavetpm TP3c live gap): fail-open must be
+    # RECORDED, not just permitted. The original cut wrote nothing at all
+    # here — so /run/duduclaw-tpm-status.json never existed, the
+    # duduclaw-data-status.service relay (ConditionPathExists on it) never
+    # fired, and the audit trail T7 mandates was silently empty. Writing
+    # one small /run file is inside a generator's job description (its
+    # entire output IS files); the heavier /data copy + journal line stay
+    # in the status relay service where they belong.
+    printf '{"tpm":"absent","data":"plain","mode":"fail-open","reason":"no TPM device node at boot; /data stays plain per T7"}\n' \
+        > /run/duduclaw-tpm-status.json || true
+    exit 0
+fi
+
+mkdir -p "$EARLY_DIR"
+
+# duduclaw-data-open.service — DefaultDependencies=no + Before=
+# local-fs-pre.target mirrors recipes-duduclaw/duduclaw-firstboot/files/
+# duduclaw-firstboot-repart.service's own established shape for exactly
+# the same reason (a unit meant to run BEFORE local-fs-pre.target must
+# not carry DefaultDependencies=yes's own implicit After=sysinit.target-
+# class wiring, which would conflict with running this early). After=
+# that SAME repart service (ordering, not a hard Requires= — a device
+# that shipped without the A/B repart chain for some reason should not
+# have TPM unlock silently refuse to run) so the partition is at its
+# FINAL grown size (real hardware) before this script formats/opens it.
+cat > "${EARLY_DIR}/duduclaw-data-open.service" <<-UNIT
+	[Unit]
+	Description=DuDuClaw OS /data TPM2+LUKS2 unlock (or first-boot conversion)
+	Documentation=man:systemd-cryptenroll(1) man:systemd-cryptsetup@.service(8)
+	DefaultDependencies=no
+	After=duduclaw-firstboot-repart.service systemd-udevd.service
+	Before=local-fs-pre.target
+
+	[Service]
+	Type=oneshot
+	RemainAfterExit=yes
+	# console mirroring is load-bearing, not debug residue: this unit runs
+	# while journald itself may still be down (its own /var/log bind chain
+	# depends on /data — the very thing this unit exists to provide), so
+	# journal-only output can vanish exactly when this script fails. The
+	# TPM round-1 live incident (exit 1 with zero captured stderr, journal
+	# socket refused) is why both streams mirror to the console.
+	StandardOutput=journal+console
+	StandardError=journal+console
+	ExecStart=/usr/sbin/duduclaw-data-open.sh
+	UNIT
+
+# data.mount — a REGULAR local .mount unit (fstype=ext4, no nofail/
+# x-systemd.wanted-by/x-systemd.required-by option set anywhere), so
+# systemd's own mount.c core logic (NOT this generator, and NOT
+# fstab-generator specifically — verified one-hand from man/
+# systemd.mount.xml's "Implicit Dependencies" section) automatically adds
+# After=local-fs-pre.target + a Before=/pulled-by-Requires= relationship
+# with local-fs.target on its own. Requires=+After= duduclaw-data-open
+# .service is the ONE dependency this script must write explicitly (the
+# whole reason systemd.mount(5) documents `x-systemd.requires=` as a
+# fstab option at all is that ordinary fstab-generated units have no
+# other way to express it — a hand-written unit like this one just states
+# it directly, no x-systemd.* option translation needed).
+cat > "${EARLY_DIR}/data.mount" <<-UNIT
+	[Unit]
+	Description=DuDuClaw OS /data (TPM2+LUKS2 mode)
+	Documentation=man:systemd-cryptsetup@.service(8)
+	Requires=duduclaw-data-open.service
+	After=duduclaw-data-open.service
+
+	[Mount]
+	What=/dev/mapper/duduclaw-data
+	Where=/data
+	Type=ext4
+	Options=defaults,x-systemd.growfs
+	UNIT

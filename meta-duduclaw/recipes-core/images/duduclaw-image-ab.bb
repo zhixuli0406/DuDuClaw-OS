@@ -47,6 +47,18 @@ inherit duduclaw-ab-dualsign-uki
 # requirement here).
 inherit duduclaw-verity
 
+# Trust chain P1 wave TPM (2026-09-02): TPM2-bound LUKS2 /data unlock --
+# see classes/duduclaw-tpm.bbclass's own header. Unconditionally
+# inherited, same "self-gated, off = byte-identical" convention as every
+# class above -- gated on DUDUCLAW_TPM_ENABLE, defines no do_* tasks and
+# touches no wks/partition layout at all (unlike duduclaw-verity), so
+# inherit ORDER relative to the classes above is not load-bearing the way
+# duduclaw-verity-after-duduclaw-ab-dualsign-uki is; placed last because
+# it is the last-sequenced pillar in this design's own §5.1 dependency
+# chain (SB -> verity -> TPM), matching declaration order to that chain
+# for readability, same reasoning duduclaw-verity's own comment gives.
+inherit duduclaw-tpm
+
 WKS_FILE = "duduclaw-ab-bootdisk.wks.in"
 
 # Y9-2 (2026-08-27): duduclaw-image.bb -> duduclaw-image-minimal.bb's

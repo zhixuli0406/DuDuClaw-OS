@@ -1,0 +1,140 @@
+# kas build config overlay — TPM2+LUKS2 /data unlock, trust chain P1 wave
+# TPM (2026-09-02, commercial/docs/DESIGN-os-trust-chain-2026-09.md §4).
+#
+# Composes on top of BOTH the base machine config AND sb-signing.yml, in
+# THAT order (kas's own colon-syntax merge, left-to-right, later files
+# extending/overriding earlier ones for the same key) — this design's own
+# §5.1 dependency chain is SB → verity → TPM, and sb-signing.yml is
+# already the combined SB+verity test line (DUDUCLAW_VERITY_ENABLE=1
+# alongside UKI_SB_KEY/UKI_SB_CERT — see that file's own header for why
+# the two are tested together). Composing THIS overlay without
+# sb-signing.yml first would set DUDUCLAW_TPM_ENABLE=1 with
+# DUDUCLAW_VERITY_ENABLE unset — classes/duduclaw-tpm.bbclass's own
+# generator STILL degrades safely in that case (no /etc/fstab line to
+# override differently — the non-verity build gets ITS OWN plain
+# wic-derived /data line, and this wave's generator/service still decide
+# purely from runtime TPM+blkid state, same as always), but it is an
+# UNTESTED combination this wave's own design never targets — always
+# compose sb-signing.yml first in practice.
+#
+# --- Usage -----------------------------------------------------------
+#
+#   kas build meta-duduclaw/kas/duduclaw-os.yml:meta-duduclaw/kas/sb-signing.yml:meta-duduclaw/kas/tpm-luks.yml
+#
+# or, for real hardware:
+#
+#   kas build meta-duduclaw/kas/duduclaw-os-genericx86-64.yml:meta-duduclaw/kas/sb-signing.yml:meta-duduclaw/kas/tpm-luks.yml
+#
+# --- meta-security / meta-tpm layer pin (one-hand verified, 2026-09-02,
+# via git.yoctoproject.org's cgit — HTTPS `curl`, NOT `git ls-remote`:
+# this sandboxed session's `git ls-remote https://git.yoctoproject.org/
+# meta-security` returned nothing usable over the plain git protocol,
+# HTTPS cgit browsing worked) --------------------------------------------
+#
+# tpm2-tss/tpm2-tools are genuinely NOT in this project's base layer set
+# (openembedded-core / meta-openembedded / meta-virtualization /
+# meta-yocto — confirmed via `find . -iname "tpm2-tss*.bb"` across every
+# currently checked-out layer: zero hits) even though
+# recipes-core/systemd/systemd_%.bbappend's own `PACKAGECONFIG[tpm2]`
+# DEPENDS on a recipe literally named `tpm2-tss` — see that bbappend's own
+# header and classes/duduclaw-tpm.bbclass's own "LAYER AVAILABILITY"
+# section for the full citation trail; both are DUDUCLAW_TPM_ENABLE-gated
+# so a build WITHOUT this overlay never even attempts to resolve either.
+#
+# `meta-security` (git.yoctoproject.org/meta-security) HAS a `wrynose`
+# branch — checked directly via cgit's own branch selector at
+# https://git.yoctoproject.org/meta-security/ (not assumed present the
+# way meta-duduclaw/kas/duduclaw-os.yml's own meta-virtualization pin
+# comment already flags as a real, sometimes-false, assumption for
+# lower-traffic Yocto layers). That branch's own `meta-tpm/conf/
+# layer.conf`, read directly at the exact pinned commit below, declares:
+#
+#   LAYERSERIES_COMPAT_tpm-layer = "wrynose"
+#   LAYERDEPENDS_tpm-layer = "core openembedded-layer meta-python"
+#
+# An EXACT generation match with this project's own oe-core/meta-yocto
+# pin (same verification standard duduclaw-os.yml's own meta-virtualization
+# addition already established), and all three LAYERDEPENDS entries
+# (core=oe-core, openembedded-layer=meta-oe, meta-python) are ALREADY
+# present in this project's base layer set (meta-oe since Y3-2,
+# meta-python since Y7-3) — no cascading new repo/commit pin needed
+# beyond meta-security itself.
+#
+# `meta-tpm/recipes-tpm2/` (same exact pinned commit, same cgit walk)
+# confirmed to contain `tpm2-tss_4.1.3.bb` and `tpm2-tools_5.7.bb` —
+# resolving both systemd's own `tpm2` PACKAGECONFIG DEPENDS and classes/
+# duduclaw-tpm.bbclass's own `tpm2-tools` IMAGE_INSTALL addition from this
+# ONE new layer. Only `meta-tpm` is pinned below — NOT meta-security's
+# other sublayers (meta-integrity/meta-parsec/meta-hardening/etc.), this
+# wave has no use for any of them (same "narrow blast radius" discipline
+# duduclaw-os.yml's own meta-openembedded pin already applies, pulling
+# only meta-oe/meta-multimedia/meta-python/meta-networking/
+# meta-filesystems out of that much larger monorepo, never the whole
+# thing).
+#
+#   meta-security  c0d1d6200e7a84c39fb940cb1f22aad4b0b3d808  (wrynose
+#     branch HEAD as of 2026-09-02, "tpm2-pkcs11: upgrade 1.9.1 -> 1.9.2",
+#     Peter Marko, 2026-05-25 — cross-checked two ways, same standard
+#     duduclaw-os.yml's own meta-openembedded pin already used: cgit
+#     `/commit/?id=...` returned HTTP 200 with the expected commit
+#     SUBJECT text — not just a bare 200 that could be a 404-styled error
+#     page — AND `meta-tpm/recipes-tpm2/{tpm2-tools,tpm2-tss,
+#     tpm2-tss-engine}` were independently fetched at this SAME `?id=`
+#     pin, not just at a floating `?h=wrynose` that could have moved
+#     between the two checks).
+#
+# HONESTLY UNVERIFIED (no bitbake/kas run in this reconnaissance session
+# — this wave's own task brief: "絕不跑 bitbake/kas"): whether
+# `bitbake systemd`/`bitbake tpm2-tools` actually BUILD cleanly against
+# this pin (recipe EXISTENCE was confirmed via cgit tree listing; DEPENDS
+# chains beyond systemd's own `tpm2-tss` reference — e.g. whatever
+# tpm2-tss_4.1.3.bb itself further depends on — were NOT independently
+# walked this round). The next real `kas build` with this overlay
+# composed is the first actual build-level verification.
+header:
+  version: 14
+
+repos:
+  meta-security:
+    url: https://git.yoctoproject.org/meta-security
+    commit: c0d1d6200e7a84c39fb940cb1f22aad4b0b3d808
+    layers:
+      meta-tpm:
+      # Every OTHER meta-security sublayer (meta-integrity, meta-parsec,
+      # meta-hardening, meta-token, ...) is deliberately left un-added —
+      # kas only enables layers explicitly listed under `layers:`, so
+      # having them present on disk (same checkout) does not put them in
+      # bblayers.conf. Narrow blast radius, matching this project's own
+      # established discipline for every other multi-sublayer repo it
+      # pins (meta-openembedded, meta-yocto).
+
+local_conf_header:
+  tpm-luks: |
+    # DUDUCLAW_TPM_ENABLE (trust chain P1 wave TPM, 2026-09-02 --
+    # DESIGN-os-trust-chain-2026-09.md §4 + 2026-09-02 拍板紀錄) --
+    # opened here, in its own dedicated overlay rather than folded into
+    # sb-signing.yml the way DUDUCLAW_VERITY_ENABLE was folded in one
+    # wave prior: TPM2 hardware availability is a REAL, independent axis
+    # from "does this build sign+verity-protect the boot chain at all"
+    # (a device can meaningfully run SB+verity with no TPM chip at all,
+    # T7's own fail-open path exists precisely for that case) -- keeping
+    # this a separate composable layer lets a kas invocation exercise
+    # SB+verity WITHOUT dragging in the new meta-security/meta-tpm layer
+    # pin (and its own, not-yet-build-verified DEPENDS chain) when a
+    # session has no reason to touch TPM at all. Every consumer of this
+    # variable (recipes-core/systemd/systemd_%.bbappend's own
+    # `cryptsetup tpm2` PACKAGECONFIG addition, classes/duduclaw-tpm
+    # .bbclass's own IMAGE_INSTALL:append) degrades to a complete no-op
+    # when unset -- setting it here does not force TPM support on for any
+    # OTHER kas config that composes without this overlay.
+    DUDUCLAW_TPM_ENABLE = "1"
+
+    # swtpm QEMU harness wiring (`-chardev socket,...-tpmdev
+    # emulator,...-device tpm-tis`, per this wave's own task brief) is
+    # explicitly OUT OF SCOPE for this overlay -- no QEMU-side (runqemu/
+    # QB_*) variables are set here. Per the task brief: "kas overlay
+    # ... 不需 QEMU 側改動——harness 由另一 agent 用 Debian apt swtpm 對
+    # 接". This file only makes the IMAGE buildable with TPM2 support
+    # compiled in and the userspace unlock chain installed; wiring an
+    # actual swtpm device into a `runqemu`/QEMU invocation is that other
+    # session's own deliverable, layered on top of (not into) this file.

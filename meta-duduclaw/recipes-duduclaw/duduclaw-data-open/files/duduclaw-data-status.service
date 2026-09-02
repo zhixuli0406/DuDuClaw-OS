@@ -1,0 +1,36 @@
+# DuDuClaw OS: relay the TPM/LUKS status marker duduclaw-data-open.sh
+# wrote to tmpfs (/run, the only writable place available to it -- it
+# runs BEFORE /data exists) into durable storage once /data is actually
+# mounted.
+#
+# Trust chain P1 wave TPM (2026-09-02 — commercial/docs/
+# DESIGN-os-trust-chain-2026-09.md §4). A STATIC unit (unlike
+# duduclaw-data-open.service/data.mount, which only exist on a boot where
+# duduclaw-data-open-generator decided TPM/LUKS2 is relevant) -- this one
+# is unconditionally installed and enabled whenever
+# recipes-duduclaw/duduclaw-data-open is in the image at all (i.e.
+# whenever DUDUCLAW_TPM_ENABLE=1 -- see classes/duduclaw-tpm.bbclass's own
+# IMAGE_INSTALL:append), but is a fast no-op on a boot where the source
+# marker was never written (the ConditionPathExists guard below) -- same
+# "off/irrelevant = fast no-op" discipline this whole layer follows
+# throughout, not a special case invented for this one unit.
+#
+# Content is intentionally NOT yet consumed by any Rust-side gateway
+# component (os_watch or otherwise) -- this wave's own task brief scope is
+# Yocto-side only; wiring a dashboard/os_watch consumer for this JSON
+# marker, with "無 Linux 外露" wording, is explicitly future work (see
+# duduclaw-data-open.sh's own header comment on the marker's schema).
+[Unit]
+Description=DuDuClaw OS: relay TPM/LUKS status marker into /data
+Documentation=commercial/docs/DESIGN-os-trust-chain-2026-09.md
+After=data.mount
+Requisite=data.mount
+ConditionPathExists=/run/duduclaw-tpm-status.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'mkdir -p /data/duduclaw/system && cp /run/duduclaw-tpm-status.json /data/duduclaw/system/tpm-status.json'
+
+[Install]
+WantedBy=multi-user.target

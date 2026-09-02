@@ -1,0 +1,167 @@
+#!/bin/sh
+# duduclaw-verity — initramfs-framework module: dm-verity root activation
+# (VER-V, 2026-09-02 — commercial/docs/DESIGN-os-trust-chain-2026-09.md §3
+# + 2026-09-02 拍板紀錄 "依賴鏈補記"). See
+# recipes-core/initrdscripts/initramfs-module-duduclaw-verity_1.0.bb for
+# the full contract (INSTALLED filename, RDEPENDS, why the module-name
+# extraction rule forces the installed name to differ from this source
+# file's own name).
+#
+# WHY A HAND-WRITTEN MODULE, NOT systemd-veritysetup-generator: this UKI's
+# initrd is initramfs-framework (plain POSIX shell — see
+# ../../images/core-image-minimal-initramfs.bbappend's own
+# INITRAMFS_SCRIPTS list; no systemd binary reaches this initrd at all),
+# so `systemd.verity_root_data=`/`systemd.verity_root_hash=` have NO
+# consumer here — that vocabulary is systemd-veritysetup-generator's own,
+# and it never runs. This module IS the consumer, over the cmdline
+# vocabulary described below.
+#
+# ORDERING: read
+# openembedded-core/meta/recipes-core/initrdscripts/initramfs-framework/
+# init before writing this — modules are sourced (`. $m`, not exec'd, so
+# plain shell-variable assignments like `bootparam_root=...` below persist
+# into every module sourced AFTER this one, no `export` needed) from
+# `/init.d/*` in plain lexical filename order. This module's own recipe
+# installs it as `/init.d/50-duduclaw_verity` — comfortably after
+# `01-udev` (whose own `udev_run()`, meta/recipes-core/initrdscripts/
+# initramfs-framework/udev, runs `udevadm trigger --action=add &&
+# udevadm settle` before returning — the exact step that populates the
+# /dev/disk/by-partuuid/* symlinks this module depends on) and comfortably
+# before `90-rootfs` (whose own bootparam_root retry loop this module
+# redirects — see the end of duduclaw_verity_run() below). Y16's own
+# core-image-minimal-initramfs.bbappend ships only
+# base+udev+install+install-efi today (rootfs itself arrives via
+# initramfs-framework-base's own RRECOMMENDS, not an explicit
+# INITRAMFS_SCRIPTS entry) — 50 sits clear of every numbered module this
+# framework recipe defines (00/01/09/10/89/90/91/99) regardless of whether
+# a future wave adds any of them.
+#
+# CMDLINE VOCABULARY — NOT freely invented; grepped for existing consumers
+# before choosing anything (see classes/duduclaw-verity.bbclass's own
+# header, "WHY THE UKI CMDLINE VOCABULARY" section, for the full trail):
+#
+#   root=PARTUUID=<uuid>       ALREADY EXISTS — recipes-core/images/
+#                              duduclaw-image-ab.bb's own UKI_CMDLINE/
+#                              UKI_SLOTB_CMDLINE, untouched by this wave.
+#                              This module reads it as dm-verity's own
+#                              DATA device — no separate token for that,
+#                              see duduclaw_verity_run() below.
+#   roothash=<64-hex-sha256>   REUSED from crates/duduclaw-gateway/src/
+#                              uki_patch.rs's own ROOTHASH_TOKEN (already
+#                              consumed there by
+#                              verify_verity_roothash_consistency() and by
+#                              appliance/tools/make-payload.py's
+#                              find_cmdline_roothash() on the Debian/mkosi
+#                              line) — a self-chosen
+#                              `duduclaw_verity_roothash=` would have
+#                              silently broken both of those already-
+#                              shipping consistency checks. Same value on
+#                              both slots (T4 修正案: roothash is
+#                              content-derived, slot-independent).
+#   hashdev=PARTUUID=<uuid>    THE ONE genuinely new token — nothing
+#                              existing names the hash-tree partition.
+#                              root-a-verity's or root-b-verity's own
+#                              PARTUUID, per slot. Kept in the same bare,
+#                              no-prefix style as `roothash=` and the same
+#                              fixed-width `<token>PARTUUID=<36-char>`
+#                              shape `root=` already uses.
+#
+# All baked together at build time by classes/duduclaw-verity.bbclass's
+# do_uki/do_uki_rescue/do_uki_slotb prefuncs (roothash=/hashdev= — root=
+# was already there); read initramfs-framework/init's own cmdline parser
+# before naming `hashdev` specifically — `opt=$(echo $opt | sed -e
+# 'y/.-/__/')` transliterates both '.' and '-' to '_' before the
+# bootparam_ variable is set, so a plain underscore-free single word like
+# "hashdev" sidesteps that translation step entirely (nothing to get
+# wrong).
+#
+# MAPPER DEVICE NAME: "duduclaw-vroot" — matches classes/
+# duduclaw-verity.bbclass's own header ("vroot", the design brief's own
+# suggested name), namespaced with a "duduclaw-" prefix so it can never
+# collide with an operator's own dm-crypt/LVM naming on a maintenance-mode
+# boot (DESIGN-maintenance-mode-2026-08.md's own rescue-target scope,
+# which this module's fail-closed path below can land in via
+# duduclaw-rescue.target — rescue mode boots the SAME verity-protected
+# root-A, see classes/duduclaw-verity.bbclass's own
+# duduclaw_verity_inject_cmdline_rescue).
+
+DUDUCLAW_VROOT_NAME="duduclaw-vroot"
+DUDUCLAW_VROOT_DEV="/dev/mapper/${DUDUCLAW_VROOT_NAME}"
+
+duduclaw_verity_enabled() {
+	# Absent bootparam == verity not requested at build time (the flag
+	# was off — see classes/duduclaw-verity.bbclass's own
+	# DUDUCLAW_VERITY_ENABLE gate) or this is an older cmdline from
+	# before this wave. Either way: skip cleanly, `bootparam_root` keeps
+	# whatever `root=...` already set it to, and 90-rootfs's own mount
+	# logic runs completely unmodified — byte-identical to a kernel that
+	# never loaded this module at all.
+	[ -n "$bootparam_roothash" ]
+}
+
+duduclaw_verity_run() {
+	if [ -z "$bootparam_hashdev" ]; then
+		fatal "duduclaw-verity: roothash= is set but hashdev= is missing -- refusing to activate a partial verity configuration (both are always baked together at build time by classes/duduclaw-verity.bbclass; a partial set means the cmdline was hand-edited or corrupted)."
+	fi
+	if [ -z "$bootparam_root" ]; then
+		fatal "duduclaw-verity: roothash= is set but root= is missing entirely -- there is no data device to verify against. This should be structurally impossible (every UKI this project builds bakes root=PARTUUID=), refusing to boot rather than guess."
+	fi
+
+	# root= is dm-verity's own DATA device reference -- captured BEFORE
+	# this function's own last line overwrites bootparam_root with the
+	# verified mapper device. Same PARTUUID=/UUID=/<literal path>
+	# prefix-stripping shape as initramfs-framework/rootfs's own
+	# rootfs_run() -- mirrored deliberately (see this file's own header)
+	# rather than inventing a second convention for the identical job.
+	data_ref="$bootparam_root"
+	case "$data_ref" in
+		PARTUUID=*) data_dev="/dev/disk/by-partuuid/${data_ref#PARTUUID=}" ;;
+		UUID=*) data_dev="/dev/disk/by-uuid/${data_ref#UUID=}" ;;
+		*) data_dev="$data_ref" ;;
+	esac
+	hash_ref="$bootparam_hashdev"
+	case "$hash_ref" in
+		PARTUUID=*) hash_dev="/dev/disk/by-partuuid/${hash_ref#PARTUUID=}" ;;
+		UUID=*) hash_dev="/dev/disk/by-uuid/${hash_ref#UUID=}" ;;
+		*) hash_dev="$hash_ref" ;;
+	esac
+
+	# Retry loop mirrors rootfs_run()'s own shape (rootdelay/roottimeout
+	# bootparams reused rather than inventing a third pair of tunables --
+	# both loops wait for the exact same class of event: udev finishing
+	# partition device-node creation).
+	delay=${bootparam_rootdelay:-1}
+	timeout=${bootparam_roottimeout:-5}
+	c=0
+	while [ ! -e "$data_dev" ] || [ ! -e "$hash_dev" ]; do
+		if [ $(( c * delay )) -gt $timeout ]; then
+			fatal "duduclaw-verity: timed out waiting for $data_dev / $hash_dev to appear -- refusing to boot into an unverifiable root (fail-closed: deliberate, not a bug -- see this file's own header)."
+		fi
+		debug "duduclaw-verity: waiting for $data_dev / $hash_dev..."
+		sleep $delay
+		c=$(( c + 1 ))
+	done
+
+	info "duduclaw-verity: veritysetup open $data_dev $DUDUCLAW_VROOT_NAME $hash_dev <roothash>"
+	if ! veritysetup open "$data_dev" "$DUDUCLAW_VROOT_NAME" "$hash_dev" "$bootparam_roothash"; then
+		# FAIL-CLOSED -- the entire point of this wave. Do NOT fall back
+		# to mounting $data_dev in the clear. bootparam_root is left
+		# exactly as the kernel cmdline set it
+		# (still "PARTUUID=<uuid>", a value 90-rootfs's own resolution
+		# would happily mount in the clear if this function returned
+		# normally here -- so the fatal() below is the only thing
+		# standing between a failed verification and an unverified
+		# mount, not a redundant belt-and-braces check).
+		fatal "duduclaw-verity: veritysetup open failed for data=$data_dev hash=$hash_dev -- root content does not match the signed roothash (tampering, corruption, or a stale/rolled-back hash tree). Refusing to boot into unverified root."
+	fi
+
+	# initramfs-framework/rootfs's own rootfs_run() (read in full before
+	# writing this) takes bootparam_root AS-IS when it is a plain path --
+	# none of its UUID=/PARTUUID=/PARTLABEL=/LABEL= rewrite branches fire
+	# for a literal /dev/mapper/... value, so it just does
+	# `[ -e "$bootparam_root" ]` then `mount ... "$bootparam_root"
+	# $ROOTFS_DIR`. Redirecting it here, ONLY after a successful
+	# veritysetup open above, is the ENTIRE integration point with that
+	# existing, unmodified module.
+	bootparam_root="$DUDUCLAW_VROOT_DEV"
+}

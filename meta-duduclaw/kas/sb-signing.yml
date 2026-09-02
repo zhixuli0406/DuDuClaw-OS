@@ -93,6 +93,27 @@ local_conf_header:
     # rather than one size split by convention).
     DUDUCLAW_SB_ENROLL_KEYDIR = "/workspace/sb-keys"
 
+    # DUDUCLAW_VERITY_ENABLE (VER-V, 2026-09-02 -- DESIGN-os-trust-chain-
+    # 2026-09.md §3 + 2026-09-02 拍板紀錄) -- opened HERE rather than a
+    # separate verity-only overlay, per this wave's own task brief
+    # ("SB+verity 一體測試線"): dm-verity's own build-time hash-tree
+    # production feeds a roothash into a Secure-Boot-signed UKI cmdline
+    # (classes/duduclaw-verity.bbclass's own prefuncs write directly into
+    # UKI_CMDLINE/UKI_RESCUE_CMDLINE/UKI_SLOTB_CMDLINE, the SAME variables
+    # UKI_SB_KEY/UKI_SB_CERT above cause to actually get signed) -- testing
+    # verity WITHOUT SB signing would exercise a configuration this
+    # project never intends to ship (an unsigned UKI whose cmdline can
+    # still be tampered with on the device, defeating the entire point of
+    # baking a trusted roothash into it in the first place), and testing
+    # SB WITHOUT verity leaves the "does dm-verity survive real UKI
+    # signing" question — the actual open question T4's own 2026-09-02
+    # 修正案 exists because of — permanently unexercised. Every consumer of
+    # this variable degrades to a complete no-op when unset (see
+    # classes/duduclaw-verity.bbclass's own header for the full "off ==
+    # byte-identical" contract) -- setting it here does not force verity
+    # on for any OTHER kas config that composes without this overlay.
+    DUDUCLAW_VERITY_ENABLE = "1"
+
     # ovmf (QEMU's own OVMF/edk2 UEFI firmware, recipes-core/ovmf/ovmf_git.bb)
     # only builds+deploys the `ovmf.secboot.*` firmware variant used to test
     # this whole chain under QEMU when PACKAGECONFIG[secureboot] is on --

@@ -85,7 +85,7 @@ bootloader --ptable gpt --timeout=5
 # `do_image_wic` run during this ticket, not assumed). That is fine here:
 # `--overhead-factor` only mattered for wic's OWN auto-sizing math, which
 # `--fixed-size` replaces outright.
-part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label boot --active --align 1024 --use-uuid --part-name="ESP" --part-type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B --fixed-size ${DUDUCLAW_AB_ESP_SIZE_MB}
+part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label boot --active --align 1024 --use-uuid --uuid="${DUDUCLAW_AB_ESP_PARTUUID}" --part-name="ESP" --part-type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B --fixed-size ${DUDUCLAW_AB_ESP_SIZE_MB}
 
 # p2: root-A — the only partition with real content at build time.
 # `--part-name` (NOT `--label`) is the field that actually lands in the raw
@@ -171,9 +171,57 @@ part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label 
 # see p2's own comment two paragraphs up and DESIGN-ab-update-rollback-
 # 2026-08.md §4.2's "Not a boot-selection input any more" finding on the
 # Debian line, which applies identically here).
-part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-path boot/ --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DISTRO_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
+#
+# --source ${DUDUCLAW_AB_ROOTA_WIC_SOURCE} (VER-V, 2026-09-02): factored
+# out of a hard-coded `--source rootfs --exclude-path boot/` into a
+# variable — classes/duduclaw-ab-partflags.bbclass's own default for
+# DUDUCLAW_AB_ROOTA_WIC_SOURCE is that exact literal string, so a build
+# that never sets DUDUCLAW_VERITY_ENABLE gets a byte-identical expanded
+# wks to before this change. When DUDUCLAW_VERITY_ENABLE=1,
+# classes/duduclaw-verity.bbclass overrides this variable to
+# `rawcopy --sourceparams="file=<ext4 image>"`, where `<ext4 image>` is a
+# COPY of oe-core's own `do_image_ext4` output (IMAGE_FSTYPES:append=
+# " ext4" in that class) — root-A's content then comes from a file that
+# class ALSO feeds into `veritysetup format` at build time, so what gets
+# hashed and what wic actually writes into this partition are the exact
+# same bytes by construction (a literal file copy + a plain read, never a
+# second independent `mkfs.ext4` invocation that could produce different
+# bytes for the same logical content — see that class's own header,
+# "REFACTORED" section, for why the original design — a hand-rolled
+# `mkfs.ext4 -d` under `fakeroot` — was abandoned after real bake failures
+# and replaced with reusing oe-core's own already-correct mechanism).
+#
+# ACCEPTED TRADE-OFF (classes/duduclaw-verity.bbclass's own header has the
+# full writeup): `do_image_ext4` has no `--exclude-path boot/` equivalent,
+# so when DUDUCLAW_VERITY_ENABLE=1 this partition's content — UNLIKE the
+# plain `rootfs`-sourced default above — carries whatever
+# `${IMAGE_ROOTFS}/boot` holds (kernel image, initramfs, etc.) instead of
+# an empty placeholder directory. Harmless: /boot is never read from
+# root-A at runtime (the ESP, a separate GPT partition, is what
+# systemd-boot/the UKI actually boot from), only wasted space, well
+# inside this slot's own multi-GB budget (DUDUCLAW_AB_SLOT_SIZE_MB).
+part / --source ${DUDUCLAW_AB_ROOTA_WIC_SOURCE} --fstype=ext4 ${DUDUCLAW_AB_ROOTA_LABEL_OPT} --align 1024 --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DISTRO_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
 
-# p3: root-B — the reserved, empty update target. `_empty` is the ONE
+# p3 (VER-V, 2026-09-02): root-a-verity — the hash tree covering root-A's
+# own content, only present when DUDUCLAW_VERITY_ENABLE=1. Blank line
+# (wic tolerates blank lines in a kickstart file; no partition number gets
+# consumed) when the variable is unset — see
+# classes/duduclaw-ab-partflags.bbclass's own comment on
+# DUDUCLAW_AB_ROOTA_VERITY_WKS_LINE and
+# classes/duduclaw-verity.bbclass's header for the full contract, including
+# why the whole `part ...` line is built as one Python-formatted string
+# rather than composed from several nested `${VAR}` references the way
+# every other partition line in this file is.
+${DUDUCLAW_AB_ROOTA_VERITY_WKS_LINE}
+
+# root-B — the reserved, empty update target. Partition number 3 when
+# DUDUCLAW_VERITY_ENABLE is unset (unchanged from before VER-V), 4 when
+# it is set to "1" (root-a-verity, immediately above, becomes the new
+# partition 3 — see classes/duduclaw-ab-partflags.bbclass's own comment on
+# DUDUCLAW_AB_ROOTB_PARTNUM for the full renumbering contract; this
+# comment block itself, and every partition-NUMBER reference inside it
+# below, predates VER-V and is being kept accurate rather than rewritten
+# wholesale). `_empty` is the ONE
 # string systemd-sysupdate's `Type=partition` target recognises as "free to
 # write into" (sysupdate.d(5) — this is not a DuDuClaw convention, it is the
 # literal string upstream's own partition-target code matches on), and it
@@ -199,8 +247,9 @@ part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-pat
 # in wic's kickstart syntax at all (confirmed: `ksparser.py`'s `part`
 # argument list has no equivalent of mkosi.repart's `Flags=`/`NoAuto=`/
 # `ReadOnly=`/`GrowFileSystem=`) — set as a post-`do_image_wic` step by
-# duduclaw-ab-partflags.bbclass instead, KEYED BY PARTITION NUMBER (3), not
-# by name or label, so this field swap does not affect it (confirmed by
+# duduclaw-ab-partflags.bbclass instead, KEYED BY PARTITION NUMBER
+# (${DUDUCLAW_AB_ROOTB_PARTNUM} — 3 or 4, see this block's own opening
+# paragraph above), not by name or label, so this field swap does not affect it (confirmed by
 # reading that bbclass — it never references either string). Until that
 # post-processing step runs, this partition is indistinguishable from an
 # ordinary auto-discoverable root partition, which would make
@@ -229,9 +278,38 @@ part / --source rootfs --fstype=ext4 --label "root-a" --align 1024 --exclude-pat
 # for root-A.
 part --fstype=ext4 --label "root-b" --align 1024 --part-name="_empty" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB} --no-fstab-update --uuid="${DUDUCLAW_AB_ROOTB_PARTUUID}"
 
-# p4: /data — update staging + gateway state, grows to fill whatever is left
+# root-b-verity (VER-V, 2026-09-02): root-B's own hash-tree twin, the
+# same "reserved, empty until an update lands" role root-B itself has —
+# root-B carries no real content at factory-build time (it is the `_empty`
+# reserved slot above), so there is nothing to hash into a real tree yet
+# either. Blank when DUDUCLAW_VERITY_ENABLE is unset, same mechanism as
+# root-a-verity above (see that placeholder's own comment) — when set,
+# classes/duduclaw-verity.bbclass fills this in as an EMPTY, `_empty`-named
+# ext4 partition (no `--source` clause at all, matching root-B's own
+# shape one line up), NOT a real hash tree. `_empty` is safe to reuse
+# verbatim on this partition despite root-B ALSO using it: sysupdate's
+# `[Target] MatchPartitionType=` (see the new
+# recipes-duduclaw/duduclaw-ab-update/files/15-duduclaw-root-verity.transfer)
+# filters by partition TYPE GUID first — root (SD_GPT_ROOT_X86_64) vs.
+# root-verity (SD_GPT_ROOT_X86_64_VERITY) — so the two `_empty`-named
+# partitions are never ambiguous to sysupdate even though they share a
+# literal GPT Name string. (The task brief that seeded this class
+# tentatively suggested a distinguishing name, "_verity_empty" — checked
+# against this exact file's own root-B comment two blocks up, which
+# already establishes, with citation, that `_empty` must be the LITERAL
+# exact string upstream's own partition-target code matches on, not a
+# freely-chosen pattern; `"_verity_empty"` would silently never match and
+# leave this partition permanently un-writable by sysupdate. Corrected
+# here rather than carried through uncritically.)
+${DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE}
+
+# /data — update staging + gateway state, grows to fill whatever is left
 # of the real disk (GPT attribute bit 59 / GrowFileSystem, same
-# post-processing mechanism as p3's NoAuto/ReadOnly — see the bbclass).
+# post-processing mechanism as root-B's NoAuto/ReadOnly — see the
+# bbclass). Partition number 4 when DUDUCLAW_VERITY_ENABLE is unset
+# (unchanged from before VER-V), 6 when it is set to "1" — see
+# classes/duduclaw-ab-partflags.bbclass's own DUDUCLAW_AB_DATA_PARTNUM
+# comment.
 # Setting the bit alone does NOT make growth happen automatically on real
 # hardware with a bigger disk than this factory image: that requires
 # systemd-repart to actually run against a `repart.d/` drop-in on the
@@ -294,4 +372,4 @@ part --fstype=ext4 --label "root-b" --align 1024 --part-name="_empty" --part-typ
 # that does, and without it this line's own GrowFileSystem bit (set below by
 # duduclaw-ab-partflags.bbclass) would silently do nothing once /data
 # actually starts mounting.
-part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --fsoptions=defaults,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}
+part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --uuid="${DUDUCLAW_AB_DATA_PARTUUID}" --fsoptions=defaults,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}

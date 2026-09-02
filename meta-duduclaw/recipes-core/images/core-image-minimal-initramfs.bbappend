@@ -47,3 +47,22 @@ INITRAMFS_SCRIPTS = "\
     initramfs-module-install \
     initramfs-module-install-efi \
 "
+
+# --- Trust chain P1 dm-verity (VER-V, 2026-09-02) -----------------------
+# recipes-core/initrdscripts/initramfs-module-duduclaw-verity_1.0.bb only
+# when DUDUCLAW_VERITY_ENABLE=1 -- off (unset), INITRAMFS_SCRIPTS stays
+# the exact four-entry list above, byte-identical to before this wave
+# (this bbappend's own initramfs cpio contents, and therefore this
+# recipe's own sstate signature, are completely unaffected on a build that
+# never sets the flag). classes/duduclaw-verity.bbclass's own header
+# explains why nothing ELSE in this wave can be made conditional this
+# cleanly (a wks partition line, a kernel .cfg) -- this one genuinely can,
+# because INITRAMFS_SCRIPTS is a plain package list with no equivalent of
+# a signed-artifact ordering constraint standing in the way.
+#
+# Positioned after 01-udev in the resulting /init.d/ (this module's own
+# recipe installs it as 50-duduclaw_verity) and before whichever module
+# actually mounts root -- see that module's own do_install comment for why
+# the INSTALLED name differs from its SOURCE filename (a real, load-
+# bearing correctness requirement, not a style choice).
+INITRAMFS_SCRIPTS:append = "${@ ' initramfs-module-duduclaw-verity' if d.getVar('DUDUCLAW_VERITY_ENABLE') == '1' else ''}"

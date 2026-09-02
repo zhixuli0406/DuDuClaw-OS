@@ -24,6 +24,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://10-duduclaw-root.transfer \
     file://20-duduclaw-uki.transfer \
+    file://15-duduclaw-root-verity.transfer \
     file://duduclaw-health-check.service \
     file://duduclaw-health-check.sh \
     file://10-ab-home.conf \
@@ -37,6 +38,16 @@ do_install() {
     install -d ${D}${sysconfdir}/sysupdate.d
     install -m 0644 ${UNPACKDIR}/10-duduclaw-root.transfer ${D}${sysconfdir}/sysupdate.d/
     install -m 0644 ${UNPACKDIR}/20-duduclaw-uki.transfer ${D}${sysconfdir}/sysupdate.d/
+    # VER-V (2026-09-02): only when the flag that actually produces a
+    # root-verity partition/payload is on -- see
+    # 15-duduclaw-root-verity.transfer's own header for the full "off =
+    # byte-identical /etc/sysupdate.d/ listing" reasoning. SRC_URI above
+    # still always fetches the file (fetching costs nothing and keeps this
+    # recipe's do_fetch/do_unpack task signatures independent of the
+    # flag); only its INSTALLATION is conditional.
+    if [ "${DUDUCLAW_VERITY_ENABLE}" = "1" ]; then
+        install -m 0644 ${UNPACKDIR}/15-duduclaw-root-verity.transfer ${D}${sysconfdir}/sysupdate.d/
+    fi
 
     install -d ${D}/usr/local/sbin
     install -m 0755 ${UNPACKDIR}/duduclaw-health-check.sh ${D}/usr/local/sbin/duduclaw-health-check.sh
@@ -61,6 +72,16 @@ FILES:${PN} += " \
     ${systemd_unitdir}/system/duduclaw-health-check.service \
     ${systemd_unitdir}/system/duduclaw-gateway.service.d/10-ab-home.conf \
 "
+
+# VER-V (2026-09-02): FILES var, not do_install's own install path,
+# because a file listed by do_install but omitted from every package's
+# FILES would fail do_package's own "installed-but-not-packaged" QA check
+# -- conditional packaging needs BOTH conditional install (above) AND
+# conditional FILES membership, matching this project's convention
+# elsewhere (e.g. classes/duduclaw-secure-boot.bbclass's own
+# IMAGE_EFI_BOOT_FILES:append being conditional on the identical kind of
+# "did the matching install step actually run" question).
+FILES:${PN} += "${@ ' ${sysconfdir}/sysupdate.d/15-duduclaw-root-verity.transfer' if d.getVar('DUDUCLAW_VERITY_ENABLE') == '1' else ''}"
 
 # bash: duduclaw-health-check.sh uses bash-only syntax ([[ ]], (( )),
 # process substitution-free but still non-POSIX enough to need real bash,

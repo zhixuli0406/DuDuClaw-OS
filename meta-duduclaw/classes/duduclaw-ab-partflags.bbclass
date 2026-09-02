@@ -143,22 +143,64 @@ DUDUCLAW_AB_ROOTA_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000a"
 # are visually adjacent and impossible to transpose by accident.
 DUDUCLAW_AB_ROOTB_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000b"
 
-# RESERVED, NOT YET IMPLEMENTED (dm-verity wave -- DESIGN-os-trust-chain-
-# 2026-09.md §3.1/§3.2, P1): once root-a-verity/root-b-verity hash-tree
-# partitions exist, their PARTUUIDs will need the same build-time-constant
-# treatment as the two root slots above, for the identical reason --
-# systemd.verity_root_data=/systemd.verity_root_hash= are device-path UUID
-# tokens baked into a signed UKI cmdline, so they cannot be a wic-random
-# value either. Naming continues the same suffix sequence deliberately (a
-# reader diffing the four constants side by side should see they are one
-# family, not four unrelated UUIDs): DUDUCLAW_AB_ROOTA_VERITY_PARTUUID would
-# be "...00c", DUDUCLAW_AB_ROOTB_VERITY_PARTUUID "...00d". Comment-only on
-# purpose -- this wave (T4) does not touch verity at all; see the design
-# doc's own §8 拍板 T4 row ("P1 延伸 uki_patch.rs" was decided independently
-# of this SB-compatibility fix, and P2 root-verity-sig remains a v3
-# candidate).
-#DUDUCLAW_AB_ROOTA_VERITY_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000c"
-#DUDUCLAW_AB_ROOTB_VERITY_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000d"
+# REALIZED (VER-V, 2026-09-02 -- DESIGN-os-trust-chain-2026-09.md §3.1/
+# §3.2 P1 + 2026-09-02 拍板紀錄): the two hash-tree partitions' PARTUUIDs,
+# same build-time-constant treatment as the two root slots above and for
+# the identical underlying reason (device-path UUID tokens baked into a
+# Secure-Boot-signed UKI cmdline cannot be a wic-random value). Suffix
+# sequence continues deliberately from root-A/root-B's own "...00a"/
+# "...00b" (a reader diffing all four constants side by side should see
+# one family, not four unrelated UUIDs) -- exactly the values this file's
+# own comment reserved in the T4 wave, now defined for real. Consumed by
+# files/wic/duduclaw-ab-bootdisk.wks.in's conditional
+# ${DUDUCLAW_AB_ROOTA_VERITY_WKS_LINE}/${DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE}
+# (see classes/duduclaw-verity.bbclass, which is what actually turns these
+# two lines from blank into real `part` lines when DUDUCLAW_VERITY_ENABLE=1
+# -- unconditional `?=` defaults here so a build that never inherits that
+# class still has these two constants resolve to *something* stable if
+# ever queried, matching this file's own root-A/root-B precedent of always
+# defining the constant even when a given build doesn't dereference it).
+#
+# NOTE ON CMDLINE VOCABULARY: despite the reasoning trail above (written
+# during the T4 wave, before dm-verity's own initrd shape was decided),
+# the actual cmdline token root-a-verity's/root-b-verity's own PARTUUID
+# gets baked into is NOT systemd.verity_root_hash= -- the 2026-09-02
+# "依賴鏈補記" decision found this UKI's initrd is initramfs-framework (no
+# systemd binary reaches it at all), so that systemd-generator-only token
+# name has zero consumer here. It is also NOT a fully self-chosen name:
+# classes/duduclaw-verity.bbclass's own header ("WHY THE UKI CMDLINE
+# VOCABULARY") found `root=PARTUUID=` and `roothash=` already consumed by
+# crates/duduclaw-gateway/src/uki_patch.rs + os_update.rs (and
+# appliance/tools/make-payload.py on the Debian line) before this wave
+# ever touched the wks, and reused both verbatim -- only ONE genuinely new
+# token was needed for the hash-tree partition these two constants feed:
+# `hashdev=PARTUUID=<uuid>` (see recipes-core/initrdscripts/
+# initramfs-module-duduclaw-verity_1.0.bb's own header for the full
+# writeup). The UUID VALUES and the "why build-time-constant" reasoning
+# are unaffected either way -- only the cmdline key name differs from what
+# was anticipated when this comment was first written.
+DUDUCLAW_AB_ROOTA_VERITY_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000c"
+DUDUCLAW_AB_ROOTB_VERITY_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000d"
+
+# ESP (p1) and /data (p6) join the fixed-PARTUUID doctrine (VER-V round-8,
+# 2026-09-02 — real QEMU evidence, not tidiness): with root-A switched to
+# wic's rawcopy plugin, wic's own fstab-injection step is bypassed
+# entirely (partition.py only rewrites /etc/fstab inside partitions built
+# by the `rootfs` source plugin; a rawcopy'd prebuilt ext4 is never
+# touched), so the booted verity image's fstab carried NO /boot and NO
+# /data line at all — "systemd-journald.socket: Failed to queue service
+# startup job: Unit data.mount not found", verbatim from the failed boot,
+# and with it the whole /data bind chain (journal, gateway home, update
+# staging) silently gone. The fix ships those two fstab lines STATICALLY
+# inside the hashed rootfs (duduclaw-verity.bbclass's own
+# ROOTFS_POSTPROCESS hook), which is only possible if the mount sources
+# are build-time constants — same "trade global GPT uniqueness for a
+# deterministic build" call root-A made in Y9-2 and root-B/verity made
+# this wave. Fixed unconditionally (not verity-gated): nothing ever
+# depended on p1/p6 randomness, and one PARTUUID scheme across every build
+# mode beats two.
+DUDUCLAW_AB_ESP_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000e"
+DUDUCLAW_AB_DATA_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000f"
 
 # Partition numbers are 1-indexed positions in
 # files/wic/duduclaw-ab-bootdisk.wks.in's declaration order (GPT partition
@@ -170,8 +212,79 @@ DUDUCLAW_AB_ROOTB_PARTUUID ?= "dedec1a0-0000-4000-8000-00000000000b"
 # reorders partitions; NOT auto-derived from the wks file (that would need
 # actually parsing it here, which is more machinery than this narrow fix
 # needs).
+# PARTITION NUMBERS (VER-V, 2026-09-02): root-B/data's numbers are NOT
+# fixed constants any more -- they now depend on whether the two verity
+# hash-tree partitions actually exist in the finished wks, which in turn
+# depends on DUDUCLAW_VERITY_ENABLE. Partition numbers on a wic-built disk
+# are assigned purely by the ORDER of non-blank `part` lines the finished
+# wks template contains (see files/wic/duduclaw-ab-bootdisk.wks.in's own
+# header for the direct.py citation on this) -- so when
+# ${DUDUCLAW_AB_ROOTA_VERITY_WKS_LINE}/${DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE}
+# below are blank (the DUDUCLAW_VERITY_ENABLE-unset default), the wks
+# collapses back to EXACTLY today's 4-partition text and root-B/data are
+# still partitions 3/4 -- these two `?=` defaults are that exact,
+# unchanged value. classes/duduclaw-verity.bbclass's own anonymous python
+# block overrides both (to 4/6) with a strong `=` ONLY when
+# DUDUCLAW_VERITY_ENABLE=1, at which point root-a-verity becomes partition
+# 3 (between root-A and root-B) and root-b-verity becomes partition 5
+# (between root-B and data) -- see that class's header for the full
+# six-partition contract (ESP/root-A/root-a-verity/root-B/root-b-verity/
+# data).
 DUDUCLAW_AB_ROOTB_PARTNUM ?= "3"
 DUDUCLAW_AB_DATA_PARTNUM ?= "4"
+
+# Root-b-verity's own partition number, ONLY meaningful when
+# DUDUCLAW_VERITY_ENABLE=1 (there is no partition 5 at all otherwise) --
+# consumed by classes/duduclaw-verity.bbclass's own IMAGE_CMD:wic:append()
+# hook (NoAuto+ReadOnly bits, same mechanism this file's own hook below
+# already applies to root-B). Harmless to always define: an sfdisk call
+# against a partition number that does not exist on a given build never
+# runs in the first place, because that hook's own body is itself gated
+# on the same DUDUCLAW_VERITY_ENABLE check.
+DUDUCLAW_AB_ROOTB_VERITY_PARTNUM ?= "5"
+
+# root-A's own `--source` clause (VER-V, 2026-09-02) -- default is
+# BYTE-IDENTICAL to what files/wic/duduclaw-ab-bootdisk.wks.in's p2 line
+# has always hard-coded (`--source rootfs --exclude-path boot/`), now
+# factored out into a variable so classes/duduclaw-verity.bbclass can
+# override it (strong `=`) to `--source rawcopy --sourceparams="file=..."`
+# when DUDUCLAW_VERITY_ENABLE=1 -- see that class's own header for why
+# root-A itself, not just the two new verity partitions, has to switch
+# source mechanisms for dm-verity to be correct at all (byte-identity
+# between what gets hashed at build time and what wic actually writes into
+# the partition is unreachable with two independent `mkfs.ext4`
+# invocations -- rawcopy makes it a literal file copy instead, provably
+# identical by construction).
+DUDUCLAW_AB_ROOTA_WIC_SOURCE ?= "rootfs --exclude-path boot/"
+
+# Cosmetic ext4 label for root-A (p2's own comment above has always called
+# --label "purely cosmetic"). A VARIABLE, not a literal in the wks, because
+# the verity path must set it EMPTY: wic's rawcopy plugin ends
+# do_prepare_partition() with `if part.label:
+# RawCopyPlugin.do_image_label(...)` (read from the pinned wic-native
+# source, plugins/source/rawcopy.py) — a post-copy relabel that rewrites
+# the ext4 superblock (primary + every backup, s_wtime included) INSIDE
+# the partition image AFTER the bytes were hashed by `veritysetup format`.
+# QEMU round-6 live evidence: "device-mapper: verity: data block 0 is
+# corrupted" on every boot, with the deployed hash-source ext4 and the
+# wic p2 content differing in exactly the nine superblock locations. A
+# cosmetic label is not worth a broken root hash; duduclaw-verity.bbclass
+# blanks this when DUDUCLAW_VERITY_ENABLE=1.
+DUDUCLAW_AB_ROOTA_LABEL_OPT ?= "--label \"root-a\""
+
+# The two verity hash-tree partitions' own `part ...` lines, each a WHOLE
+# line of wks kickstart text as a single variable (VER-V, 2026-09-02).
+# Blank by default -- files/wic/duduclaw-ab-bootdisk.wks.in references
+# each of these ALONE on its own line, so an empty value collapses to a
+# blank line (wic's kickstart parser tolerates blank lines; wic never
+# assigns a partition number to a line that produced no `part` directive
+# at all) and the wks is byte-identical to its pre-verity 4-partition
+# shape. classes/duduclaw-verity.bbclass's own anonymous python block
+# builds the real text (fully Python-side string formatting, not nested
+# `${VAR}` expansion, deliberately -- see that class's header for why) and
+# `d.setVar()`s these two variables ONLY when DUDUCLAW_VERITY_ENABLE=1.
+DUDUCLAW_AB_ROOTA_VERITY_WKS_LINE ?= ""
+DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE ?= ""
 
 # Slot / data sizing (megabytes, plain numbers — wic's sizetype("M") parser
 # accepts a bare integer as MB). Defaults are calibrated for the SMALL

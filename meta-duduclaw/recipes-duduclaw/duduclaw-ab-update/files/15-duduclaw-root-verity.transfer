@@ -1,0 +1,121 @@
+# A/B root-verity hash-tree update transfer (systemd-sysupdate) — VER-V
+# (2026-09-02, DESIGN-os-trust-chain-2026-09.md §3.3 + 2026-09-02 拍板
+# 紀錄 "依賴鏈補記"). Sibling of 10-duduclaw-root.transfer/
+# 20-duduclaw-uki.transfer — read both before touching this file; this one
+# re-derives each directive against ITS OWN partition type/content rather
+# than copying either verbatim, per this wave's own task brief
+# ("屬性四指令比照 10-root 重推導非照抄").
+#
+# ONLY INSTALLED WHEN DUDUCLAW_VERITY_ENABLE=1 (see duduclaw-ab-update.bb's
+# own do_install) -- a device built with verity off has no root-verity
+# partition type on disk at all (files/wic/duduclaw-ab-bootdisk.wks.in's
+# two verity `part` lines are blank in that case), so this file would be a
+# pure dead weight (never matches a [Target], never matches a [Source]
+# payload that no release ever produces) if shipped unconditionally --
+# harmless either way, but "off = byte-identical /etc/sysupdate.d/
+# listing" is this wave's own stated discipline, so it is gated exactly
+# like every other piece.
+#
+# ORDER IS THE SAFETY PROPERTY -- same principle
+# 20-duduclaw-uki.transfer's own header already states, re-applied here:
+# filename `15-` sits between `10-`root and `20-`UKI on purpose. The hash
+# tree must be written AFTER the root payload it covers (10-, so there is
+# real content to have hashed) but BEFORE the UKI that carries the
+# matching roothash in its own signed cmdline lands on the ESP and becomes
+# selectable (20- — once a UKI is bootable, this wave's own dm-verity
+# check is the thing standing between "selectable" and "actually trusted";
+# a UKI landing before its own verity partner is fully written would let
+# boot-counting select a kernel whose baked roothash has nothing correct
+# to check against yet).
+#
+# STAGING PATH / integrity model: identical to 10-duduclaw-root.transfer
+# (same /data/duduclaw/updates directory, same "Type=regular-file sources
+# get ZERO sysupdate-level integrity checking — that is
+# crates/duduclaw-gateway/src/os_update.rs's job, minisign-verifying the
+# whole payload bundle before it ever reaches this staging directory"
+# reasoning). Not re-derived here since nothing about it is
+# partition-type-specific.
+[Transfer]
+# %A -- same running-image-version specifier 10-duduclaw-root.transfer's
+# own header cites in full (WS-3/A6, 2026-09-01) -- re-derived, not
+# copied, because it protects a DIFFERENT running slot's content this
+# time: the hash tree matching the CURRENTLY BOOTED root, not the root
+# partition itself. Same underlying os-release IMAGE_VERSION= field either
+# way, so no further derivation needed once that fact is established.
+ProtectVersion=%A
+
+[Source]
+Type=regular-file
+Path=/data/duduclaw/updates
+# %a -- same systemd architecture specifier as both sibling transfers
+# (x86-64 only, this line's own COMPATIBLE_MACHINE in duduclaw-ab-update.bb
+# matches 10-/20-'s). MatchPattern's own suffix
+# (.verity-%a.raw) is the exact contract name
+# classes/duduclaw-verity.bbclass's own DUDUCLAW_VERITY_HASHTREE_FILENAME
+# produces (duduclaw-os_${DISTRO_VERSION}.verity-x86-64.raw) — same file a
+# future release's own do_duduclaw_verity_format task deploys, picked up
+# by appliance/tools/make-payload.py the same way that tooling already
+# picks up the root/UKI payloads (per
+# classes/duduclaw-ab-dualsign-uki.bbclass's own header on that pickup
+# mechanism) — not re-verified in this wave (make-payload.py itself is out
+# of this ticket's own file list, flagged as a follow-up in this wave's
+# own final report, not silently assumed done).
+MatchPattern=duduclaw-os_@v.verity-%a.raw
+
+[Target]
+Type=partition
+Path=auto
+# Matched against the raw GPT partition Name field, same field
+# 10-duduclaw-root.transfer's own header already establishes (wic's
+# `--part-name`, NOT the kickstart `--label` option) -- root-a-verity's
+# `--part-name="duduclaw-verity_${DISTRO_VERSION}"`
+# (classes/duduclaw-verity.bbclass's own anonymous python block) follows
+# the identical version-string-as-name scheme root-A's own GPT name does,
+# for the identical reason: ProtectVersion=%A above needs a real,
+# comparable version string to protect the currently-running hash tree
+# against ever being treated as sysupdate's own free target.
+MatchPattern=duduclaw-verity_@v
+# root-verity, not root -- systemd resolves this generic alias to the
+# machine's native verity partition type
+# (2c7357ed-ebd2-46d9-aec1-23d437ec2bf5, SD_GPT_ROOT_X86_64_VERITY per the
+# UAPI Discoverable Partitions Specification —
+# DESIGN-os-trust-chain-2026-09.md §3.1's own one-hand citation,
+# uapi-group.org) — sysupdate.d(5)'s own native support for this symbolic
+# name (not requiring the literal GUID spelled out here) is the exact fact
+# DESIGN-os-trust-chain-2026-09.md §3.3 already establishes, re-used
+# rather than re-verified.
+#
+# THIS is also what makes root-b-verity's `_empty` GPT name safe to share
+# with root-B's own `_empty` name despite being a literal string
+# collision: MatchPartitionType filters candidates by GUID FIRST, so the
+# two `_empty`-named partitions (one root, one root-verity) are never
+# ambiguous to sysupdate even though `[Target] Path=auto` on this
+# transfer and on 10-duduclaw-root.transfer both scan the SAME disk (see
+# files/wic/duduclaw-ab-bootdisk.wks.in's own root-b-verity comment for
+# the fuller writeup, including the correction against this wave's own
+# task brief's tentative "_verity_empty" suggestion).
+MatchPartitionType=root-verity
+# Same four attributes as 10-duduclaw-root.transfer's own [Target] block,
+# RE-DERIVED for this partition's own actual factory state rather than
+# copied: root-a-verity/root-b-verity carry NEITHER GrowFileSystem NOR
+# ReadOnly-after-write bits at write time (both are fixed-size, matching
+# root-A/root-B's own sizing invariant — DUDUCLAW_AB_VERITY_SIZE_MB is a
+# single shared budget for both slots, same as DUDUCLAW_AB_SLOT_SIZE_MB
+# is for root-A/root-B). PartitionNoAuto=0 clears the NoAuto bit
+# classes/duduclaw-verity.bbclass's own IMAGE_CMD:wic:append() hook sets
+# on the factory-empty root-b-verity slot (GUID:63/60, mirroring
+# duduclaw-ab-partflags.bbclass's own root-B fixup) — once real content
+# lands, the slot must become as directly accessible to the initramfs
+# verity module (files/duduclaw-verity, a plain `[ -e "$hash_dev" ]`
+# existence check, not a udev/systemd auto-mount dependent path) as
+# root-A's own verity partner already is; NoAuto only ever gated
+# gpt-auto/systemd MOUNT discovery, which this partition is never subject
+# to either way (it is opened by `veritysetup open`, never mounted at
+# all), but clearing it keeps this slot's attribute STATE symmetric with
+# root-B's own post-write state rather than leaving one bit inconsistent
+# between the two partitions an update just finished writing together.
+PartitionFlags=0
+PartitionNoAuto=0
+ReadOnly=0
+PartitionGrowFileSystem=0
+InstancesMax=2

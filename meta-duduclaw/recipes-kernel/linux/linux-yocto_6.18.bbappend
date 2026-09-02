@@ -101,3 +101,16 @@ SRC_URI:append = " file://duduclaw-waydroid-net.cfg"
 # duplicated here.
 SRC_URI:append = " file://duduclaw-nftables.cfg"
 SRC_URI:append = " file://duduclaw-lsm.cfg"
+
+# --- Trust chain P1 dm-verity (VER-V, 2026-09-02) -----------------------
+# Unscoped (both machines), same reasoning as every fragment above:
+# CONFIG_MD/BLK_DEV_DM/DM_VERITY/CRYPTO_SHA256 are compiled in
+# unconditionally, exercised only when DUDUCLAW_VERITY_ENABLE=1 bakes the
+# matching cmdline tokens into a UKI (classes/duduclaw-verity.bbclass) —
+# see duduclaw-verity.cfg's own header for the full Kconfig
+# dependency-chain citation and for why THIS one fragment is deliberately
+# NOT gated behind that same variable (a kernel .config can't be made
+# conditional without diverging the kernel build's own sstate signature
+# between verity-on/off builds — a materially bigger form of
+# "conditional" than every other piece of this wave).
+SRC_URI:append = " file://duduclaw-verity.cfg"

@@ -31,6 +31,21 @@ inherit duduclaw-ab-partflags
 # classes/duduclaw-ab-dualsign-uki.bbclass's own header for the full
 # Secure-Boot-compatibility rationale.
 inherit duduclaw-ab-dualsign-uki
+# VER-V (2026-09-02): dm-verity hash-tree production + per-slot UKI
+# cmdline injection -- see classes/duduclaw-verity.bbclass's own header.
+# Unconditionally inherited, same "self-gated, off = byte-identical"
+# convention as duduclaw-ab-dualsign-uki/duduclaw-secure-boot above (both
+# also unconditionally inherited, both also no-ops until their own gate
+# variable is set) -- gated on DUDUCLAW_VERITY_ENABLE, not a new
+# always-on capability. Must come AFTER duduclaw-ab-dualsign-uki in this
+# inherit order: its own do_uki_slotb[prefuncs] reference requires that
+# task to already exist by the time this class's own task-flag edits are
+# applied (bitbake resolves flag references against whatever the FINAL
+# merged recipe looks like regardless of inherit order in practice, but
+# matching dependency-declaration order to dependency-USE order is this
+# layer's own established readability convention, not a functional
+# requirement here).
+inherit duduclaw-verity
 
 WKS_FILE = "duduclaw-ab-bootdisk.wks.in"
 

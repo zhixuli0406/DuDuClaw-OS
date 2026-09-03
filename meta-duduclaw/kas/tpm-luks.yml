@@ -129,6 +129,19 @@ local_conf_header:
     # OTHER kas config that composes without this overlay.
     DUDUCLAW_TPM_ENABLE = "1"
 
+    # OVMF must MEASURE into the TPM, not merely coexist with one (TPM
+    # round-9 root cause, verbatim guest debug evidence): systemd 259's
+    # tpm2 layer reads the LoaderTpm2ActivePcrBanks EFI variable
+    # (recorded at boot from what the FIRMWARE actually extended) and
+    # refuses PCR binding when the firmware measured nothing --
+    # "Firmware reports neither SHA1 nor SHA256 PCR banks, cannot
+    # operate." A raw-capable TPM (tpm2_pcrread worked in the same guest)
+    # is deliberately not enough for systemd: binding secrets to PCRs a
+    # firmware never extends would be security theater. oe-core's ovmf
+    # recipe gates the whole edk2 TPM driver stack behind
+    # PACKAGECONFIG[tpm] (-D TPM_ENABLE=TRUE).
+    PACKAGECONFIG:append:pn-ovmf = " tpm"
+
     # swtpm QEMU harness wiring (`-chardev socket,...-tpmdev
     # emulator,...-device tpm-tis`, per this wave's own task brief) is
     # explicitly OUT OF SCOPE for this overlay -- no QEMU-side (runqemu/

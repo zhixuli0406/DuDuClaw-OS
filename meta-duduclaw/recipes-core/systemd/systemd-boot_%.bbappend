@@ -84,3 +84,23 @@ do_deploy:append() {
         mv "$f.signed" "$f"
     done
 }
+
+
+# --- TPM measurement support in sd-boot/sd-stub (TPM round-10 root cause,
+# 2026-09-03, guest-debug evidence chain) ---------------------------------
+# systemd's main-system tpm2 layer refuses PCR binding when the FIRMWARE/
+# BOOTLOADER measured nothing: it reads LoaderTpm2ActivePcrBanks (written
+# by sd-boot at boot) and bails with "Firmware reports neither SHA1 nor
+# SHA256 PCR banks, cannot operate." Round-9 fixed the OVMF half
+# (PACKAGECONFIG[tpm] in kas/tpm-luks.yml); this fixes the OTHER half:
+# systemd-boot_259.5.bb inherits no PACKAGECONFIG[tpm2] mapping at all
+# (the big table lives in systemd_259.5.bb, NOT the shared systemd.inc),
+# so its meson ran with tpm2 auto-off -- do_configure log verbatim:
+# "Skipping systemd-measure.1 because HAVE_TPM2 ... is false". The
+# mapping is declared here (bbappend-defined PACKAGECONFIG flags are
+# legal, same mechanism systemd_%.bbappend already uses for `sysupdate`)
+# with no extra DEPENDS: the EFI-side measurement code talks the UEFI TCG
+# protocol directly, and the one build-time want (tpm2-tss headers for
+# the shared tree) is only pulled when the flag is on.
+PACKAGECONFIG[tpm2] = "-Dtpm2=enabled,-Dtpm2=disabled,tpm2-tss"
+PACKAGECONFIG:append = "${@ ' tpm2' if d.getVar('DUDUCLAW_TPM_ENABLE') == '1' else ''}"

@@ -75,9 +75,15 @@
 #     this round; systemd-random-seed.service is instead MASKED at image
 #     build time by duduclaw-ro-root.inc's rootfs hook (see that file for
 #     the full reasoning — a bind here would hide the shipped journal
-#     catalog and add another very-early ordering edge). Cross-reboot
-#     entropy-seed persistence is a flagged P1 residual alongside
-#     machine-id stability, not silently dropped.
+#     catalog and add another very-early ordering edge). UPDATE
+#     (2026-09-03, VER-P): cross-reboot entropy-seed persistence — flagged
+#     here as a P1 residual at the time this recipe was written — is now
+#     handled OUTSIDE this recipe entirely, by
+#     recipes-core/initrdscripts/initramfs-module-duduclaw-persist (load,
+#     initrd-side) + recipes-duduclaw/duduclaw-persist-seed (refresh,
+#     main-system-side). See duduclaw-ro-root.inc's own
+#     duduclaw_ro_root_hook() comment for the full writeup; nothing in
+#     THIS recipe changed.
 #   - /etc/machine-id — NOT this recipe's concern at all: oe-core's own
 #     rootfs-postcommands.bbclass::systemd_handle_machine_id() already
 #     ships an EMPTY /etc/machine-id in every systemd image unconditionally
@@ -86,10 +92,14 @@
 #     read-only and an empty file there"), which is precisely what
 #     machine-id(5) requires for systemd's own built-in read-only handling
 #     (a transient bind-mounted ID for that boot only) to activate without
-#     erroring. Cross-reboot machine-id STABILITY (not boot-success) is a
-#     known, separate limitation — see the harness/report for the full
-#     writeup and why it needs initrd-level work out of this recipe-only
-#     ticket's scope.
+#     erroring. UPDATE (2026-09-03, VER-P): cross-reboot machine-id
+#     STABILITY — flagged here as a known, separate limitation at the time
+#     this recipe was written — is now fixed by the SAME
+#     initramfs-module-duduclaw-persist named above (it bind-mounts a
+#     persisted machine-id file onto /etc/machine-id before switch_root,
+#     from inside the initrd — see that module's own header for why an
+#     initrd module, not a recipe-level rootfs hook, was the required
+#     shape). This recipe's own scope is still unaffected.
 #
 # ROLLOUT GATING (per this wave's own instructions, NOT this recipe's own
 # concern): this package is only ever pulled in by

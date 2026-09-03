@@ -60,9 +60,18 @@
 #     already correctly handled by oe-core's own stock behavior with zero
 #     action needed here; see duduclaw-data-binds.bb's own header for the
 #     one-hand evidence (rootfs-postcommands.bbclass::
-#     systemd_handle_machine_id()) and the one known, separately-tracked
-#     residual limitation (cross-reboot machine-id stability, not boot
-#     success).
+#     systemd_handle_machine_id()). Cross-reboot machine-id STABILITY (the
+#     one known residual this bullet used to flag as separately-tracked)
+#     is fixed by recipes-core/initrdscripts/
+#     initramfs-module-duduclaw-persist (VER-P, 2026-09-03) — an initrd
+#     module, not anything in THIS file, since the fix has to land before
+#     PID 1 ever reads /etc/machine-id (see that module's own header for
+#     the full "why an initrd module, not a main-system service"
+#     reasoning). This file's own duduclaw_ro_root_hook() below is
+#     unaffected either way — it still ships the same empty /etc/
+#     machine-id oe-core always did; VER-P's own module is what makes the
+#     TRANSIENT bind systemd performs against that empty file draw from a
+#     persisted value instead of a fresh-random one each boot.
 #
 # `ro` on the kernel cmdline — VERIFIED against this line's own initrd,
 # not assumed from generic Linux convention: this image's UKI carries
@@ -157,8 +166,27 @@ duduclaw_ro_root_hook () {
     # add one more very-early-boot ordering edge for marginal benefit —
     # the 6.18 kernel's own entropy sources (RDRAND + jitter) make the
     # carried-over seed an optimization, not a correctness requirement.
-    # Cross-reboot seed persistence is a flagged P1 residual (same bucket
-    # as cross-reboot machine-id stability), not silently dropped.
+    #
+    # STATUS (2026-09-03, VER-P — 信任鏈 P1 殘項): this mask STAYS exactly
+    # as it was (unmasking systemd-random-seed.service itself was
+    # considered and rejected — its own path is hard-coded to
+    # /var/lib/systemd/random-seed, with no equivalent on a read-only root
+    # short of the same wholesale-bind cost this comment already rejects
+    # above). Cross-reboot seed persistence is no longer silently dropped
+    # though — it is now handled by TWO cooperating pieces OUTSIDE this
+    # file entirely, which together REPLACE what
+    # systemd-random-seed.service would have done: (a)
+    # recipes-core/initrdscripts/initramfs-module-duduclaw-persist loads a
+    # persisted seed from /data/duduclaw/system/random-seed into
+    # /dev/urandom during the initrd, before this masked unit would ever
+    # have had a chance to run anyway; (b)
+    # recipes-duduclaw/duduclaw-persist-seed's own
+    # duduclaw-persist-seed.service refreshes that seed file on /data
+    # (ExecStart at multi-user.target, ExecStop at shutdown) so the NEXT
+    # boot has something new to load. Both pulled in via this same file's
+    # own IMAGE_INSTALL:append below, alongside duduclaw-data-binds — same
+    # rollout gating, same "only duduclaw-image-appliance-test.bb today"
+    # scope.
     ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/systemd-random-seed.service
 }
 ROOTFS_POSTPROCESS_COMMAND += "duduclaw_ro_root_hook; "
@@ -177,7 +205,15 @@ UKI_SLOTB_CMDLINE:append = " ro"
 # `ro` above actually in effect — see that recipe's own header for the
 # full evidence trail per bind target (journal/iwd/docker/waydroid) and
 # what was deliberately left out of it (flatpak-verify fixed directly in
-# its own recipe; /var/lib/systemd and machine-id cross-reboot stability
-# flagged as separate, lower-priority residual items, not silently
-# dropped).
-IMAGE_INSTALL:append = " duduclaw-data-binds"
+# its own recipe).
+#
+# duduclaw-persist-seed (recipes-duduclaw/duduclaw-persist-seed/): the
+# main-system half of VER-P's cross-reboot entropy-seed persistence (see
+# this file's own duduclaw_ro_root_hook() comment, item (3), above for the
+# full writeup) — the initrd half
+# (initramfs-module-duduclaw-persist) is wired separately, via
+# recipes-core/images/core-image-minimal-initramfs.bbappend, since it
+# ships inside the initramfs cpio, not this rootfs image. Same rollout
+# gating as duduclaw-data-binds (only duduclaw-image-appliance-test.bb
+# requires this .inc today).
+IMAGE_INSTALL:append = " duduclaw-data-binds duduclaw-persist-seed"

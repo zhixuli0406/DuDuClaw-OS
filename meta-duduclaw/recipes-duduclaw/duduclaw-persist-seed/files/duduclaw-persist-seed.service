@@ -1,0 +1,62 @@
+# DuDuClaw OS — entropy-seed cross-reboot write-back (VER-P, 信任鏈 P1 殘項,
+# 2026-09-03). Companion half of recipes-core/initrdscripts/
+# initramfs-module-duduclaw-persist, which only ever READS
+# /data/duduclaw/system/random-seed (see that module's own header, "entropy
+# seed" section) — this unit is what keeps that file itself fresh, so the
+# NEXT boot has something DIFFERENT to load rather than the same bytes
+# forever.
+#
+# Refreshes on BOTH ends of a boot, not just one:
+#   - ExecStart, once boot reaches multi-user.target
+#   - ExecStop, on shutdown (RemainAfterExit=yes is what makes this fire at
+#     all — systemd.service(5): a oneshot with RemainAfterExit=yes is
+#     considered "active" after ExecStart succeeds, and running ExecStop is
+#     literally how systemd transitions it back to "inactive" when the unit
+#     is stopped, e.g. during a normal shutdown sequence stopping every
+#     active unit)
+# so a device that reboots quickly (ExecStart's own write barely had time
+# to matter) still gets a fresh seed from the shutdown-time write of the
+# PREVIOUS boot.
+#
+# 512 bytes from /dev/urandom, atomic write (temp file + rename — same
+# idiom recipes-duduclaw/duduclaw-data-open/files/duduclaw-data-open.sh's
+# own write_status() already uses for the identical reason: a reader
+# racing a partially-written file must never observe a truncated/torn
+# seed). 512 bytes is a reasonable, commonly-seen size for this class of
+# seed file — NOT independently re-derived from this project's own pinned
+# systemd 259.5 source in this session (systemd-random-seed's own exact
+# RANDOM_SEED_SIZE_MIN/MAX constants were not read this round); confirm at
+# bake time if exact-size parity with systemd's own convention ever
+# matters — for THIS purpose (feeding /dev/urandom on the NEXT boot, which
+# accepts any nonzero byte count and simply credits proportionate entropy)
+# the exact size is a refinement, not a correctness requirement: any
+# nonzero carried-over seed is already a strict improvement over the
+# "nothing carried over" baseline this whole VER-P wave exists to fix.
+#
+# After=/Requisite=data.mount, ConditionPathIsMountPoint=/data — same
+# dependency PAIR recipes-duduclaw/duduclaw-data-open/files/
+# duduclaw-data-status.service already uses against the identical unit
+# name (data.mount resolves to either classes/duduclaw-verity.bbclass's
+# own static fstab-derived unit, or duduclaw-data-open-generator's dynamic
+# TPM2+LUKS2 graph — this unit works transparently under either, needing
+# no awareness of which mode is active). ConditionPathIsMountPoint is the
+# fail-open half: a boot where /data never became mounted at all (any of
+# the fail-open/needs-recovery states classes/duduclaw-tpm.bbclass's own
+# four-cell truth table documents) makes this unit a silent, harmless
+# no-op rather than a failed unit polluting `systemctl --failed`.
+[Unit]
+Description=DuDuClaw OS: persist entropy seed across reboots (trust chain P1 residual)
+Documentation=commercial/docs/DESIGN-os-trust-chain-2026-09.md
+After=data.mount
+Requisite=data.mount
+ConditionPathIsMountPoint=/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/mkdir -p /data/duduclaw/system
+ExecStart=/bin/sh -c 'dd if=/dev/urandom of=/data/duduclaw/system/random-seed.new bs=512 count=1 2>/dev/null && mv -f /data/duduclaw/system/random-seed.new /data/duduclaw/system/random-seed'
+ExecStop=/bin/sh -c 'dd if=/dev/urandom of=/data/duduclaw/system/random-seed.new bs=512 count=1 2>/dev/null && mv -f /data/duduclaw/system/random-seed.new /data/duduclaw/system/random-seed'
+
+[Install]
+WantedBy=multi-user.target

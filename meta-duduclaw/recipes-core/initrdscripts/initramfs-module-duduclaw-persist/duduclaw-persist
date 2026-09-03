@@ -1,0 +1,367 @@
+#!/bin/sh
+# duduclaw-persist — initramfs-framework module: machine-id + entropy-seed
+# cross-boot persistence under dm-verity read-only root (VER-P, 信任鏈 P1
+# 殘項, 2026-09-03 — commercial/docs/DESIGN-os-trust-chain-2026-09.md +
+# recipes-core/images/duduclaw-ro-root.inc's own header, which is what
+# first named both gaps as flagged-but-deferred P1 residuals). See
+# recipes-core/initrdscripts/initramfs-module-duduclaw-verity_1.0.bb's own
+# do_install comment for the full INSTALLED-filename-vs-SOURCE-filename
+# reasoning (identical mechanism reused verbatim here — see this recipe's
+# own .bb) and its own header for the module-sourcing/cmdline-parsing
+# citation trail this file leans on without re-deriving.
+#
+# =========================================================================
+# THE PROBLEM (both halves already named, never fixed, by prior waves)
+# =========================================================================
+#
+# recipes-duduclaw/duduclaw-data-binds.bb's own header, "WHAT THIS WAVE
+# DELIBERATELY DID NOT TOUCH": "/etc/machine-id — ... oe-core's own
+# rootfs-postcommands.bbclass::systemd_handle_machine_id() already ships an
+# EMPTY /etc/machine-id in every systemd image... Cross-reboot machine-id
+# STABILITY (not boot-success) is a known, separate limitation." An empty
+# /etc/machine-id makes systemd itself generate a RANDOM id and bind-mount
+# it in for that boot only (machine-id(5)'s own documented "read-only /etc"
+# behavior) — every reboot gets a DIFFERENT id, breaking anything that
+# expects machine-id to be a stable per-device identity (journald's own
+# "boot ID vs machine ID" distinction, D-Bus's machine ID file, this
+# project's own os_watch/telemetry attribution).
+#
+# recipes-core/images/duduclaw-ro-root.inc's own duduclaw_ro_root_hook():
+# "(3) systemd-random-seed writes /var/lib/systemd/random-seed and FAILS
+# ... on a read-only fs. Masked rather than bind-mounting /var/lib/systemd
+# wholesale... Cross-reboot seed persistence is a flagged P1 residual."
+# Masking that service means the kernel's entropy pool starts cold (RDRAND/
+# jitter only) on every single boot — no carried-over seed at all.
+#
+# =========================================================================
+# WHY AN INITRD MODULE, NOT A MAIN-SYSTEM SERVICE
+# =========================================================================
+#
+# machine-id specifically must be in place BEFORE any systemd unit that
+# reads it runs — systemd itself reads /etc/machine-id extremely early
+# (PID 1 startup, well before any ExecStartPre= of any unit this layer
+# could ship could possibly run first) and commits to its own random
+# fallback the instant it finds the file empty, per machine-id(5)'s own
+# documented three-option contract (duduclaw-data-binds.bb's own citation:
+# "the exact three-option tradeoff [oe-core's bbclass] quotes from
+# systemd's own author is option (b), 'have / read-only and an empty file
+# there'" — the transient bind IS the option this build already chose;
+# this module's whole job is to make that bind computed from a PERSISTED
+# value instead of a fresh-random one). A main-system service can only run
+# AFTER PID 1 has already made this decision — too late by construction.
+# The entropy seed similarly wants to land before userspace generates its
+# first "real" randomness, though that requirement is soft (an optimization
+# per duduclaw-ro-root.inc's own header, "the 6.18 kernel's own entropy
+# sources... make the carried-over seed an optimization, not a correctness
+# requirement") — doing both in the SAME module, at the SAME early point,
+# is simpler than splitting the mechanism across two different boot
+# stages for no benefit.
+#
+# =========================================================================
+# MODULE ORDERING — verified against THIS project's own installed
+# initramfs-framework files, not assumed
+# =========================================================================
+#
+# openembedded-core/meta/recipes-core/initrdscripts/initramfs-framework_1.0
+# .bb's own do_install (read directly before writing this) installs the
+# numbered modules THIS image actually ships: 00-debug/01-udev(-mdev)/
+# 09-lvm/10-e2fs/50-duduclaw_verity(this layer's own)/85-nfsrootfs/
+# 89-exec/90-rootfs/91-overlayroot/99-finish. Of these,
+# meta-duduclaw/recipes-core/images/core-image-minimal-initramfs.bbappend's
+# own INITRAMFS_SCRIPTS list only actually PULLS IN
+# initramfs-framework-base + initramfs-module-udev + install + install-efi
+# (+ this layer's own duduclaw-verity module) explicitly — 90-rootfs still
+# arrives via initramfs-framework-base's own RRECOMMENDS (same fact
+# duduclaw-verity's own header already establishes), so it IS present in
+# this image's initramfs even though it is never named directly.
+#
+# THIS MODULE MUST RUN AFTER 90-rootfs, NOT BEFORE (the opposite ordering
+# choice from duduclaw-verity's own 50-duduclaw_verity, which runs BEFORE
+# 90-rootfs because IT redirects rootfs's own mount target). Reason: this
+# module's own machine-id step needs a REAL bind-mount TARGET at
+# "${ROOTFS_DIR}/etc/machine-id", and that path only exists once
+# openembedded-core/meta/recipes-core/initrdscripts/initramfs-framework/
+# rootfs's own rootfs_run() (read directly before writing this) has
+# already mounted the real root filesystem at $ROOTFS_DIR — before that,
+# $ROOTFS_DIR is just an empty directory this init script itself created
+# (`mkdir $ROOTFS_DIR`, in initramfs-framework/init, read directly), and a
+# bind mount onto a path inside it would target nothing durable (in
+# practice: onto a directory that gets thrown away the moment rootfs_run()
+# unmounts-and-retries or the whole initramfs tmpfs is discarded at
+# switch_root).
+#
+# THIS MODULE MUST ALSO RUN BEFORE 99-finish (openembedded-core/meta/
+# recipes-core/initrdscripts/initramfs-framework/finish, read directly
+# before writing this): finish_run() is what actually calls
+# `exec switch_root $ROOTFS_DIR ...` — the machine-id bind mount below must
+# already exist by the time that happens, because switch_root's own
+# "mount --move ... $ROOTFS_DIR /" (well-established Linux switch_root(8)
+# behavior: submounts already established UNDER the new-root path travel
+# with it when the new root itself is moved into place, the exact same
+# mechanism finish_run() already relies on for its own four explicit
+# `mount --move /dev|/proc|/sys|/run $ROOTFS_DIR/...` calls one section
+# above the switch_root line) is what carries this module's own bind mount
+# through to the final, post-switch_root system. A bind mount created
+# AFTER switch_root already ran would need a completely different
+# (main-system, chroot-relative) mechanism — pointless, since this module
+# already runs inside the SAME mount namespace switch_root itself operates
+# in.
+#
+# CHOSEN NUMBER: 92-duduclaw_persist. Sits strictly between 90-rootfs
+# (must-run-after) and 99-finish (must-run-before), and — matching
+# duduclaw-verity's own "50 sits clear of every numbered module this
+# framework recipe defines" reasoning for ITS OWN number choice — 92 does
+# not collide with 91-overlayroot either, even though that module is not
+# actually installed in this image's own INITRAMFS_SCRIPTS list today (no
+# RRECOMMENDS pulls it in, and nothing here adds it) — future-proofing
+# against a later wave enabling it, at zero cost.
+#
+# =========================================================================
+# BIND-FILE-ONTO-FILE, THEN UMOUNT THE SOURCE MOUNTPOINT — mount/superblock
+# reference-counting reasoning (HONESTLY UNVERIFIED empirically in this
+# read-only-reconnaissance session — see this module's own do_duduclaw_
+# persist_run() comment at the umount call site for the live first-boot
+# verification this needs, and private_scratch/os-security-harness/
+# wavepersist.py's own PS1/PS2 for the harness that will actually prove it)
+# =========================================================================
+#
+# `mount --bind ${DATA_MNT}/duduclaw/system/machine-id
+# ${ROOTFS_DIR}/etc/machine-id` creates a SEPARATE vfsmount entry in this
+# mount namespace, at a path (${ROOTFS_DIR}/etc/machine-id) that is NOT
+# nested under ${DATA_MNT} at all — reasoned from standard Linux VFS mount
+# semantics: `umount <mountpoint>` only checks busyness of THAT mountpoint
+# (open files/cwd reached through it, or other mounts stacked directly on
+# top of it), not whether some OTHER, unrelated vfsmount elsewhere in the
+# namespace happens to reference the same underlying superblock. The
+# underlying ext4 superblock (the /data filesystem instance) is kept alive
+# by ANY vfsmount that still references it — once ${DATA_MNT} is unmounted,
+# the bind mount at ${ROOTFS_DIR}/etc/machine-id is the ONLY surviving
+# reference, and the superblock stays mounted (readable, with the
+# machine-id content intact) through that single reference, exactly the
+# same way an open file descriptor keeps an inode alive after its last
+# directory entry is unlinked. This module deliberately DOES `umount
+# ${DATA_MNT}` after the bind mount is established (not the "leave /data
+# mounted" fallback this ticket's own brief offered as an alternative)
+# because leaving it mounted is the WORSE, PROVEN-BAD choice on this exact
+# codebase: initramfs-framework/finish's own header comment states outright
+# "leaving anything mounted will prevent the next rootfs from modifying the
+# block device" — an orphaned initramfs-stage mount of the SAME
+# DUDUCLAW_AB_DATA_PARTUUID device would make the main system's own /data
+# mount (classes/duduclaw-verity.bbclass's static fstab line, or
+# duduclaw-data-open-generator's dynamic LUKS graph) fail outright with the
+# device already busy — a guaranteed, not merely possible, regression of
+# the exact "everything Requires=data.mount... collapses" failure class
+# duduclaw-ro-root.inc's own header already documents for a related gap.
+# A failed umount here is therefore logged loudly but treated as NON-FATAL
+# (this module continues to switch_root regardless) — the failure surfaces
+# a layer later, as the main system's own data.mount failing with a
+# familiar, diagnosable systemd error, rather than this amenity-feature
+# module being allowed to hang the entire boot over it.
+#
+# =========================================================================
+# machine-id(5) FORMAT — cited from THIS project's own pinned systemd
+# 259.5 target sysroot header (not recalled from training data): read
+# directly inside the builder's own target sysroot components this
+# session (the buildpaths QA check forbids quoting the literal TMPDIR
+# path here) — systemd/usr/include/systemd/sd-id128.h defines
+# `#define SD_ID128_STRING_MAX 33U` — the string form of a 128-bit id is
+# 33 bytes: 32 lowercase hex digits + one terminator, matching
+# machine-id(5)'s own documented on-disk shape (32 hex chars, newline-
+# terminated as a file). /proc/sys/kernel/random/uuid (used below to
+# generate a fresh id when none exists yet) yields a hyphenated RFC4122
+# string with MORE structure than machine-id strictly needs — stripping
+# the hyphens leaves exactly 32 hex chars, a convenient and already-
+# kernel-provided source for this purpose.
+#
+# =========================================================================
+# TOOLING ASSUMPTIONS — reasoned from this SAME image's own already-proven
+# boot behavior, not independently re-verified this session
+# =========================================================================
+#
+# `mountpoint -q` — already a proven-working call in THIS EXACT initramfs:
+# openembedded-core/meta/recipes-core/initrdscripts/initramfs-framework/
+# rootfs's own rootfs_run() calls it (`while ! mountpoint -q $ROOTFS_DIR`),
+# and that module is already shipping successfully on this image per every
+# QEMU round this whole trust-chain wave has run. Safe to reuse verbatim.
+#
+# `mount -t ext4` with no prior `modprobe ext4` step — CONFIG_EXT4_FS is
+# proven to be a kernel BUILT-IN (not a loadable module) on this exact
+# machine config: root-A itself mounts as ext4 via 90-rootfs with ZERO
+# ext4-specific initramfs module installed (initramfs-module-e2fs is not
+# in this image's own INITRAMFS_SCRIPTS list at all — grepped, confirmed
+# absent), and every QEMU boot this whole wave has run reaches a login
+# prompt on that same ext4 root. This module's own `mount -t ext4` against
+# a DIFFERENT ext4 partition (the /data device) needs nothing this proof
+# doesn't already cover.
+#
+# `mount --bind` support in THIS project's busybox — NOT independently
+# re-verified against the actual busybox .cfg fragment this session, but
+# reasoned from a proven sibling call: initramfs-framework/finish's own
+# finish_run() (oe-core's own, unmodified, already shipping on every boot
+# this wave has QEMU-tested) calls `mount --move` four times
+# unconditionally — busybox's `--move` and `--bind` mount features share
+# the same underlying CONFIG_FEATURE_MOUNT_BIND gate in busybox's own
+# source, so a busybox build that supports `--move` (proven) is very
+# likely to also support `--bind`. FIRST REAL VERIFICATION STEP for
+# whoever bakes this: if `mount --bind` errors out at runtime with "bad
+# usage" rather than a normal mount failure, this specific assumption is
+# what broke — private_scratch/os-security-harness/wavepersist.py's own
+# PS1 will surface it immediately (an empty/unbound /etc/machine-id would
+# make PS1 fail with "id differs across boots", the exact symptom the
+# untouched, pre-existing transient-bind behavior already produces).
+#
+# `blkid` (util-linux-blkid, this recipe's own explicit RDEPENDS, matching
+# recipes-duduclaw/duduclaw-data-open.bb's own "name the split package
+# explicitly, don't trust an implicit pull" discipline for the SAME tool)
+# — a genuinely NEW addition to this initramfs (not proven present by any
+# existing module), needed for the LUKS-compatibility check below.
+
+DUDUCLAW_PERSIST_DATA_PARTUUID="@DUDUCLAW_AB_DATA_PARTUUID@"
+DUDUCLAW_PERSIST_DATA_DEV="/dev/disk/by-partuuid/${DUDUCLAW_PERSIST_DATA_PARTUUID}"
+DUDUCLAW_PERSIST_MNT="/mnt/duduclaw-persist"
+DUDUCLAW_PERSIST_SYSTEM_DIR="${DUDUCLAW_PERSIST_MNT}/duduclaw/system"
+
+duduclaw_persist_enabled() {
+	# Gate at RUNTIME on the same `ro` cmdline token
+	# recipes-core/images/duduclaw-ro-root.inc's own
+	# `UKI_CMDLINE:append = " ro"` bakes in unconditionally whenever that
+	# .inc is required by an image (currently only
+	# duduclaw-image-appliance-test.bb — see that .inc's own "ROLLOUT
+	# GATING" header section). This module's entire reason for existing
+	# (transient machine-id bind, masked random-seed) is a DIRECT,
+	# EXCLUSIVE consequence of root being read-only — a boot with no `ro`
+	# token (an operator-forced rw maintenance boot, or any build that
+	# never inherited duduclaw-ro-root.inc at all, confirmed by that same
+	# .inc's own header: "The base cmdline... carries no ro/rw token
+	# today") needs none of this; systemd's own stock machine-id/
+	# random-seed handling already does the right, simple thing on a
+	# genuinely writable root, and this module touching anything there
+	# would be pure risk for zero benefit. Belt-and-braces alongside the
+	# build-time INITRAMFS_SCRIPTS:append gate in
+	# core-image-minimal-initramfs.bbappend (see that file's own comment)
+	# — the SAME "gate at both build time AND runtime" posture
+	# duduclaw-verity's own module already established (build-time
+	# INITRAMFS_SCRIPTS gate on DUDUCLAW_VERITY_ENABLE + runtime
+	# bootparam_roothash check) — reused here rather than inventing a
+	# second convention.
+	[ -n "$bootparam_ro" ]
+}
+
+duduclaw_persist_run() {
+	if [ -z "$ROOTFS_DIR" ] || ! mountpoint -q "$ROOTFS_DIR"; then
+		msg "duduclaw-persist: \$ROOTFS_DIR is not a mountpoint yet -- this module ran out of its intended order (see this file's own header, 'MODULE ORDERING') or 90-rootfs itself failed. Skipping (fail-open, not fatal -- see this module's own header on why an amenity feature must never be allowed to hang the boot)."
+		return
+	fi
+
+	# --- wait for /data's device node (mirrors duduclaw-verity's own
+	# retry-loop shape verbatim -- same bootparam_rootdelay/roottimeout
+	# reuse rationale that module's own header already gives: both loops
+	# wait for the identical class of event, udev finishing device-node
+	# creation) ---------------------------------------------------------
+	delay=${bootparam_rootdelay:-1}
+	timeout=${bootparam_roottimeout:-5}
+	c=0
+	while [ ! -e "$DUDUCLAW_PERSIST_DATA_DEV" ]; do
+		if [ $(( c * delay )) -gt $timeout ]; then
+			msg "duduclaw-persist: ${DUDUCLAW_PERSIST_DATA_DEV} never appeared within ${timeout}s -- skipping machine-id/seed persistence for this boot (fail-open: machine-id falls back to systemd's own transient per-boot bind, same as before this module existed)."
+			return
+		fi
+		debug "duduclaw-persist: waiting for ${DUDUCLAW_PERSIST_DATA_DEV}..."
+		sleep $delay
+		c=$(( c + 1 ))
+	done
+
+	# --- LUKS compatibility skip -----------------------------------------
+	# TPM wave (classes/duduclaw-tpm.bbclass, recipes-duduclaw/
+	# duduclaw-data-open/) converts /data into a TPM2-sealed LUKS2 volume
+	# on first boot AFTER a TPM chip is detected -- entirely a MAIN-SYSTEM
+	# concern (duduclaw-data-open-generator + duduclaw-data-open.sh, both
+	# running well after switch_root). This initrd has no TPM2 unlock
+	# machinery at all (no tpm2-tools, no systemd-cryptenroll/cryptsetup
+	# keyed against a PCR policy) and MUST NOT attempt one -- the correct,
+	# honest behavior on a LUKS-converted /data is to skip cleanly and let
+	# the main system's own generator handle the real unlock later, not to
+	# guess or to block boot. Same blkid probe shape as
+	# duduclaw-data-open-generator's own (`blkid -o value -s TYPE`) --
+	# reused verbatim rather than inventing a second detection method for
+	# the identical fact.
+	fstype=$(blkid -o value -s TYPE "$DUDUCLAW_PERSIST_DATA_DEV" 2>/dev/null)
+	if [ "$fstype" = "crypto_LUKS" ]; then
+		msg "duduclaw-persist: ${DUDUCLAW_PERSIST_DATA_DEV} is crypto_LUKS (TPM-converted /data) -- this initrd has no TPM2 unlock path (that lives in the main system's duduclaw-data-open generator/service, which runs after switch_root). Skipping machine-id/seed persistence for THIS boot; machine-id falls back to systemd's own transient per-boot bind, the entropy seed is not preloaded. This is a KNOWN, INTENTIONAL degrade (T7-class fail-open), not a bug -- do not treat this console line as an error."
+		return
+	fi
+
+	mkdir -p "$DUDUCLAW_PERSIST_MNT"
+	if ! mount -t ext4 "$DUDUCLAW_PERSIST_DATA_DEV" "$DUDUCLAW_PERSIST_MNT" 2>/dev/console; then
+		msg "duduclaw-persist: mount of ${DUDUCLAW_PERSIST_DATA_DEV} (plain ext4 path) failed -- skipping machine-id/seed persistence for this boot (fail-open)."
+		return
+	fi
+	# Round-1 first-boot case: /data/duduclaw/system does not exist yet at
+	# all (recipes-duduclaw/duduclaw-firstboot/files/
+	# duduclaw-firstboot-provision.sh is what normally creates it, but
+	# that is a MAIN-SYSTEM service that has not run yet the very first
+	# time this module ever executes). Idempotent no-op on every later
+	# boot once that directory already exists.
+	mkdir -p "$DUDUCLAW_PERSIST_SYSTEM_DIR"
+
+	# --- machine-id --------------------------------------------------
+	mid_file="${DUDUCLAW_PERSIST_SYSTEM_DIR}/machine-id"
+	if [ ! -s "$mid_file" ]; then
+		newid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '\n' | tr -d '-')
+		if [ ${#newid} -eq 32 ]; then
+			echo "$newid" > "$mid_file"
+			msg "duduclaw-persist: generated new persistent machine-id at ${mid_file}."
+		else
+			msg "duduclaw-persist: /proc/sys/kernel/random/uuid produced no usable value -- cannot seed a persistent machine-id this boot; falling back to systemd's own transient bind."
+		fi
+	fi
+
+	if [ -s "$mid_file" ]; then
+		# Bind FILE onto FILE. ${ROOTFS_DIR}/etc/machine-id already exists
+		# as the empty file oe-core's own systemd_handle_machine_id()
+		# ships unconditionally in every systemd image (already cited by
+		# recipes-duduclaw/duduclaw-data-binds.bb's own header) -- a bind
+		# mount's target must already exist as the same file TYPE it is
+		# about to receive (regular-file-onto-regular-file here), which
+		# this project's own rootfs-postcommands output already
+		# guarantees with no extra provisioning needed from this module.
+		if mount --bind "$mid_file" "${ROOTFS_DIR}/etc/machine-id" 2>/dev/console; then
+			msg "duduclaw-persist: bind-mounted persisted machine-id onto /etc/machine-id (see this module's own header for why this survives switch_root)."
+		else
+			msg "duduclaw-persist: bind-mount of machine-id onto ${ROOTFS_DIR}/etc/machine-id failed -- falling back to systemd's own transient per-boot bind (fail-open; see this module's own header, 'TOOLING ASSUMPTIONS', for the most likely cause)."
+		fi
+	fi
+
+	# --- entropy seed ------------------------------------------------
+	# Load-only here -- the WRITE-BACK half of this loop (refreshing
+	# ${seed_file} with new entropy so the NEXT boot has something
+	# different to load) is a main-system concern
+	# (recipes-duduclaw/duduclaw-persist-seed's own
+	# duduclaw-persist-seed.service, After=data.mount, ExecStart +
+	# ExecStop) -- this initrd module only ever reads. A missing seed
+	# file (very first boot, or a boot that hit the LUKS-skip path
+	# earlier and never got here at all) is silently fine: /dev/urandom
+	# already has its own kernel-side sources (RDRAND + jitter, per
+	# duduclaw-ro-root.inc's own header) and does not need this to
+	# function, only to converge faster.
+	seed_file="${DUDUCLAW_PERSIST_SYSTEM_DIR}/random-seed"
+	if [ -s "$seed_file" ]; then
+		if cat "$seed_file" > /dev/urandom 2>/dev/console; then
+			msg "duduclaw-persist: loaded carried-over entropy seed from ${seed_file}."
+		else
+			debug "duduclaw-persist: failed writing ${seed_file} into /dev/urandom (non-fatal, kernel entropy sources are unaffected)."
+		fi
+	fi
+
+	# --- release the block device for the main system's own /data mount --
+	# See this module's own header, "BIND-FILE-ONTO-FILE, THEN UMOUNT THE
+	# SOURCE MOUNTPOINT", for the full reasoning on why this is both safe
+	# (the bind mount above lives at an unrelated path, so it does not
+	# keep THIS mountpoint busy) and REQUIRED (an orphaned mount here
+	# would make the main system's own /data mount fail with the device
+	# already in use). Non-fatal on failure by design -- see that same
+	# header section for why.
+	if ! umount "$DUDUCLAW_PERSIST_MNT" 2>/dev/console; then
+		msg "duduclaw-persist: WARNING -- umount of ${DUDUCLAW_PERSIST_MNT} failed; ${DUDUCLAW_PERSIST_DATA_DEV} may still be busy. Not fatal here (see this module's own header) -- if the main system's OWN data.mount then fails, this line is the first place to look."
+	fi
+}

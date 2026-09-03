@@ -66,3 +66,21 @@ INITRAMFS_SCRIPTS = "\
 # the INSTALLED name differs from its SOURCE filename (a real, load-
 # bearing correctness requirement, not a style choice).
 INITRAMFS_SCRIPTS:append = "${@ ' initramfs-module-duduclaw-verity' if d.getVar('DUDUCLAW_VERITY_ENABLE') == '1' else ''}"
+
+# --- Trust chain P1 residual: machine-id + entropy-seed persistence
+# (VER-P, 2026-09-03) -----------------------------------------------------
+# recipes-core/initrdscripts/initramfs-module-duduclaw-persist_1.0.bb, same
+# gate as the verity entry directly above -- the "existing switch" this
+# module's own header points at (recipes-core/images/duduclaw-ro-root.inc
+# is what actually created the empty-machine-id/masked-random-seed problem
+# this module fixes, but that .inc carries no build-time flag of its own;
+# DUDUCLAW_VERITY_ENABLE is reused here for the SAME reason the verity
+# entry above already uses it -- a build that never turns on this whole
+# trust-chain line keeps INITRAMFS_SCRIPTS byte-identical to before this
+# wave). Positioned AFTER the verity entry (installs as 92-duduclaw_persist,
+# comfortably after 50-duduclaw_verity/90-rootfs and before 99-finish --
+# see that module's own header, "MODULE ORDERING", for the full citation
+# trail); list order here does not itself affect /init.d/ execution order
+# (that is entirely the lexical filename numbering each module's own
+# do_install chooses), only readability.
+INITRAMFS_SCRIPTS:append = "${@ ' initramfs-module-duduclaw-persist' if d.getVar('DUDUCLAW_VERITY_ENABLE') == '1' else ''}"

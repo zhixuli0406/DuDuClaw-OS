@@ -58,6 +58,23 @@ require recipes-core/images/duduclaw-image-flatpak.inc
 # the same payload.
 require recipes-core/images/duduclaw-image-compat.inc
 
+# VER-RO rollout gate PROMOTED to the shipping image (2026-09-04,
+# DESIGN-os-trust-chain-2026-09.md "依賴鏈補記" + §2 支柱一). Read-only root
+# is the security line's whole point (an immutable, verifiable, self-
+# defending OS), and the mechanism cleared its harness on the QEMU-test
+# variant: duduclaw-image-appliance-test.bb (which `require`s THIS file)
+# ran wavero RO1-RO6 green — root genuinely read-only, journald/iwd/docker/
+# waydroid bound onto /data, root writes fail EROFS, idempotent across
+# reboot. The test variant and this shipping image share this exact rootfs
+# content (the test variant only adds serial-autologin + wic-only fstypes),
+# so the RO result transfers. `duduclaw-ro-root.inc` gates its own dm-verity
+# / TPM tie-ins behind DUDUCLAW_VERITY_ENABLE / kas overlays, so a plain
+# shipping bake (no sb-signing/tpm-luks overlay) gets an immutable root
+# WITHOUT verity/SB/TPM; those engage only when their overlays are stacked.
+# Required LAST so its UKI_CMDLINE:append=" ro" composes on top of the fully
+# resolved shipping cmdline, matching the test variant's own ordering note.
+require recipes-core/images/duduclaw-ro-root.inc
+
 # `serial-autologin-root` / `empty-root-password` (design doc §2.3, "必須
 # 移除，非可選"): duduclaw-image.bb's own IMAGE_FEATURES carries both,
 # annotated there with "MUST NOT ship with this on" -- every image in this

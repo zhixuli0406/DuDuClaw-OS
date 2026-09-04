@@ -27,15 +27,14 @@ DUDUCLAW_IMAGE_TEST_LOGIN = "1"
 
 require duduclaw-image-appliance.bb
 
-# VER-RO (2026-09-02, DESIGN-os-trust-chain-2026-09.md "依賴鏈補記"): this
-# is the ONLY image in this layer that carries read-only root this round --
-# see recipes-core/images/duduclaw-ro-root.inc's own header for the full
-# rollout-gating reasoning (dm-verity's hard prerequisite, promoted to
-# duduclaw-image-appliance.bb itself only after this harness goes green).
-# Required AFTER duduclaw-image-appliance.bb above so its own
-# UKI_CMDLINE:append=" ro" composes on top of the real shipping cmdline,
-# not a stale copy of it.
-require recipes-core/images/duduclaw-ro-root.inc
+# VER-RO read-only root now comes IN via the require of
+# duduclaw-image-appliance.bb above (rollout gate PROMOTED to the shipping
+# image 2026-09-04, after this harness's own wavero RO1-RO6 went green --
+# see that recipe's own require-of-duduclaw-ro-root.inc comment). This test
+# variant must NOT require duduclaw-ro-root.inc a SECOND time: bitbake
+# `require` is not include-guarded like `inherit`, so a double require would
+# run the .inc's UKI_CMDLINE:append=" ro" twice ("ro ro") and its rootfs
+# hook twice. Inheriting it once, through the shipping recipe, is correct.
 
 SUMMARY = "DuDuClaw OS appliance image -- QEMU-test variant (root serial autologin; never shipped)"
 

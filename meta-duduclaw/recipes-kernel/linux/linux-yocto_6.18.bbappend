@@ -56,6 +56,15 @@ SRC_URI:append:duduclaw-genericx86-64 = " \
 # is intentional and unavoidable: the QEMU machine is this ticket's own
 # verification target.
 SRC_URI:append = " file://duduclaw-live-squashfs.cfg"
+# 2026-09-04: the bare-.cfg fragment above is processed (it appears in
+# kernel_configme's "Final scc/cfg list") but CONFIG_SQUASHFS still does not
+# stick in the final .config — even with CONFIG_MISC_FILESYSTEMS=y/BLOCK=y
+# (its deps) already set — so the live installer's squashfs rootfs.img mount
+# fails ("mounting /dev/loop0 on /rootfs failed: Invalid argument"), which the
+# Y18 fragment was supposed to fix. Add oe-core's canonical squashfs kernel
+# FEATURE (kern-tools tracks/audits a .scc feature more forcefully than a
+# loose SRC_URI .cfg) so the symbol is enabled through the supported path.
+KERNEL_FEATURES:append = " cfg/fs/squashfs.scc"
 
 # --- Android binder IPC support for Waydroid (CP-1 A1, 2026-08-30) ---
 # Unscoped (both machines) — see duduclaw-binder.cfg's own header comment

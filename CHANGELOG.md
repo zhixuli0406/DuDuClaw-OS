@@ -17,6 +17,12 @@ file).
 - Bootable Yocto appliance image (`duduclaw-image-appliance`) for
   `duduclaw-qemux86-64` and `duduclaw-genericx86-64`: A/B atomic update with
   rollback, read-only root, and the full DuDuClaw gateway + dashboard payload.
+- Graphical live installer ISO (`duduclaw-image-live`) for both machines: boots
+  a squashfs live root off USB/optical and writes the production A/B system to
+  the target's internal disk. Published for `qemux86-64` (QEMU-boot-validated)
+  and `genericx86-64` (real-hardware target). Fixes the live-root squashfs mount
+  by enabling `CONFIG_SQUASHFS` through the canonical `cfg/fs/squashfs.scc`
+  kernel feature (the prior bare `.cfg` fragment did not take effect).
 - Security trust chain: self-signed Secure Boot (dual-signed per-slot UKI),
   read-only root with dm-verity block integrity, and TPM2/LUKS PCR 7+11 key
   sealing (fail-open path working; automatic enrollment is an open defect

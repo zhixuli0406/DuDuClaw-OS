@@ -535,6 +535,14 @@ IMAGE_CMD:wic:append () {
 # touches file ownership -- see "WHY NO fakeroot" above for the full
 # reasoning behind removing both.
 python do_duduclaw_verity_format() {
+    # `bb` is a bitbake-injected global, but the `import bb.process` / `import
+    # bb` later in this function make Python treat `bb` as function-LOCAL for
+    # the whole scope — so the no-op path's bb.debug() below would raise
+    # UnboundLocalError (only when DUDUCLAW_VERITY_ENABLE != '1', i.e. verity
+    # OFF: the enabled path reaches the imports before using bb, which is why
+    # verity-ON appliance-test never hit this and verity-OFF appliance did).
+    # Bind it up front so the name is assigned before first use.
+    import bb
     if d.getVar('DUDUCLAW_VERITY_ENABLE') != '1':
         # Off: no DEPLOY_DIR_IMAGE writes, no side effects at all —
         # byte-identical to a build where this class is not inherited.

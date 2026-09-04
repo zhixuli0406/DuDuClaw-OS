@@ -270,7 +270,15 @@ DUDUCLAW_AB_ROOTA_WIC_SOURCE ?= "rootfs --exclude-path boot/"
 # wic p2 content differing in exactly the nine superblock locations. A
 # cosmetic label is not worth a broken root hash; duduclaw-verity.bbclass
 # blanks this when DUDUCLAW_VERITY_ENABLE=1.
-DUDUCLAW_AB_ROOTA_LABEL_OPT ?= "--label \"root-a\""
+# Bare label, no quotes: BitBake does NOT unescape `\"` inside a quoted
+# value, so the previous `"--label \"root-a\""` put LITERAL backslash-quotes
+# into the label -> wic's rootfs plugin built an intermediate ext4 named
+# rootfs_"root-a".2.ext4 (quotes in the filename), and mkfs.ext4 then failed
+# with "does not exist and no size was specified" (verity-OFF do_image_wic,
+# 2026-09-04). A "root-a" label has no spaces, so it needs no quoting at all;
+# this matches the plain unquoted form wic accepts. (Verity ON still blanks
+# this via duduclaw-verity.bbclass, per the rawcopy-relabel note above.)
+DUDUCLAW_AB_ROOTA_LABEL_OPT ?= "--label root-a"
 
 # The two verity hash-tree partitions' own `part ...` lines, each a WHOLE
 # line of wks kickstart text as a single variable (VER-V, 2026-09-02).

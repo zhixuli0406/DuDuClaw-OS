@@ -1,0 +1,20 @@
+# Serial (-j1) build overlay — OOM guard.
+#
+# Merge onto duduclaw-os.yml (colon-separated) for a single-threaded build:
+#   KAS_TARGET=<image> kas build meta-duduclaw/kas/duduclaw-os.yml:meta-duduclaw/kas/serial1.yml
+#
+# Why: the vendored duduclaw-cli gateway "megacrate" peaks high in rustc memory.
+# In a memory-constrained builder container, letting it compile alongside other
+# heavy tasks OOM-kills the build (observed, documented in the OS security-line
+# notes). Forcing one bitbake task at a time keeps peak RSS bounded. With warm
+# sstate this only slows the few tasks that actually rebuild, not the whole run.
+#
+# Overrides duduclaw-os.yml's weak `?=` PARALLEL_MAKE / BB_NUMBER_THREADS
+# defaults with hard `=`. (Previously lived in the old main repo's build/ dir;
+# recreated here so it survives as part of the standalone OS repo — 2026-09.)
+header:
+  version: 14
+local_conf_header:
+  serial1: |
+    BB_NUMBER_THREADS = "1"
+    PARALLEL_MAKE = "-j 1"

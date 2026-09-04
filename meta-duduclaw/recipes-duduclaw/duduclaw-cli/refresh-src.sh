@@ -31,8 +31,35 @@
 # don't fetch/build inside the refresh step" convention).
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/files/duduclaw-cli-src"
+# REPO_ROOT = the DuDuClaw PLATFORM repo (the Cargo workspace this script
+# vendors a trimmed snapshot of). Two layouts are auto-detected so this
+# works both before and after the 2026-09 repo split (wiki/pm/
+# repo-split-runbook-2026-09.md):
+#   - Monorepo (pre-split): crates/ is a sibling of meta-duduclaw/, i.e.
+#     three levels up from this script. Detected by that crates/ existing.
+#   - Split: meta-duduclaw/ is the top of the DuDuClaw-OS repo and the
+#     platform lives in a SEPARATE checkout. Default to a sibling directory
+#     named `DuDuClaw` next to the OS repo (…/DuDuClaw-OS + …/DuDuClaw under
+#     the same parent) — the user's actual layout.
+# DUDUCLAW_CLI_SRC_ROOT overrides both for any non-standard checkout path.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${DUDUCLAW_CLI_SRC_ROOT:-}" ]]; then
+    REPO_ROOT="$DUDUCLAW_CLI_SRC_ROOT"
+elif [[ -d "$_SCRIPT_DIR/../../../crates" ]]; then
+    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." && pwd)"          # monorepo
+else
+    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)/DuDuClaw"  # split: sibling checkout
+fi
+if [[ ! -d "$REPO_ROOT/crates" ]]; then
+    echo "ERROR: DuDuClaw platform source not found at $REPO_ROOT/crates" >&2
+    echo "  This OS repo vendors a snapshot of the DuDuClaw platform's Cargo" >&2
+    echo "  workspace, which lives in a SEPARATE repo since the 2026-09 split." >&2
+    echo "  Fix: check out the DuDuClaw platform repo as a sibling named" >&2
+    echo "  'DuDuClaw' next to this OS repo, or set DUDUCLAW_CLI_SRC_ROOT to" >&2
+    echo "  its path. See wiki/pm/repo-split-runbook-2026-09.md §4." >&2
+    exit 1
+fi
+OUT_DIR="$_SCRIPT_DIR/files/duduclaw-cli-src"
 
 # The 21-member closure -- computed 2026-08-25 via `cargo metadata
 # --no-default-features --features duduclaw-gateway/dashboard` + a BFS from

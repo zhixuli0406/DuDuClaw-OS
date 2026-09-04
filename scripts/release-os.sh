@@ -3,8 +3,15 @@
 # artifact collection, and signing.
 #
 # Usage:
+#   In every subcommand below, v<version> is OPTIONAL and defaults to the OS
+#   release version in the repo-root VERSION file (see that file's header —
+#   it is the OS's own release line, independent of the embedded platform
+#   version). Pass an explicit v<version> only to act under a different label.
+#
 #   ./scripts/release-os.sh audit                   OS-side version detail
-#                                                    (DISTRO_VERSION incl.
+#                                                    (OS release version +
+#                                                    embedded platform version
+#                                                    + DISTRO_VERSION incl.
 #                                                    milestone suffix, per-
 #                                                    machine recipe status)
 #   ./scripts/release-os.sh plan v<version> [--machine <name>] [--image <recipe>]
@@ -59,17 +66,39 @@
 #                                                    minisign, stage into a
 #                                                    versioned output
 #                                                    directory
+#   ./scripts/release-os.sh publish v<version> [--machine <name>] [--dry-run]
+#                                                    upload the four files
+#                                                    'package' staged (.wic.zst
+#                                                    + .sha256 + .minisig +
+#                                                    manifest.json) to a GitHub
+#                                                    Release tagged v<version>
+#                                                    on zhixuli0406/DuDuClaw-OS.
+#                                                    Fail-closed: re-verifies
+#                                                    the minisig against the
+#                                                    pinned pubkey and the
+#                                                    sidecar sha256 before any
+#                                                    upload; idempotent
+#                                                    (--clobber on re-run).
+#                                                    The OS .wic ships from
+#                                                    this repo; the platform
+#                                                    gateway/desktop ships from
+#                                                    the DuDuClaw repo's
+#                                                    scripts/release.sh.
 #
 # What this script is NOT:
-#   - `build`/`smoke`/`package` are real, but none of them is invoked
-#     automatically by this script's own other subcommands or by
-#     scripts/release.sh's bump flow. That script only syncs OS-side
-#     version METADATA (recipe PVs, DISTRO_VERSION's numeric prefix) on
-#     every platform release — see its "yocto_inc"/"yocto_bb" kinds —
-#     because a Yocto image build takes hours and cannot be a routine side
-#     effect of a `patch` bump. Once the Y-line is ready to ship an image
-#     for a given version, run this script's subcommands by hand, in
-#     order: build -> smoke (optional standalone check) -> package.
+#   - `build`/`smoke`/`package`/`publish` are real, but none of them is
+#     invoked automatically by this script's own other subcommands. A Yocto
+#     image build takes hours and cannot be a routine side effect of a
+#     version bump. Since the 2026-09 repo split (wiki/pm/
+#     repo-split-runbook-2026-09.md) the OS carries its OWN release version
+#     (the VERSION file), independent of the DuDuClaw platform — the
+#     platform's scripts/release.sh lives in a SEPARATE repo now and no
+#     longer bumps any OS-side metadata. The embedded platform version
+#     (duduclaw-platform-version.inc + recipe PVs) is refreshed only when the
+#     vendored gateway snapshot is re-synced (refresh-src.sh), on its own
+#     cadence. To ship an OS image for a given version, run this script's
+#     subcommands by hand, in order: build -> smoke (optional standalone
+#     check) -> package -> publish.
 #   - `build` never starts a NEW builder container (no `docker run`) — it
 #     only execs into one that is already up, per meta-duduclaw/README.md
 #     "Usage". Starting/stopping the builder container is a human decision
@@ -142,8 +171,40 @@ DEFAULT_IMAGE="${DUDUCLAW_OS_IMAGE:-duduclaw-image-appliance}"
 OS_SIGN_KEY="${DUDUCLAW_OS_SIGN_KEY:-$HOME/.minisign/duduclaw-os-release.key}"
 OS_RELEASE_PUBKEY="RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n"
 
+# OS release version single-source (independent of the embedded platform
+# version — see the VERSION file's own header). Every subcommand's version
+# argument is OPTIONAL and defaults to this file; pass an explicit v<version>
+# only to package/publish under a label other than the current release line.
+OS_VERSION_FILE="VERSION"
+
+# Where 'publish' pushes GitHub Releases. Its own repo since the 2026-09
+# split (wiki/pm/repo-split-runbook-2026-09.md) — the OS .wic ships here, the
+# platform gateway/desktop ships from the DuDuClaw repo's scripts/release.sh.
+OS_GH_REPO="${DUDUCLAW_OS_GH_REPO:-zhixuli0406/DuDuClaw-OS}"
+
+# Read the OS release version from VERSION: first non-comment, non-blank line,
+# whitespace-stripped, optional leading 'v' removed, validated as bare semver.
+# Fails closed (empty stdout + non-zero) so a caller's `$(read_os_version)`
+# never silently proceeds with a blank/garbage version.
+read_os_version() {
+    if [[ ! -f "$OS_VERSION_FILE" ]]; then
+        echo "Error: OS version file not found at $OS_VERSION_FILE" >&2
+        return 1
+    fi
+    local v
+    v="$(grep -vE '^[[:space:]]*(#|$)' "$OS_VERSION_FILE" | head -1 | tr -d '[:space:]' | sed 's/^v//')"
+    if [[ ! "$v" =~ ^${SEMVER}$ ]]; then
+        echo "Error: $OS_VERSION_FILE does not contain a valid semver (got '${v:-<empty>}')" >&2
+        return 1
+    fi
+    echo "$v"
+}
+
 usage() {
-    sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Print the "# Usage:" block up to (not including) "# What this script is
+    # NOT:" — matched by content so it survives edits to the block's length.
+    sed -n '/^# Usage:/,/^# What this script is NOT:/p' "${BASH_SOURCE[0]}" \
+        | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
 # --- concurrency guard (DESIGN §3.5) ----------------------------------------
@@ -174,20 +235,23 @@ check_builder_idle() {
 
 # --- audit: OS-side version detail, read-only -------------------------------
 run_os_audit() {
-    local platform_v inc_v distro_line distro_v
-    platform_v="$(grep -m1 -E "^version = \"$SEMVER\"" Cargo.toml \
-        | sed -E "s/version = \"($SEMVER)\".*/\1/")"
-    echo "DuDuClaw OS version audit (source of truth: Cargo workspace = $platform_v)"
+    local os_v platform_v distro_line distro_v
+    # OS release version — this repo's own line (VERSION). Independent of the
+    # embedded platform version below since the 2026-09 split; there is no
+    # top-level Cargo.toml in the OS repo to read anymore.
+    os_v="$(read_os_version || echo '?')"
+    # Embedded platform/CLI version. Post-split, duduclaw-platform-version.inc
+    # IS the source of truth for the vendored gateway snapshot's version (it
+    # used to be cross-checked against the workspace Cargo.toml, which lives
+    # in the separate DuDuClaw repo now) — so the recipe-PV drift check below
+    # measures against this file, not a Cargo.toml.
+    platform_v="$(grep -m1 -E "^DUDUCLAW_PLATFORM_VERSION = \"$SEMVER\"" "$PLATFORM_VERSION_INC" 2>/dev/null \
+        | sed -E "s/.*\"($SEMVER)\".*/\1/")"
+    echo "DuDuClaw OS version audit"
     echo "------------------------------------------------------------------"
-
+    printf "  %-60s %-12s\n" "OS release version (VERSION)" "$os_v"
     if [[ -f "$PLATFORM_VERSION_INC" ]]; then
-        inc_v="$(grep -m1 -E "^DUDUCLAW_PLATFORM_VERSION = \"$SEMVER\"" "$PLATFORM_VERSION_INC" \
-            | sed -E "s/.*\"($SEMVER)\".*/\1/")"
-        if [[ "$inc_v" == "$platform_v" ]]; then
-            printf "  %-60s %-12s OK\n" "$PLATFORM_VERSION_INC" "$inc_v"
-        else
-            printf "  %-60s %-12s DRIFT (expected %s)\n" "$PLATFORM_VERSION_INC" "${inc_v:-?}" "$platform_v"
-        fi
+        printf "  %-60s %-12s (embedded platform SoT)\n" "$PLATFORM_VERSION_INC" "${platform_v:-?}"
     else
         echo "  $PLATFORM_VERSION_INC: MISSING"
     fi
@@ -237,9 +301,10 @@ run_plan() {
     fi
     echo "[PLAN, not executed] DuDuClaw OS image build for $version / $machine / $image"
     echo "------------------------------------------------------------------"
-    echo "1. Version metadata must already be synced to $version (run"
-    echo "   'scripts/release.sh <bump>' first — this script never bumps"
-    echo "   versions itself, see 'audit' above to confirm)."
+    echo "1. OS release version is $version (from the VERSION file — edit that"
+    echo "   file to bump the OS line; run 'release-os.sh audit' to confirm the"
+    echo "   embedded platform version + recipe PVs). This script never bumps"
+    echo "   versions itself."
     echo ""
     echo "2. Build (real command — or just run './scripts/release-os.sh"
     echo "   build v$version --machine $machine --image $image'):"
@@ -416,17 +481,24 @@ run_smoke_test() {
 # manifest.json SCHEMA (DESIGN §3.3/§3.4 — documented here, not just in the
 # design doc, so the next reader finds it next to the code that writes it):
 #   {
-#     "schema": 1,                          this schema's own version
-#     "version": "<version arg as given>",  e.g. "1.62.0-y1-bringup"
+#     "schema": 2,                          this schema's own version
+#     "version": "<OS release version>",    e.g. "0.1.0" — the DuDuClaw OS's
+#                                            own release line (VERSION file),
+#                                            independent of the embedded
+#                                            platform version since the
+#                                            2026-09 split
+#     "platform_version": "<embedded CLI>", e.g. "1.62.0" — the vendored
+#                                            DuDuClaw gateway/CLI snapshot's
+#                                            version (duduclaw-platform-
+#                                            version.inc); provenance only
 #     "distro_version_full": "<DISTRO_VERSION>", numeric + milestone suffix,
 #                                            read from duduclaw-os.conf —
-#                                            may differ from "version" above
-#                                            if the operator packages under
-#                                            a different label than what's
-#                                            baked into the image; this
-#                                            field is the ground truth for
-#                                            "what did the image actually
-#                                            report at build time"
+#                                            the ground truth for "what did
+#                                            the image actually report at
+#                                            build time" (still composed from
+#                                            the embedded platform version,
+#                                            NOT the OS release version, until
+#                                            the A/B-chain re-bake follow-up)
 #     "machine": "<duduclaw-qemux86-64|duduclaw-genericx86-64>",
 #     "image": "<bitbake recipe name>",     e.g. "duduclaw-image-appliance"
 #     "generated_at": "<ISO-8601 UTC>",
@@ -620,13 +692,14 @@ run_package() {
         | sed -E 's/^DISTRO_VERSION = "(.*)"$/\1/' \
         | sed "s/\${DUDUCLAW_PLATFORM_VERSION}/${platform_v}/")"
 
-    python3 - "$out_dir" "$artifact_base" "$version" "$version_full" "$machine" "$image" "$artifact_wic" "$artifact_sha" "${rpm_count:-0}" "${rpm_size:-0}" "$OS_SIGN_KEY" <<'PYEOF'
+    python3 - "$out_dir" "$artifact_base" "$version" "$version_full" "$machine" "$image" "$artifact_wic" "$artifact_sha" "${rpm_count:-0}" "${rpm_size:-0}" "$OS_SIGN_KEY" "${platform_v:-}" <<'PYEOF'
 import json, sys, datetime, pathlib
-out_dir, artifact_base, version, version_full, machine, image, artifact_wic, artifact_sha, rpm_count, rpm_size, sign_key = sys.argv[1:12]
+out_dir, artifact_base, version, version_full, machine, image, artifact_wic, artifact_sha, rpm_count, rpm_size, sign_key, platform_version = sys.argv[1:13]
 wic_path = pathlib.Path(out_dir, artifact_wic)
 manifest = {
-    "schema": 1,
+    "schema": 2,
     "version": version,
+    "platform_version": platform_version or None,
     "distro_version_full": version_full,
     "machine": machine,
     "image": image,
@@ -652,6 +725,123 @@ PYEOF
     echo "  $artifact_wic.sha256"
     echo "  $artifact_wic.minisig"
     echo "  $artifact_base.manifest.json"
+    echo ""
+    echo "Next: ./scripts/release-os.sh publish v$version --machine $machine"
+    echo "  (uploads the four files above to a GitHub Release on $OS_GH_REPO)"
+}
+
+# --- publish: upload the packaged artifact set as a GitHub Release ----------
+# Consumes what run_package() staged locally (never rebuilds/re-signs).
+# Fail-closed integrity gate first: re-verify the minisig against the pinned
+# OS_RELEASE_PUBKEY and re-check the sidecar .sha256 before anything leaves
+# this machine — an artifact that cannot prove its own integrity on the build
+# host must never reach a download page. Idempotent: creates the release if
+# absent, else uploads with --clobber so a re-run replaces same-named assets.
+run_publish() {
+    local version="$1" machine="$2" dry_run="$3"
+    local out_dir artifact_base artifact_wic tag
+    out_dir="artifacts/os/v${version}/${machine}"
+    artifact_base="duduclaw-os-${machine}-v${version}"
+    artifact_wic="${artifact_base}.wic.zst"
+    tag="v${version}"
+
+    echo "Publishing DuDuClaw OS release: $tag / $machine -> $OS_GH_REPO"
+    echo "  Local artifact dir: $out_dir"
+
+    # The exact four files 'package' produced. All must exist and be
+    # non-empty — never publish a partial set.
+    local files=(
+        "$out_dir/$artifact_wic"
+        "$out_dir/$artifact_wic.sha256"
+        "$out_dir/$artifact_wic.minisig"
+        "$out_dir/$artifact_base.manifest.json"
+    )
+    local f missing=false
+    for f in "${files[@]}"; do
+        if [[ ! -s "$f" ]]; then
+            echo "Error: missing/empty artifact: $f" >&2
+            missing=true
+        fi
+    done
+    if $missing; then
+        echo "       Run 'release-os.sh package $tag --machine $machine' first." >&2
+        return 1
+    fi
+
+    if $dry_run; then
+        echo ""
+        echo "[DRY RUN] Would:"
+        echo "  1. minisign -V self-verify $artifact_wic against the pinned"
+        echo "     OS_RELEASE_PUBKEY, and shasum -c the sidecar .sha256"
+        echo "     (fail-closed — never publish an unverifiable set)."
+        echo "  2. gh release create/edit $tag --repo $OS_GH_REPO and upload:"
+        for f in "${files[@]}"; do echo "       $(basename "$f")"; done
+        echo ""
+        echo "No gh/network calls were made."
+        return 0
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "Error: gh (GitHub CLI) not found in PATH." >&2
+        return 1
+    fi
+    if ! command -v minisign >/dev/null 2>&1; then
+        echo "Error: minisign not found in PATH." >&2
+        return 1
+    fi
+
+    if ! minisign -V -m "$out_dir/$artifact_wic" -P "$OS_RELEASE_PUBKEY" >/dev/null; then
+        echo "Error: self-verification against OS_RELEASE_PUBKEY failed — refusing" >&2
+        echo "       to publish an artifact that cannot verify itself." >&2
+        return 1
+    fi
+    if ! ( cd "$out_dir" && shasum -a 256 -c "$artifact_wic.sha256" >/dev/null 2>&1 ); then
+        echo "Error: $artifact_wic.sha256 does not match the artifact — refusing" >&2
+        echo "       to publish a set whose own checksum disagrees." >&2
+        return 1
+    fi
+
+    # Honesty gate: a PRIVATE repo's release assets are NOT publicly
+    # downloadable. Warn (don't block) — flipping repo visibility is the
+    # operator's call, not a release-script side effect.
+    local is_private
+    is_private="$(gh repo view "$OS_GH_REPO" --json isPrivate -q .isPrivate 2>/dev/null || echo unknown)"
+    if [[ "$is_private" == "true" ]]; then
+        echo "" >&2
+        echo "NOTE: $OS_GH_REPO is PRIVATE — this release and its assets will NOT be" >&2
+        echo "      publicly downloadable until you make the repo public" >&2
+        echo "      (gh repo edit $OS_GH_REPO --visibility public). Uploading anyway." >&2
+    fi
+
+    if gh release view "$tag" --repo "$OS_GH_REPO" >/dev/null 2>&1; then
+        echo "  Release $tag already exists — uploading assets with --clobber."
+        if ! gh release upload "$tag" "${files[@]}" --repo "$OS_GH_REPO" --clobber; then
+            echo "Error: gh release upload failed." >&2
+            return 1
+        fi
+    else
+        echo "  Creating release $tag."
+        if ! gh release create "$tag" "${files[@]}" \
+            --repo "$OS_GH_REPO" \
+            --title "DuDuClaw OS $tag" \
+            --notes "DuDuClaw OS $tag — $machine image.
+
+Verify before flashing:
+    minisign -V -P $OS_RELEASE_PUBKEY -m $artifact_wic
+    shasum -a 256 -c $artifact_wic.sha256
+
+Artifacts:
+- $artifact_wic — zstd-compressed whole-disk image (decompress with zstd -d, then flash with bmaptool/dd)
+- $artifact_wic.sha256, $artifact_wic.minisig — integrity
+- $artifact_base.manifest.json — build provenance (NOT part of the trust chain)"; then
+            echo "Error: gh release create failed." >&2
+            return 1
+        fi
+    fi
+
+    echo ""
+    echo "Published: https://github.com/$OS_GH_REPO/releases/tag/$tag"
+    for f in "${files[@]}"; do echo "  $(basename "$f")"; done
 }
 
 # --- arg parsing --------------------------------------------------------
@@ -667,10 +857,10 @@ case "$1" in
         ;;
     plan)
         shift
-        VERSION="${1:-}"
+        VERSION=""
         MACHINE="${DEFAULT_MACHINES[0]}"
         IMAGE="$DEFAULT_IMAGE"
-        shift || true
+        if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --machine) shift; MACHINE="${1:-}" ;;
@@ -679,20 +869,17 @@ case "$1" in
             esac
             shift
         done
-        if [[ -z "$VERSION" ]]; then
-            echo "Error: 'plan' requires a version, e.g. v1.63.0" >&2
-            exit 1
-        fi
+        if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
         run_plan "${VERSION#v}" "$MACHINE" "$IMAGE"
         exit $?
         ;;
     build)
         shift
-        VERSION="${1:-}"
+        VERSION=""
         MACHINE="${DEFAULT_MACHINES[0]}"
         IMAGE="$DEFAULT_IMAGE"
         DRY_RUN=false
-        shift || true
+        if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --machine) shift; MACHINE="${1:-}" ;;
@@ -702,20 +889,17 @@ case "$1" in
             esac
             shift
         done
-        if [[ -z "$VERSION" ]]; then
-            echo "Error: 'build' requires a version, e.g. v1.63.0" >&2
-            exit 1
-        fi
+        if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
         run_build "${VERSION#v}" "$MACHINE" "$IMAGE" "$DRY_RUN"
         exit $?
         ;;
     smoke)
         shift
-        VERSION="${1:-}"
+        VERSION=""
         MACHINE="${DEFAULT_MACHINES[0]}"
         IMAGE="$DEFAULT_IMAGE"
         TIMEOUT=300
-        shift || true
+        if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --machine) shift; MACHINE="${1:-}" ;;
@@ -725,11 +909,9 @@ case "$1" in
             esac
             shift
         done
-        if [[ -z "$VERSION" ]]; then
-            echo "Error: 'smoke' requires a version, e.g. v1.63.0 (used only for" >&2
-            echo "       log messages — the actual boot target is --image/--machine)." >&2
-            exit 1
-        fi
+        # VERSION is used only for log messages here (the actual boot target
+        # is --image/--machine), but default it for a consistent CLI surface.
+        if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
         if ! command -v docker >/dev/null 2>&1; then
             echo "Error: docker not found — cannot reach the Yocto builder container." >&2
             exit 1
@@ -743,12 +925,12 @@ case "$1" in
         ;;
     package)
         shift
-        VERSION="${1:-}"
+        VERSION=""
         MACHINE="${DEFAULT_MACHINES[0]}"
         IMAGE="$DEFAULT_IMAGE"
         DRY_RUN=false
         SKIP_SMOKE=false
-        shift || true
+        if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --machine) shift; MACHINE="${1:-}" ;;
@@ -759,11 +941,26 @@ case "$1" in
             esac
             shift
         done
-        if [[ -z "$VERSION" ]]; then
-            echo "Error: 'package' requires a version, e.g. v1.63.0" >&2
-            exit 1
-        fi
+        if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
         run_package "${VERSION#v}" "$MACHINE" "$IMAGE" "$DRY_RUN" "$SKIP_SMOKE"
+        exit $?
+        ;;
+    publish)
+        shift
+        VERSION=""
+        MACHINE="${DEFAULT_MACHINES[0]}"
+        DRY_RUN=false
+        if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --machine) shift; MACHINE="${1:-}" ;;
+                --dry-run) DRY_RUN=true ;;
+                *) echo "Error: unknown option '$1'" >&2; exit 1 ;;
+            esac
+            shift
+        done
+        if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
+        run_publish "${VERSION#v}" "$MACHINE" "$DRY_RUN"
         exit $?
         ;;
     *)

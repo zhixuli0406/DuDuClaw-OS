@@ -1,0 +1,20 @@
+# DuDuClaw OS release version — independent line.
+#
+# This is the DuDuClaw OS's OWN release version, decoupled from the embedded
+# DuDuClaw platform/CLI version (meta-duduclaw/conf/distro/include/
+# duduclaw-platform-version.inc, which tracks the vendored gateway snapshot).
+# scripts/release-os.sh reads the FIRST non-comment line below as the single
+# source of truth for:
+#   - the release artifact name  (duduclaw-os-<machine>-v<version>.wic.zst)
+#   - the GitHub Release tag      (v<version>) on zhixuli0406/DuDuClaw-OS
+#
+# Bump it by editing that line (bare semver, optional leading 'v'). The
+# internal Yocto DISTRO_VERSION (A/B GPT part names / UKI filenames / update-
+# ledger ProtectVersion) is deliberately NOT driven from here — aligning it is
+# a follow-up that needs a full image bake to re-verify the A/B chain, see
+# wiki/pm/repo-split-runbook-2026-09.md §5.
+#
+# 0.x on purpose: the OS is still in bring-up (internal DISTRO_VERSION carries
+# the "-y1-bringup" milestone) — 0.y.z signals pre-GA. Cross 1.0.0 only when
+# the bring-up line is declared shippable-GA.
+0.1.0

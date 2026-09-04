@@ -1,0 +1,1 @@
+import{da as e,ma as t,sa as n}from"./index-3-LYRpGv.js";import{BillingPage as r}from"./BillingPage-Df-E2k4C.js";var i=t();function a(){let[t]=e();return t.get(`tab`)===`accounts`?(0,i.jsx)(n,{to:`/app/system/accounts`,replace:!0}):(0,i.jsx)(r,{})}export{a as BillingShell};

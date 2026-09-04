@@ -1,0 +1,1 @@
+var e={open_source:`Open Source`,hobby:`Hobby (Trial)`,solo:`Solo`,studio:`Studio`,business:`Business`,partner:`Partner (NFR)`,personal_pro_self_host:`Personal Pro`,self_host_pro:`Self-Host Pro`,oem:`OEM`};function t(t){return e[t]??t}export{t as n,e as t};

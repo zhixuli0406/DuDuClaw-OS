@@ -1,0 +1,1 @@
+function e(e){return Array.from(new Set(e.map(e=>e.department).filter(e=>!!e&&e.length>0))).sort()}export{e as t};

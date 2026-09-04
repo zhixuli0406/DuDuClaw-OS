@@ -1,0 +1,1 @@
+var e={admin:3,manager:2,employee:1};function t(t,n){return n?t?e[t]>=e[n]:!1:!0}export{t as n,e as t};

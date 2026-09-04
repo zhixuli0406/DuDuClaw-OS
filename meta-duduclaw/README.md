@@ -1,10 +1,12 @@
 # meta-duduclaw — DuDuClaw OS Yocto layer
 
 DuDuClaw OS's product layer: distro policy, machine definitions, and (from
-Y1-2 onward) recipes for the five `duduclaw-*` Rust binaries. Lives in the
-**main repo root** — not a separate repo, not under `commercial/` — per
-[`commercial/docs/MAP-agent-native-os-2026-08.md`](../commercial/docs/MAP-agent-native-os-2026-08.md)
-decision ⑥ "同版同發＝單 repo＋OS 進主版本流".
+Y1-2 onward) recipes for the five `duduclaw-*` Rust binaries. Since the
+2026-09 split this layer lives at the root of the standalone **DuDuClaw-OS**
+repo; the DuDuClaw platform's Rust workspace stays in the separate
+[DuDuClaw](https://github.com/zhixuli0406/DuDuClaw) repo and is vendored here
+as a trimmed snapshot (see `recipes-duduclaw/duduclaw-cli/refresh-src.sh`).
+See the repo-root [`README.md`](../README.md) for the overview.
 
 This is the **base-OS bring-up line** (Yocto), replacing the Debian
 `appliance/` line for the eventual product image. `appliance/` is frozen

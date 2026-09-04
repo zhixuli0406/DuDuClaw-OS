@@ -1,0 +1,25 @@
+# --- Yocto / kas build output (regenerable, large) ---
+meta-duduclaw/.build/
+meta-duduclaw/build/
+appliance/.build/
+appliance/.vm/
+appliance/mkosi.output/
+appliance/mkosi.cache/
+appliance/.yocto-build-logs/
+appliance/.yocto-cache/
+
+# --- Release artifacts staged locally by scripts/release-os.sh ---
+# (compressed image + sha256 + minisig + manifest; published to GitHub
+# Releases, never committed to the repo)
+/artifacts/
+
+# --- Secure Boot / signing key material — NEVER commit ---
+/sb-keys/
+
+# --- Flatpak offline repo tarball (regenerate with gen-flatpak-offline-repo.sh) ---
+# Only this path is ignored; other vendored *.tar.zst recipe sources (e.g.
+# recipes-security/gitleaks/files/) ARE tracked, so no blanket *.tar.zst.
+meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-offline-repo/files/*.tar.zst
+
+# --- misc ---
+.DS_Store

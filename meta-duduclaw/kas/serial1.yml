@@ -18,3 +18,12 @@ local_conf_header:
   serial1: |
     BB_NUMBER_THREADS = "1"
     PARALLEL_MAKE = "-j 1"
+  # Disable SPDX/SBOM generation for release bakes. It is optional metadata
+  # (not part of the bootable image or the trust chain), it roughly doubles
+  # image-task disk churn on the size-constrained 89 GB build volume, and its
+  # static/rootfs SPDX docs live under deploy/spdx — which release-time disk
+  # cleanup prunes, making do_create_*_spdx fail ("Could not find a ... SPDX
+  # document"). Turn it off here so a release bake is self-contained. Re-enable
+  # (drop this line) when SBOM output is actually wanted and disk allows.
+  spdx-off: |
+    INHERIT:remove = "create-spdx create-spdx-2.2 create-spdx-3.0"

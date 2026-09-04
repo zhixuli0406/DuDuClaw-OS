@@ -23,3 +23,12 @@ meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-offline-repo/files/*.tar.zst
 
 # --- misc ---
 .DS_Store
+
+# --- L3 Confidential trees (same convention as the DuDuClaw platform repo) ---
+# Design docs / roadmaps / commercial / competitive / research notes never
+# enter this public repo. The OS design docs currently live in the platform
+# maintainers' private commercial/ tree; if any are ever copied here they
+# go under these ignored paths only. See CLAUDE.md
+# "Documentation Classification & Placement".
+/commercial/
+/research/

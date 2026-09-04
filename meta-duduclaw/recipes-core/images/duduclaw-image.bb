@@ -9,7 +9,7 @@
 SUMMARY = "DuDuClaw OS product image (Y2-1) -- duduclaw-sysd + duduclaw payload"
 DESCRIPTION = "${SUMMARY}. Built on the Y1-1 minimal image; adds whichever \
 of the five duduclaw-* Rust binaries have a working Yocto recipe so far \
-(see meta-duduclaw/recipes-duduclaw/*/PLAN.md and the Y2-1 handoff notes \
+(see each recipe's own header comment and the bring-up notes under wiki/impl/ \
 for per-binary status -- this image recipe only lists what actually \
 builds, never speculative IMAGE_INSTALL entries for unfinished recipes)."
 LICENSE = "MIT"
@@ -115,7 +115,7 @@ IMAGE_INSTALL:append = " duduclaw-sysd duduclaw-cli"
 require recipes-core/images/duduclaw-image-desktop.inc
 
 # --- Network: Wi-Fi via iwd + systemd-networkd (Y7-3, 2026-08-26) ---------
-# Closes REAL-HW-CHECKLIST.md §5's honest gap: this image previously had
+# Closes wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md §5's honest gap: this image previously had
 # firmware blobs (Y2-2's linux-firmware-iwlwifi/-mediatek/-rtl-nic, machine
 # .conf) and kernel drivers (Y2-2's duduclaw-{n305,8845hs}.cfg fragments)
 # but NO userspace connection-management stack at all -- a Wi-Fi-capable
@@ -167,7 +167,7 @@ require recipes-core/images/duduclaw-image-desktop.inc
 # necessarily limited to "iwd daemon runs + D-Bus service registers +
 # gateway's iwd.rs gets a real, non-error 'no adapter' answer instead of
 # erroring out", NOT "a real network associates" -- that half needs the
-# real N305/8845HS hardware, same honest limit REAL-HW-CHECKLIST.md already
+# real N305/8845HS hardware, same honest limit wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md already
 # states for the Debian line's own equivalent).
 IMAGE_INSTALL:append = " iwd wireless-regdb-static duduclaw-network-config"
 

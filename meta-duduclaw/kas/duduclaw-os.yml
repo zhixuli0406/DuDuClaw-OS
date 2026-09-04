@@ -3,7 +3,7 @@
 # Chosen over manual `bitbake-layers add-layer` + hand-edited local.conf
 # because it is the "選最簡" option the task called for: one declarative
 # file pins every upstream repo's exact commit and declares the layer set —
-# see meta-duduclaw/README.md "為什麼選 kas" for the fuller rationale.
+# see wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md "Why kas" for the fuller rationale.
 #
 # Usage (from the Docker builder container, cwd = /workspace = repo root):
 #   kas build meta-duduclaw/kas/duduclaw-os.yml
@@ -45,7 +45,7 @@
 #
 # uki.bbclass (meta/classes-recipe/uki.bbclass) and image_types_wic.bbclass
 # both confirmed present at the pinned oe-core commit — see
-# meta-duduclaw/README.md "UKI 接通紀錄" for the exact config this class
+# wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md "UKI 接通紀錄" for the exact config this class
 # needs (lifted directly from oe-core's own CI selftest,
 # meta/lib/oeqa/selftest/cases/uki.py, not guessed).
 #
@@ -307,7 +307,7 @@ local_conf_header:
   duduclaw-bringup: |
     # Big directories bind-mounted to HOST disk (not the Docker Desktop VM's
     # own ~58G virtual disk, which only had ~17G free at bring-up time) —
-    # see meta-duduclaw/README.md "磁碟策略" for the full reasoning.
+    # see wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md "磁碟策略" for the full reasoning.
     DL_DIR ?= "/yocto-cache/downloads"
     SSTATE_DIR ?= "/yocto-cache/sstate-cache"
 

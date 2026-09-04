@@ -1,5 +1,13 @@
 # DuDuClaw OS — appliance image
 
+> **Frozen line.** This Debian/mkosi recipe is the earlier DuDuClaw OS
+> appliance line, kept as a reference and transition artifact only. The
+> product is built from the Yocto layer in [`../meta-duduclaw/`](../meta-duduclaw/README.md);
+> nothing below is shipped or maintained for fixes. Paths like `crates/...`
+> refer to the DuDuClaw platform repo's Rust workspace; `commercial/docs/...`
+> and `research/...` refer to the maintainers' private design tree (not
+> published).
+
 A bootable Debian-based disk image that turns a small x86-64 PC into a
 headless DuDuClaw appliance: plug in power and ethernet, and the dashboard
 comes up on the LAN at `http://duduclaw.local`. Everything after that

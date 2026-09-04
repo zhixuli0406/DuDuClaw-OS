@@ -18,7 +18,7 @@
 #     "systemd usrmerge polkit wayland opengl vulkan" — "alsa" is NOT in
 #     there. Left at its default, PipeWire would build with its hardware
 #     backend plugin DISABLED: no sink would EVER appear, `wpctl status`
-#     would show nothing, and every claim in REAL-HW-CHECKLIST.md's audio
+#     would show nothing, and every claim in wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md's audio
 #     section would be quietly false despite the package installing cleanly
 #     and do_package_qa passing — a silent gap of exactly the shape this
 #     project's engineering conventions exist to catch. Fixed by force-
@@ -41,7 +41,7 @@
 #     BUILD-time cost of compiling gstreamer/libcamera/webrtc-audio-
 #     processing support that would then just sit on disk unused — real
 #     savings on a build host already flagged as disk-constrained (see
-#     meta-duduclaw/README.md "磁碟策略").
+#     wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md "磁碟策略").
 #
 # Explicitly KEPT, each for a reason mirroring D5's own audio-stack
 # reasoning:
@@ -67,7 +67,7 @@
 #               session.
 #   pw-cat    — ships `pw-play`/`pw-cat`/`pw-record`, the only realistic way
 #               to actually push a test tone through a real device on THIS
-#               image: alsa-utils (`speaker-test`, which REAL-HW-CHECKLIST.md
+#               image: alsa-utils (`speaker-test`, which wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md
 #               §6 mentions as a Debian-line-style fallback) is not installed
 #               here at all, and D5's own Debian-line verification used
 #               exactly this class of tool.

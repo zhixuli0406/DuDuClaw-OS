@@ -6,7 +6,7 @@
 # "attached", and real-hardware headless-vs-display handling is not this
 # milestone's judgment criterion), no cage/Chromium fallback ladder (no cage
 # or chromium recipe exists in this image), no fcitx5/D-Bus-session-bus/
-# PipeWire wiring (all explicit Y3-1 gaps, see meta-duduclaw/README.md and
+# PipeWire wiring (all explicit Y3-1 gaps, see wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md and
 # the TODO doc's Y3-1 entry -- comp+shell only, matching the judgment①②
 # scope: "Yocto image 開機直接進 duduclaw-comp+duduclaw-shell 的原生桌面").
 #

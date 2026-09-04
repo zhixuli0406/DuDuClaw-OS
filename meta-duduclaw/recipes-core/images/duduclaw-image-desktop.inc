@@ -188,7 +188,7 @@ IMAGE_INSTALL:append = " source-han-sans-jp-fonts"
 IMAGE_INSTALL:append = " dbus fcitx5 fcitx5-chewing"
 
 # --- Audio: PipeWire + WirePlumber (Y7-3, 2026-08-26) ---------------------
-# Closes REAL-HW-CHECKLIST.md §6's honest gap: duduclaw-shell already ships
+# Closes wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md §6's honest gap: duduclaw-shell already ships
 # a real wpctl-subprocess audio backend (crates/duduclaw-shell/src/audio/
 # wpctl.rs, confirmed byte-identical in this recipe's own vendored
 # duduclaw-shell-src/ snapshot before this ticket touched anything) and a
@@ -223,7 +223,7 @@ IMAGE_INSTALL:append = " dbus fcitx5 fcitx5-chewing"
 # invocation -- appliance/run-vm-yocto.sh (this line's own QEMU launcher)
 # gained `-audiodev none -device intel-hda -device hda-duplex` for this
 # ticket, mirroring the Debian line's own run-vm.sh `-audiodev`/intel-hda
-# convention (REAL-HW-CHECKLIST.md §6 already names this as the expected
+# convention (wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md §6 already names this as the expected
 # QEMU device shape) -- without it `wpctl status` would correctly show zero
 # sinks even with a fully working PipeWire/WirePlumber, which would be
 # indistinguishable from the packages being silently disabled the way (1)
@@ -264,7 +264,7 @@ IMAGE_INSTALL:append = " pipewire wireplumber"
 # kernel-module-algif-skcipher kernel-module-snd-hda-intel
 # kernel-module-snd-hda-codec-realtek ...` individually: this image doesn't
 # yet know which exact HDA codec chip the real N305/8845HS hardware carries
-# (REAL-HW-CHECKLIST.md's own "AX-series module TBD" disclosure for Wi-Fi
+# (wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md's own "AX-series module TBD" disclosure for Wi-Fi
 # firmware applies here too, for the audio codec), and enumerating "the
 # codecs QEMU's intel-hda emulates" would silently under-cover real
 # hardware the same way the original bug under-covered everything. The

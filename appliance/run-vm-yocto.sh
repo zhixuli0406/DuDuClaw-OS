@@ -92,7 +92,7 @@ ARGS=(
   -device virtio-rng-pci,rng=rng0
   # Audio (Y7-3, 2026-08-26): mirrors the Debian appliance line's own
   # run-vm.sh convention (`-audiodev none` + `intel-hda` + `hda-duplex`) --
-  # REAL-HW-CHECKLIST.md §6 already documents this exact device shape as
+  # wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md §6 already documents this exact device shape as
   # what a QEMU audio verification pass needs. `-audiodev none` means the
   # HOST plays nothing (no real speaker needed on the build/CI machine),
   # but the GUEST still sees a real, driver-bindable Intel HDA controller +

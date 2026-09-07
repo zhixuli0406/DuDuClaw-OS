@@ -1,0 +1,52 @@
+# DuDuClaw OS — compat.d declaration: LLaMA-Factory LlamaBoard, the
+# browser-based fine-tuning / post-training console (WP-F, 2026-09-05).
+#
+# The platform repo's docs/todo/TODO-ai-runtimes-2026-09.md §1 決策 4C(b): "LLaMA-Factory
+# LlamaBoard 以 compat.d 選裝 runner（docker）提供給有獨顯的進階使用者".
+#
+# SCOPE, AND THE HARDWARE LINE THIS DECLARATION EXISTS TO DRAW. That same
+# TODO's §2 research bullet is blunt about it: every 2026-era post-training
+# stack (LLaMA-Factory, Unsloth, Axolotl, h2o) assumes CUDA or ROCm, and
+# BOTH reference machines for this appliance -- Intel N305 and Ryzen
+# 8845HS, integrated graphics only -- have no usable training path at all.
+# llama.cpp's own finetune path is not a substitute (unstable at this
+# version, per the same research round).
+#
+# So this runner is declared but is EXPECTED to report missing/unusable on
+# the reference hardware, and that is the honest state, not a packaging
+# bug -- the identical shape waydroid.toml and windows-vm.toml already use
+# ("a declared-but-missing runner is the honest `missing: <tool>` state the
+# CP-1 acceptance criterion exercises, not an error", duduclaw-image-
+# compat.inc). What it buys: a user who attaches a real discrete NVIDIA GPU
+# (or runs this on a workstation) gets a one-command path to a training UI
+# instead of a research project, and every user gets a `duduclaw compat
+# list` row that says WHY it is unavailable rather than nothing at all.
+#
+# require_tool = ["docker"] only, deliberately NOT ["docker", "nvidia-ctk"]:
+# the NVIDIA container toolkit is not packaged in this layer (no recipe
+# anywhere under meta-duduclaw / meta-virtualization at this kas config's
+# pinned revisions -- checked, zero hits), so listing it would make this row
+# permanently missing on every machine including ones that could actually
+# run it after a manual host-side install. `docker` IS in the image
+# (duduclaw-image-compat.inc's docker+runc+docker-compose set, CP-2/B2), so
+# the tool check reports present and the GPU requirement is surfaced through
+# `notes` + `install_hint`, where a human reads it, instead of through a
+# tool name the scanner can only answer yes/no about.
+#
+# Nothing about LLaMA-Factory ships in the rootfs: `docker run` pulls
+# hiyouga/llamafactory at first use, same "declare the runner, download the
+# payload at use-time" contract as waydroid's Android system image and
+# dockur/windows' install media.
+#
+# Port 7860 is LlamaBoard's own default (Gradio). Bound to 127.0.0.1, not
+# 0.0.0.0: it is an unauthenticated web UI that can read and write the
+# host paths mounted into it. duduclaw-firewall's default-deny ruleset is a
+# second layer, not the first.
+
+id = "llamafactory"
+display_name = "LLaMA-Factory 微調工作台（LlamaBoard）"
+from_os = "linux-container"
+entrypoint = "docker run --rm -it --gpus all -p 127.0.0.1:7860:7860 -v /data/duduclaw/models:/models -v /data/duduclaw/finetune:/workspace hiyouga/llamafactory:latest llamafactory-cli webui"
+require_tool = ["docker"]
+install_hint = "需要獨立顯示卡：先在主機安裝 NVIDIA 驅動與 NVIDIA Container Toolkit（`nvidia-ctk runtime configure --runtime=docker && systemctl restart docker`），再執行 `duduclaw compat llamafactory`。首次執行會從 Docker Hub 下載 hiyouga/llamafactory 映像（約 20 GB）。"
+notes = "本機微調需要 NVIDIA 獨顯（CUDA）；本產品的參考機種 Intel N305 與 Ryzen 8845HS 只有內顯，跑不動訓練——這個 runner 是給外接／自備 GPU 主機的進階使用者。資料集匯出與雲端訓練請走 dashboard 的「微調與後訓練」頁，那條路徑不需要本機 GPU。模型與資料集掛載自 /data/duduclaw/models 與 /data/duduclaw/finetune；LlamaBoard 只綁 127.0.0.1:7860，不對外開放。"

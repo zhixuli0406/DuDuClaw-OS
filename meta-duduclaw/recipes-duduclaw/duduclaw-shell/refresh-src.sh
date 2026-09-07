@@ -25,7 +25,25 @@
 # to, sibling of S) via a second `file://` SRC_URI entry.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# Cross-repo source resolution (2026-09-05, same contract as duduclaw-cli's
+# refresh-src.sh): the Rust workspace lives in the DuDuClaw platform repo,
+# not here. DUDUCLAW_CLI_SRC_ROOT overrides; otherwise try the monorepo
+# layout (this script three levels below a checkout that has crates/) and
+# fall back to a sibling checkout named DuDuClaw next to this OS repo.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${DUDUCLAW_CLI_SRC_ROOT:-}" ]]; then
+    REPO_ROOT="$DUDUCLAW_CLI_SRC_ROOT"
+elif [[ -d "$_SCRIPT_DIR/../../../crates" ]]; then
+    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." && pwd)"          # monorepo
+else
+    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)/DuDuClaw"  # split: sibling checkout
+fi
+if [[ ! -d "$REPO_ROOT/crates" ]]; then
+    echo "refresh-src: platform workspace not found at $REPO_ROOT/crates" >&2
+    echo "  Check out github.com/zhixuli0406/DuDuClaw as 'DuDuClaw' next to this OS repo," >&2
+    echo "  or set DUDUCLAW_CLI_SRC_ROOT to its path. Refusing to touch the snapshot." >&2
+    exit 1
+fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SHELL_SRC="$REPO_ROOT/crates/duduclaw-shell"
@@ -40,6 +58,7 @@ rm -rf "$SHELL_OUT" "$GUI_OUT"
 # pattern, copied here at first) copies ~20G to disk before deleting it,
 # which is what made the first run of this script take minutes instead of
 # seconds. rsync skips it outright.
+for d in "$SHELL_SRC" "$GUI_SRC"; do [[ -d "$d" ]] || { echo "refresh-src: missing source dir $d" >&2; exit 1; }; done
 rsync -a --exclude target "$SHELL_SRC/" "$SHELL_OUT/"
 cp "$REPO_ROOT/LICENSE" "$SHELL_OUT/LICENSE" 2>/dev/null || true
 

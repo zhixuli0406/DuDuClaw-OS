@@ -1,0 +1,70 @@
+duduclaw-ai-runtimes — licence record for the vendored payload
+==============================================================
+
+This package redistributes third-party software it did not write. The
+licences below were read off each component's own published metadata on
+2026-09-05 (npm registry `license` field, PyPI classifier, or the upstream
+repository's LICENSE file), not inferred from the project's reputation.
+Two of the vendor binaries ship no licence file at all; they are recorded as
+proprietary rather than guessed at.
+
+The full texts, as shipped by each upstream, are installed on the image at
+/opt/duduclaw/runtimes/LICENSES/ (the generator copies each npm package's
+own LICENSE/LICENSE.md out of its tree, and fetches OpenCode's from its
+tag). /opt/duduclaw/runtimes/MANIFEST.txt carries the exact version, source
+URL and sha256 of every component, plus a `skipped:` line for anything not
+present.
+
+  Component                    Version pinned   Licence
+  ---------------------------  ---------------  --------------------------
+  @anthropic-ai/claude-code     2.1.261          Proprietary — Anthropic
+                                                 Commercial Terms of
+                                                 Service. npm `license`
+                                                 field: "SEE LICENSE IN
+                                                 README.md".
+  @openai/codex                 0.153.4          Apache-2.0
+  @google/gemini-cli            0.58.0           Apache-2.0
+  @qwen-code/qwen-code          0.23.0           Apache-2.0, by the LICENSE
+                                                 file inside the package —
+                                                 but the npm metadata
+                                                 publishes NO `license`
+                                                 field, so tooling that
+                                                 reads metadata sees
+                                                 nothing. The shipped text
+                                                 is the authority here; the
+                                                 gap is upstream's.
+  @moonshot-ai/kimi-code        0.41.0           MIT
+  @github/copilot               1.0.83           Proprietary — GitHub
+                                                 Copilot / pre-release
+                                                 terms. npm `license`
+                                                 field: "SEE LICENSE IN
+                                                 LICENSE.md".
+  Grok Build (grok)             see MANIFEST     Proprietary — xAI Terms of
+                                                 Service. Closed binary,
+                                                 upstream ships no licence
+                                                 file with the artifact.
+  Cursor agent (agent)          see MANIFEST     Proprietary — Anysphere /
+                                                 Cursor Terms of Service.
+                                                 Closed, no licence file in
+                                                 the package.
+  OpenCode (opencode)           1.18.29          MIT
+                                                 (github.com/anomalyco/opencode)
+  mistral-vibe (vibe)           2.25.0           Apache-2.0
+  Kiro CLI (kiro-cli)           NOT BUNDLED      Proprietary — AWS Customer
+                                                 Agreement / Kiro Service
+                                                 Terms. Left out on size
+                                                 grounds; /usr/bin/kiro-cli
+                                                 prints the install command.
+
+Transitive npm and PyPI dependencies carry their own licences (overwhelm-
+ingly MIT / Apache-2.0 / BSD / ISC); the resolved set is recorded in
+/opt/duduclaw/runtimes/package-lock.json and in the .dist-info directories
+under /opt/duduclaw/runtimes/python.
+
+Redistribution consequence, stated plainly: an image built with this
+package is not freely redistributable on the strength of its open-source
+components alone. The four proprietary entries above are subject
+to their vendors' own terms, which is why this recipe sets
+LICENSE_FLAGS = "duduclaw-ai-runtimes-vendor-terms" — any distro that wants
+this payload has to accept those terms explicitly in its own configuration
+rather than inherit them silently.

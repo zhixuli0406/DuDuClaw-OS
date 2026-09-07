@@ -207,6 +207,37 @@ usage() {
         | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
+# --- host disk guard ---------------------------------------------------------
+# Docker Desktop keeps the builder's volumes inside a SPARSE Docker.raw on the
+# Mac's own APFS volume. When that volume fills up, the VM's writes fail and
+# the Docker engine crashes ("docker ps" → EOF) — it happened three times on
+# 2026-09-06, every time while an image's do_image_ext4 / do_image_wic was
+# writing several GB. An appliance bake needs ~25 GB of NEW host space at its
+# peak (rootfs + ext4 + sparse wic + wic.zst, twice for image + ISO), so this
+# fails closed below DUDUCLAW_MIN_HOST_FREE_GB (default 30). Override only
+# when you know the bake is incremental and small.
+: "${DUDUCLAW_MIN_HOST_FREE_GB:=30}"
+check_host_disk_free() {
+    local free_kb free_gb
+    free_kb=$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')
+    if [[ -z "$free_kb" ]]; then
+        echo "Error: could not read free space of the volume holding \$HOME" >&2
+        echo "       (df failed) — failing closed, not assuming there is room." >&2
+        return 1
+    fi
+    free_gb=$(( free_kb / 1024 / 1024 ))
+    if (( free_gb < DUDUCLAW_MIN_HOST_FREE_GB )); then
+        echo "Error: only ${free_gb} GB free on the host volume holding \$HOME;" >&2
+        echo "       a bake needs at least ${DUDUCLAW_MIN_HOST_FREE_GB} GB of headroom or" >&2
+        echo "       Docker Desktop's VM disk runs out mid-image and the engine" >&2
+        echo "       crashes (2026-09-06). Free space (old artifacts/demo/*.iso," >&2
+        echo "       *.wic.zst, scratch qcow2s) or set DUDUCLAW_MIN_HOST_FREE_GB." >&2
+        return 1
+    fi
+    echo "Host disk: ${free_gb} GB free (minimum ${DUDUCLAW_MIN_HOST_FREE_GB} GB) — OK"
+    return 0
+}
+
 # --- concurrency guard (DESIGN §3.5) ----------------------------------------
 # Fails CLOSED: a detection error (pgrep exit code other than "found" (0) or
 # "no match" (1) — e.g. docker exec itself failing) is treated as "cannot
@@ -364,6 +395,9 @@ run_build() {
         return 1
     fi
     if ! check_builder_idle; then
+        return 1
+    fi
+    if ! check_host_disk_free; then
         return 1
     fi
 

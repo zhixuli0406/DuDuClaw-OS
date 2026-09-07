@@ -61,6 +61,7 @@ IMAGE_INSTALL:append = " \
     duduclaw-flatpak-kiosk-verify \
     duduclaw-steam-devices \
     duduclaw-flatpak-offline-repo \
+    duduclaw-flatpak-setup \
 "
 
 # --- Disk headroom on top of the baked-in offline repo --------------------

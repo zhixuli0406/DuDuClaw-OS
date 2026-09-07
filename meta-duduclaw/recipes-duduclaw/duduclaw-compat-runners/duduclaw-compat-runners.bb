@@ -1,4 +1,4 @@
-SUMMARY = "compat.d declarations: Bottles (Windows app) + Waydroid (Android) + windows-vm (Windows VM+RemoteApp)"
+SUMMARY = "compat.d declarations: Bottles (Windows app) + Waydroid (Android) + windows-vm (Windows VM+RemoteApp) + llamafactory (LlamaBoard fine-tuning)"
 DESCRIPTION = "${SUMMARY}. CP-1/A3 (commercial/docs/TODO-compat-cp1-2026-08.md) \
 shipped the Bottles+Waydroid pair; CP-2/B3 (commercial/docs/TODO-compat-cp2-2026-08.md) \
 adds the third declaration, windows-vm.toml, for the self-packaged \
@@ -32,6 +32,7 @@ SRC_URI = " \
     file://bottles.toml \
     file://waydroid.toml \
     file://windows-vm.toml \
+    file://llamafactory.toml \
 "
 
 S = "${UNPACKDIR}"
@@ -45,6 +46,12 @@ do_install() {
     install -m 0644 ${UNPACKDIR}/bottles.toml ${D}${datadir}/duduclaw/compat.d/
     install -m 0644 ${UNPACKDIR}/waydroid.toml ${D}${datadir}/duduclaw/compat.d/
     install -m 0644 ${UNPACKDIR}/windows-vm.toml ${D}${datadir}/duduclaw/compat.d/
+    # WP-F (2026-09-05): LlamaBoard/LLaMA-Factory, the fine-tuning console.
+    # Same declaration-only shape as the other three -- see
+    # files/llamafactory.toml's own header for why it is expected to be
+    # unusable on the reference mini-PCs and why require_tool lists only
+    # docker.
+    install -m 0644 ${UNPACKDIR}/llamafactory.toml ${D}${datadir}/duduclaw/compat.d/
 }
 
 FILES:${PN} += "${datadir}/duduclaw/compat.d"

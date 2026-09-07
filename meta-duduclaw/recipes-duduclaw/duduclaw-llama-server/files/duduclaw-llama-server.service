@@ -1,0 +1,105 @@
+# DuDuClaw OS — local GGUF inference server (WP-F, 2026-09-05).
+#
+# The platform repo's docs/todo/TODO-ai-runtimes-2026-09.md §1 決策 3A / §3 WP-D: the appliance
+# ships llama.cpp's llama-server, but NO model weights. The gateway's
+# `inference.local.download` RPC fetches a curated GGUF into
+# /data/duduclaw/models, writes /data/duduclaw/llama-server.env, then
+# `systemctl restart duduclaw-llama-server`.
+#
+# WHY THIS UNIT IS INERT UNTIL A MODEL EXISTS. ConditionPathExists on the
+# env file is the whole design: llama-server with no `-m` argument exits
+# non-zero immediately, and with Restart=on-failure that is a restart loop
+# on every boot of every appliance that never downloaded a model -- which,
+# on a box using only cloud runtimes, is most of them. A failed Condition
+# is not a failure: systemd marks the unit inactive with condition-failed
+# and moves on, silently and with no restart counter. That is exactly the
+# "declared but not yet provisioned" state this needs, and it is why the
+# check is a Condition rather than an ExecStartPre test (which WOULD count
+# as a failure and WOULD retry).
+[Unit]
+Description=DuDuClaw local model server (llama.cpp)
+Documentation=https://github.com/ggml-org/llama.cpp
+# Ordering only, no Requires=: /data is the partition the env file and the
+# models live on, so starting before it is mounted is pointless -- but a
+# missing /data must leave this unit condition-failed, not failed.
+After=network.target data.mount
+Wants=data.mount
+# Both conditions must hold. The env file is what the gateway writes when a
+# model has been selected; the models directory is where the weights are.
+ConditionPathExists=/data/duduclaw/llama-server.env
+ConditionPathIsDirectory=/data/duduclaw/models
+
+[Service]
+Type=simple
+# `-` prefix: absent file is not an error. Redundant with the Condition
+# above for the boot path, but this unit is also started by hand and by
+# `systemctl restart` from the gateway, and the two mechanisms disagree
+# about ordering under a race (the gateway writes the file and restarts in
+# the same breath). LLAMA_MODEL / LLAMA_CTX / LLAMA_PORT / LLAMA_EXTRA_ARGS
+# come from here; the defaults below cover a file that sets only some.
+EnvironmentFile=-/data/duduclaw/llama-server.env
+Environment=LLAMA_CTX=8192
+Environment=LLAMA_PORT=8080
+Environment=LLAMA_EXTRA_ARGS=
+# --host 127.0.0.1 is not a default worth losing: this is an unauthenticated
+# HTTP API with a completion endpoint, and duduclaw-firewall's ruleset is a
+# second layer, not the first. The gateway reaches it over loopback
+# (inference.toml endpoint = http://127.0.0.1:8080/v1); nothing off-box
+# should.
+#
+# $LLAMA_EXTRA_ARGS is intentionally UNQUOTED so systemd word-splits it
+# (systemd.service(5): variable expansion in ExecStart splits on whitespace
+# unless the whole word is quoted) -- it carries multi-flag strings like
+# "-ngl 99 --flash-attn". The operator-supplied content of that variable is
+# therefore trusted input; it is written by the gateway, not by a remote
+# caller.
+ExecStart=/usr/bin/llama-server -m ${LLAMA_MODEL} -c ${LLAMA_CTX} --port ${LLAMA_PORT} --host 127.0.0.1 $LLAMA_EXTRA_ARGS
+Restart=on-failure
+RestartSec=5
+# A model that does not fit RAM makes llama-server die during load, every
+# time, in seconds. Without a start limit that is a permanent restart loop
+# on a box nobody is watching.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# --- Hardening ------------------------------------------------------------
+# RUNS AS ROOT, AND THAT IS A COMPROMISE THIS FILE OWES AN EXPLANATION FOR.
+# A dedicated `duduclaw-llama` account would be the right shape -- this
+# process parses attacker-influencable input (a GGUF downloaded from Hugging
+# Face, plus prompts) in a large C++ codebase and needs only two things:
+# read access to the weights and a loopback TCP port. It cannot have one
+# today: the weights live at /data/duduclaw/models, and /data/duduclaw
+# itself is mode 0700 root as of this same round
+# (duduclaw-firstboot-provision.sh, because that directory now holds every
+# vendor CLI's OAuth tokens). A 0700 parent blocks traversal for any other
+# uid regardless of what mode the models directory itself has, so a
+# dedicated account would simply fail to open its own model file.
+#
+# The two real fixes, neither of which is in this round's scope: move the
+# model store out from under the credentials tree (/data/models), or give
+# /data/duduclaw a group and mode 0710 with the service account in it. Both
+# touch the firstboot provisioner and the gateway's own path constants at
+# once, so they belong in the WP-D wave that wires
+# inference.local.download, not here. Tracked in docs/guides/ai-runtimes.md.
+#
+# Everything below is what remains available WITHOUT a uid change -- it is
+# real defence (no writable filesystem, no devices, no new privileges, no
+# namespaces, only three address families), not decoration.
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/data/duduclaw/models
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+# MemoryDenyWriteExecute=no is explicit, not an oversight: llama.cpp's
+# CPU backend does not JIT, but the Vulkan/GPU paths this recipe leaves the
+# door open for do map executable shader memory, and flipping this to yes
+# would produce a failure that only appears once a GPU build lands. Stated
+# here so the next person does not "harden" it and lose a day.
+
+[Install]
+WantedBy=multi-user.target

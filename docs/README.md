@@ -30,8 +30,11 @@ duplicated here.
 
 ## Public docs by type (`docs/<type>/`)
 
-No typed docs have landed in this repo yet. Each subdirectory is created
-when its first document does:
+| Document | Description |
+|----------|-------------|
+| [guides/ai-runtimes.md](guides/ai-runtimes.md) | The bundled AI coding CLIs and llama.cpp: what is installed, what is deliberately not, where credentials live, how to run a local model, how to regenerate the runtime bundle, and the root-slot budget it consumes |
+
+The remaining subdirectories are created when their first document lands:
 
 | Subdir | Holds |
 |--------|-------|
@@ -58,6 +61,8 @@ User-facing OS docs currently published from the platform repo:
 | [../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md](../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md) | Archived layer README from the Y1–Y9 bring-up waves: why three repos / why kas, UKI chain verification, disk strategy, fcitx5 dependency closure, `/data` provisioning. Dated; superseded by the CHANGELOG and the current layer README |
 | [../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md](../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md) | Real-hardware acceptance checklist written for the Y6 burn package (N305 / 8845HS). Its premises predate v0.1.0 |
 | [../wiki/reports/bring-up-evidence/](../wiki/reports/bring-up-evidence/README.md) | QEMU boot and bitbake transcripts behind the bring-up "verified" claims |
+| [../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md](../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md) | Desktop-edition installer ISO walked end to end under QEMU on a Mac host (installer → first boot → lock screen); PASS table, defects found, demo video provenance |
+| [../wiki/eval/ai-runtimes-qemu-walkthrough-2026-09-06.md](../wiki/eval/ai-runtimes-qemu-walkthrough-2026-09-06.md) | AI-runtime bundle / local model / fine-tuning round walked under QEMU: bundled CLI versions, OOBE provider list + risk notice + real `claude setup-token` URL, `runtime.detect`, GGUF download → llama-server, dry-run fine-tune job, defects found and fixed (/lib64 loader, `linux-container`, `openai_compat` wire name) |
 
 ---
 

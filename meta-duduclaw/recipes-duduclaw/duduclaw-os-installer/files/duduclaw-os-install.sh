@@ -4,10 +4,11 @@
 # Runs INSIDE the live environment (duduclaw-image-live). Its one job: take
 # the already-built, already-signed production A/B disk image that the live
 # ISO carries as install material (duduclaw-install.wic.zst — the .wic output
-# of duduclaw-image-ab.bb, produced by scripts/release-os.sh, zstd-compressed
-# and dropped into the ISO9660 tree by duduclaw-image-live.bb's
-# populate_live:append) and write it, whole-disk, onto the target machine's
-# internal storage. Then reboot lands on the real UKI+systemd-boot A/B system.
+# of the payload image named in duduclaw-install.edition beside it:
+# duduclaw-image-ab for the headless ISO, duduclaw-image-appliance for the
+# desktop-edition ISO — zstd-compressed and dropped into the ISO9660 tree by
+# duduclaw-image-live.bb's populate_live:append) and write it, whole-disk,
+# onto the target machine's internal storage. Then reboot lands on the real UKI+systemd-boot A/B system.
 #
 # WHY WHOLE-DISK dd, NOT per-partition copy (design doc §3.2.c): the A/B .wic
 # is a complete GPT image — ESP (with the build-time-signed UKI whose
@@ -67,6 +68,9 @@
 set -eu
 
 INSTALL_IMAGE_NAME="duduclaw-install.wic.zst"
+# Edition marker written next to the payload by the image recipe (optional —
+# older ISOs do not carry it); only ever printed, never trusted for logic.
+EDITION_MARKER_NAME="duduclaw-install.edition"
 
 c_info='\033[1;36m'; c_warn='\033[1;33m'; c_err='\033[1;31m'; c_ok='\033[1;32m'; c_off='\033[0m'
 log()  { printf "${c_info}[installer]${c_off} %s\n" "$*"; }
@@ -107,6 +111,9 @@ if [ -z "$IMG" ]; then
     done
 fi
 [ -n "$IMG" ] || fail "找不到安裝素材 ${INSTALL_IMAGE_NAME}（已掃 /media/realroot、/run/media/*、/media/* 及所有掛載點；live 媒介未掛載或 ISO 未含安裝映像）"
+if [ -f "$(dirname "$IMG")/${EDITION_MARKER_NAME}" ]; then
+    log "安裝素材版本（edition）：$(head -n1 "$(dirname "$IMG")/${EDITION_MARKER_NAME}")"
+fi
 log "安裝素材：$IMG ($(du -h "$IMG" 2>/dev/null | cut -f1))"
 
 # Which physical disk carries the install material — it must be excluded from
@@ -123,11 +130,23 @@ fi
 [ -n "$SRC_DISK" ] && log "安裝媒介承載於 /dev/${SRC_DISK}（將自目標清單排除）"
 
 # ---------------------------------------------------------------------------
-# 2. Enumerate candidate target disks (TYPE=disk; drop optical/loop/ram and
-#    the install medium itself).
+# 2. Enumerate candidate target disks (TYPE=disk, RO=0; drop optical/loop/
+#    ram and the install medium itself).
+#
+#    Y20-P5 (2026-09-04) bug fix: RO=1 (lsblk's own read-only flag) is now
+#    part of the awk filter, not just TYPE — a graphical-installer QEMU
+#    walkthrough (duduclaw-shell's `live_install` module, fixed in the same
+#    round) found a virtio-attached install medium enumerating as
+#    `TYPE=disk`, not `rom`, which would otherwise have slipped past a
+#    TYPE-only filter. This script's own `SRC_DISK` exclusion below already
+#    covers that exact case independently (it excludes by WHICH DISK the
+#    payload mount resolves to, not by TYPE), so this fix is defense in
+#    depth here — but a genuinely read-only device that ISN'T the live
+#    medium (e.g. a write-protected card) still needs RO=1 to be excluded
+#    on its own.
 # ---------------------------------------------------------------------------
 CANDIDATES=""
-for disk in $(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+for disk in $(lsblk -dno NAME,TYPE,RO 2>/dev/null | awk '$2=="disk" && $3=="0"{print $1}'); do
     case "$disk" in
         loop*|ram*|sr*|fd*) continue ;;
     esac

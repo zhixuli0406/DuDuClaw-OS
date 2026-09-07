@@ -1,0 +1,41 @@
+# DuDuClaw OS — bind /data/system/timesync onto /var/lib/systemd/timesync
+# (VER-RO follow-up, 2026-09-05).
+#
+# Found by the desktop-edition QEMU walkthrough (wiki/eval/desktop-iso-qemu-
+# walkthrough-2026-09-05.md): on the read-only root, systemd-timesyncd
+# crash-looped at every boot with `status=238/STATE_DIRECTORY` — its
+# upstream unit declares `StateDirectory=systemd/timesync`, which systemd
+# must be able to create/chown under the real /var/lib before ExecStart, and
+# EROFS makes that fail three times in a row until the restart counter gives
+# up. Net effect: no NTP at all on the shipped image, and the wall clock
+# drifts to whatever the RTC said (the walkthrough's lock screen showed a
+# time hours away from the host's).
+#
+# Same mechanism as var-lib-iwd.mount (the only knob for a StateDirectory=
+# on a read-only root is a bind over that exact path). Scope is the single
+# timesync directory, NOT /var/lib/systemd wholesale — duduclaw-data-binds.bb's
+# header records why the parent must stay on the root slot (journal catalog,
+# random-seed handled by initramfs-module-duduclaw-persist).
+#
+# Ownership: created root 0755 on the /data side by duduclaw-data-binds-
+# early.service; systemd's StateDirectory= handling chowns the (bind-
+# mounted, writable) directory to systemd-timesync:systemd-timesync at
+# service start, exactly as it would on a writable root.
+[Unit]
+Description=Bind /data/system/timesync onto /var/lib/systemd/timesync (VER-RO)
+Documentation=file:///usr/share/doc/duduclaw/DESIGN-os-trust-chain-2026-09.md
+After=data.mount duduclaw-data-binds-early.service
+Requires=data.mount duduclaw-data-binds-early.service
+Before=systemd-timesyncd.service
+
+[Mount]
+What=/data/system/timesync
+Where=/var/lib/systemd/timesync
+Type=none
+Options=bind,nosuid,nodev,noexec
+
+[Install]
+# RequiredBy, not WantedBy — same reasoning as the sibling units: a failed
+# bind must stop timesyncd from (failing to) write its clock file onto the
+# read-only root slot.
+RequiredBy=systemd-timesyncd.service

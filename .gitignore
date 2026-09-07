@@ -32,3 +32,10 @@ meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-offline-repo/files/*.tar.zst
 # "Documentation Classification & Placement".
 /commercial/
 /research/
+
+# --- AI runtime bundle tarball (regenerate with gen-ai-runtimes-bundle.sh) ---
+# ~600 MB of third-party vendor binaries; reproducible from the generator
+# plus the versions pinned in its MANIFEST.txt, so it stays out of git for
+# the same reason the flatpak offline repo does.
+meta-duduclaw/recipes-duduclaw/duduclaw-ai-runtimes/files/*.tar.zst
+meta-duduclaw/recipes-duduclaw/duduclaw-ai-runtimes/files/*.tar.zst.sha256

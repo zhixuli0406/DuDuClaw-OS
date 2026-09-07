@@ -1,0 +1,83 @@
+
+==> [0/7] tooling
+debconf: delaying package configuration, since apt-utils is not installed
+v22.23.2
+10.9.8
+Python 3.11.2
+
+==> [1/7] npm install (six vendor CLIs)
+
+added 64 packages in 41s
+npm notice
+npm notice New major version of npm available! 10.9.8 -> 12.0.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+npm notice To update run: npm install -g npm@12.0.2
+npm notice
+
+==> [2/7] Grok Build
+
+==> [3/7] Cursor agent
+
+==> [4/7] OpenCode
+
+==> [5/7] Kiro CLI (skipped by design)
+
+==> [6/7] mistral-vibe (pip --target, cp314/manylinux_2_28_x86_64)
+
+==> [6b/7] prune non-executable payload
+
+==> [7/7] measure + pack
+48K	/srv/bundle/duduclaw-ai-runtimes/LICENSES
+4.0K	/srv/bundle/duduclaw-ai-runtimes/MANIFEST.txt
+335M	/srv/bundle/duduclaw-ai-runtimes/bin
+252M	/srv/bundle/duduclaw-ai-runtimes/cursor-agent
+1.2G	/srv/bundle/duduclaw-ai-runtimes/node_modules
+68K	/srv/bundle/duduclaw-ai-runtimes/package-lock.json
+4.0K	/srv/bundle/duduclaw-ai-runtimes/package.json
+159M	/srv/bundle/duduclaw-ai-runtimes/python
+/*stdin*\            : 30.55%   (  1.85 GiB =>    579 MiB, /out/duduclaw-ai-runtimes-20260905.tar.zst) 
+
+==> done
+duduclaw-ai-runtimes bundle — generated 2026-09-05T14:13:07Z by gen-ai-runtimes-bundle.sh
+host: Linux 6.12.76-linuxkit x86_64 | node v22.23.2 | npm 10.9.8 | python Python 3.11.2
+install prefix on the appliance: /opt/duduclaw/runtimes
+
+== Node CLIs (npm install --omit=dev) ==
+npm  @anthropic-ai/claude-code@2.1.261  cli=claude  license=SEE LICENSE IN README.md  https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.261.tgz
+npm  @openai/codex@0.153.4  cli=codex  license=Apache-2.0  https://registry.npmjs.org/@openai/codex/-/codex-0.153.4.tgz
+npm  @google/gemini-cli@0.58.0  cli=gemini  license=Apache-2.0  https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-0.58.0.tgz
+npm  @qwen-code/qwen-code@0.23.0  cli=qwen  license=UNSPECIFIED  https://registry.npmjs.org/@qwen-code/qwen-code/-/qwen-code-0.23.0.tgz
+npm  @moonshot-ai/kimi-code@0.41.0  cli=kimi  license=MIT  https://registry.npmjs.org/@moonshot-ai/kimi-code/-/kimi-code-0.41.0.tgz
+npm  @github/copilot@1.0.83  cli=copilot  license=SEE LICENSE IN LICENSE.md  https://registry.npmjs.org/@github/copilot/-/copilot-1.0.83.tgz
+
+== Vendor binaries (bin/) ==
+bin  grok 1.0.13  license=proprietary (xAI Terms of Service — closed-source binary, no license file shipped by upstream)
+     url=https://x.ai/cli/grok-1.0.13-linux-x86_64.zst
+     sha256(download)=27d8a63b30bad9ca3a3145e031f43f0be3a8b29fb0ef5fe785e4a61a44b6b496  sha256(binary)=edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1  size=166079904
+bin  cursor-agent build=2026.09.02-c22c1a3  license=proprietary (Cursor/Anysphere Terms of Service — closed-source, no license file in the package)
+     url=https://downloads.cursor.com/lab/2026.09.02-c22c1a3/linux/x64/agent-cli-package.tar.gz
+     sha256(tar.gz)=b73b59854762535c0fc20d7ccc51c3b5a356a851491088d60a362be48750f53c  unpacked=547777192 bytes
+bin  opencode v1.18.29  license=MIT (github.com/anomalyco/opencode)
+     url=https://github.com/anomalyco/opencode/releases/download/v1.18.29/opencode-linux-x64.tar.gz
+     sha256(tar.gz)=ea800b7ff56226b70952126c9fc1e2517ca4c4b5682fd9d3f9e87449697a1194  sha256(binary)=ca6c0e1f42be3120595bf6848937e7586ec862c87fa7aa111e89c7cc6e9a4650  size=184666240
+skipped: kiro-cli — 1039.4 MB uncompressed (614.9 MB zip) would consume 46% of the root slot's remaining headroom; /usr/bin/kiro-cli installs it on demand into /data/duduclaw/runtimes-extra instead. Source: https://desktop-release.q.us-east-1.amazonaws.com/latest/kirocli-x86_64-linux.zip (license: proprietary, AWS Customer Agreement / Kiro Service Terms)
+
+== Python runtime (python/) ==
+pip  mistral-vibe==2.25.0  license=Apache-2.0  https://pypi.org/project/mistral-vibe/2.25.0/
+     target=/opt/duduclaw/runtimes/python  console-scripts: dotenv httpx idna jsondiff jsonpatch jsonpointer jsonschema keyring markdown-it markdownify mcp normalizer pygmentize uvicorn vibe vibe-acp vibe-app-server watchfiles websockets 
+     packages=97  size=143478817 bytes
+
+== Pruned (present in npm/vendor output, removed on purpose) ==
+pruned: cursor-agent/cursor-agent-sea (137956544 bytes)
+pruned: cursor-agent/cursor-agent-worker-sea (147131584 bytes)
+pruned: node_modules/@img/sharp-wasm32 (9078164 bytes)
+
+== Sizes ==
+1.2G	node_modules
+335M	bin
+252M	cursor-agent
+159M	python
+48K	LICENSES
+total uncompressed: 1.9G
+-rw-r--r-- 1 root root 606672582 Sep  5 14:15 /out/duduclaw-ai-runtimes-20260905.tar.zst
+986b563fc0dca67b750eefef78bfe7f48915351fb9185805bad9c11d81bb8f2d  duduclaw-ai-runtimes-20260905.tar.zst

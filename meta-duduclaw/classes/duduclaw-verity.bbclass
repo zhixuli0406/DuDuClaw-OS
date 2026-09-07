@@ -355,6 +355,13 @@ IMAGE_FSTYPES:append = "${@ ' ext4' if d.getVar('DUDUCLAW_VERITY_ENABLE') == '1'
 python () {
     if d.getVar('DUDUCLAW_VERITY_ENABLE') != '1':
         return
+    # The '7168' here is only the fallback for a hypothetical verity image
+    # that never sets the variable at all -- it is NOT an assertion about
+    # any shipping image's slot size. duduclaw-image-appliance.bb sets its
+    # own (8192 MiB as of WP-F, 2026-09-05; 7168 before that) and this line
+    # reads whatever that recipe says. Kept in sync with
+    # classes/duduclaw-ab-partflags.bbclass's own `?= "3072"` shape: a
+    # default, deliberately not a constraint.
     slot_mb = int(d.getVar('DUDUCLAW_AB_SLOT_SIZE_MB') or '7168')
     d.setVar('IMAGE_ROOTFS_SIZE', str(slot_mb * 1024))
     d.setVar('IMAGE_OVERHEAD_FACTOR', '1.0')

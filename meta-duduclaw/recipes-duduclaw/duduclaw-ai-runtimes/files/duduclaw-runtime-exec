@@ -1,0 +1,145 @@
+#!/bin/sh
+# DuDuClaw OS — one dispatcher behind every /usr/bin AI-runtime name.
+#
+# /usr/bin/claude, /usr/bin/codex, /usr/bin/gemini, /usr/bin/qwen,
+# /usr/bin/kimi, /usr/bin/copilot, /usr/bin/grok, /usr/bin/agent,
+# /usr/bin/cursor-agent, /usr/bin/opencode and /usr/bin/vibe are all
+# symlinks to this file. It dispatches on $0's basename. ONE script instead
+# of eleven near-identical ones because the environment every runtime needs
+# (NODE_PATH / PATH / PYTHONPATH pointing into /opt/duduclaw/runtimes) is
+# the same three lines in each -- eleven copies would be eleven places for
+# that to drift.
+#
+# Kiro CLI has NO entry and no /usr/bin name on purpose: it is not in the
+# bundle (1 GB, see MANIFEST.txt's `skipped:` line), and duduclaw's runtime
+# detection is file-existence based, so a stub here would make the
+# dashboard/OOBE report Kiro as installed. The platform's runtime catalog
+# shows its vendor install command (and Kiro's own ToS caveat about
+# third-party harnesses); that installer lands in $HOME/.local/bin, which
+# the gateway probes.
+#
+# WHY WRAPPERS AT ALL, rather than symlinking /usr/bin/claude straight at
+# node_modules/.bin/claude:
+#   * NODE_PATH. The npm tree under /opt/duduclaw/runtimes is not on any
+#     default resolution path. Several of these CLIs `require()` optional
+#     peers at runtime (platform packages, keytar, sharp) and resolve them
+#     relative to process.cwd() or the entry file's realpath -- a bare
+#     symlink from /usr/bin resolves its realpath into the bundle and mostly
+#     works, but "mostly" is not a contract, and NODE_PATH makes it one.
+#   * PATH. Every one of these agents shells out (rg, git, the sibling
+#     runtimes). Putting /opt/duduclaw/runtimes/bin ahead of the inherited
+#     PATH is what makes `grok` reachable from inside `claude`'s bash tool.
+#   * Honest failure. A component that is not in this image's bundle (see
+#     MANIFEST.txt's `skipped:` lines) must say so and say what to do about
+#     it -- not die with 127/ENOENT.
+#
+# `duduclaw`'s own runtime detection (crates/duduclaw-core, which_cli)
+# searches /usr/bin among other places, so these symlinks are what makes
+# `duduclaw` see the bundled runtimes at all.
+set -eu
+
+RT=/opt/duduclaw/runtimes
+SELF="$(basename "$0")"
+
+# Everything below writes credentials into $HOME. The gateway gets
+# HOME=/data/duduclaw from its 20-home.conf drop-in (duduclaw-firstboot);
+# an interactive shell does NOT, so a human running `claude` over SSH as
+# root would otherwise scatter tokens into /root -- on a read-only root.
+# Default it here so both paths land in the same durable place, without
+# overriding a HOME that was set deliberately.
+if [ "${HOME:-}" = "" ] || [ "${HOME}" = "/root" ]; then
+    if [ -d /data/duduclaw ]; then
+        HOME=/data/duduclaw
+        export HOME
+    fi
+fi
+
+NODE_PATH="$RT/node_modules${NODE_PATH:+:$NODE_PATH}"
+export NODE_PATH
+PATH="$RT/bin:$PATH"
+export PATH
+
+# Print the "this one is not in the image" message. Kept in one place so
+# every skipped component reads the same and none of them can quietly
+# become a silent failure. Exits 127 (command not found) so scripts and
+# `duduclaw`'s own detection treat it as absent rather than as a crash.
+absent() {
+    name="$1"
+    hint="$2"
+    cat >&2 <<EOF
+${name}: not bundled in this DuDuClaw OS image.
+
+${hint}
+
+（此 runtime 未內建於映像；請依上方指令自行安裝到 /data/duduclaw，
+  該分割區在系統更新時不會被覆寫。）
+EOF
+    exit 127
+}
+
+# node_modules/.bin/<entry> — the entry is either a native ELF (claude) or
+# a JS file with a `#!/usr/bin/env node` shebang (the other five). Exec it
+# directly and both work: PATH above already contains /usr/bin, where
+# meta-oe's nodejs_22.23.2 installs `node`, so the shebang resolves. The
+# node fallback covers an entry that ships without a shebang.
+run_node_cli() {
+    entry="$RT/node_modules/.bin/$1"
+    shift
+    if [ ! -e "$entry" ]; then
+        absent "$SELF" "  npm install -g <package>   # see /opt/duduclaw/runtimes/MANIFEST.txt"
+    fi
+    if [ -x "$entry" ]; then
+        exec "$entry" "$@"
+    fi
+    exec /usr/bin/node "$entry" "$@"
+}
+
+run_bin() {
+    target="$RT/bin/$1"
+    shift
+    [ -x "$target" ] || absent "$SELF" "  see /opt/duduclaw/runtimes/MANIFEST.txt for this component's source URL"
+    exec "$target" "$@"
+}
+
+case "$SELF" in
+    claude)   run_node_cli claude "$@" ;;
+    codex)    run_node_cli codex "$@" ;;
+    gemini)   run_node_cli gemini "$@" ;;
+    qwen)     run_node_cli qwen "$@" ;;
+    kimi)     run_node_cli kimi "$@" ;;
+    copilot)  run_node_cli copilot "$@" ;;
+
+    grok)     run_bin grok "$@" ;;
+    opencode) run_bin opencode "$@" ;;
+
+    # `agent` is Cursor's own preferred command name (its installer symlinks
+    # cursor-agent to `agent`). Both names land here; both reach the same
+    # launcher, which is a bash script that execs its OWN bundled node
+    # v24.5.0 against index.js -- deliberately not the image's node 22.
+    agent|cursor-agent)
+        target="$RT/cursor-agent/cursor-agent"
+        [ -x "$target" ] || absent "$SELF" \
+            "  curl https://cursor.com/install -fsS | bash   # installs into \$HOME/.local"
+        exec "$target" "$@"
+        ;;
+
+    # mistral-vibe is a `pip install --target` tree, not a venv: no
+    # pyvenv.cfg, no interpreter of its own, nothing path-dependent. It needs
+    # exactly one thing -- PYTHONPATH -- and the image's own /usr/bin/python3
+    # (oe-core python3 3.14.5, the interpreter the wheels in that tree were
+    # resolved for).
+    vibe)
+        entry="$RT/python/bin/vibe"
+        if [ ! -e "$entry" ]; then
+            absent vibe "  python3 -m pip install --user mistral-vibe"
+        fi
+        PYTHONPATH="$RT/python${PYTHONPATH:+:$PYTHONPATH}"
+        export PYTHONPATH
+        exec /usr/bin/python3 "$entry" "$@"
+        ;;
+
+    *)
+        echo "duduclaw-runtime-exec: no runtime registered for '$SELF'" >&2
+        exit 2
+        ;;
+esac

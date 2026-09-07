@@ -169,14 +169,17 @@ python do_patch:append() {
     # multiple :append definitions for one function in file order, which
     # works, but one block is simpler to reason about and avoids relying on
     # that merge behavior at all.
+    # 2026-09-05: the branding repoint that used to live here is gone --
+    # upstream home.rs now include_bytes!s the PNGs from the crate's OWN
+    # assets/branding/ (vendored into the crate when appliance/ moved to this
+    # repo), so the snapshot resolves them without any path surgery. Fail
+    # loudly if a stale snapshot still carries the old repo-relative path.
     home_rs = os.path.join(unpackdir, "duduclaw-shell-src", "src", "home.rs")
     if not os.path.exists(home_rs):
         bb.fatal("duduclaw-shell: expected home.rs missing: %s" % home_rs)
-    for png in ("mark-32.png", "cat-512.png"):
-        old = "../../../appliance/branding/png/%s" % png
-        new = "../../duduclaw-shell-branding/%s" % png
-        subprocess.run(["sed", "-i", "s|%s|%s|" % (old, new), home_rs], check=True)
-    bb.note("duduclaw-shell: repointed home.rs branding include_bytes! paths at duduclaw-shell-branding/")
+    with open(home_rs) as f:
+        if "../../../appliance/branding/png/" in f.read():
+            bb.fatal("duduclaw-shell: snapshot home.rs still uses the pre-2026-09-05 appliance/branding include path; re-run refresh-src.sh against a platform checkout that has crates/duduclaw-shell/assets/branding/")
 }
 
 # Y3-6 (2026-08-26) real build failure fix: past cold_path, `duduclaw-shell`
@@ -207,7 +210,8 @@ python do_patch:append() {
 # new destsuffix=duduclaw-shell-branding directory lands. The actual sed
 # lives in the do_patch:append above (kept as ONE block with the cold_path
 # fix, not a second :append).
-SRC_URI += "file://duduclaw-shell-branding"
+# (SRC_URI += "file://duduclaw-shell-branding" removed 2026-09-05 -- see the
+# do_patch:append note above; the two PNGs ship inside duduclaw-shell-src/assets/branding/.)
 
 # Q1 (2026-08-24) shipping gate: this crate's own Cargo.toml `[features]
 # default = []` already matches the appliance's desired build (no debug

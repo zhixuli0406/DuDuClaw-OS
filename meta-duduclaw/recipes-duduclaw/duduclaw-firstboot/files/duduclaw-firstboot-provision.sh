@@ -173,6 +173,35 @@ fi
 # --- gateway home + service-account ownership -----------------------------
 mkdir -p "$DUDUCLAW_HOME"
 chown -R "$DUDUCLAW_OWNER" "$DUDUCLAW_HOME"
+# 0700 on the gateway home itself (WP-F, 2026-09-05, docs/todo/
+# TODO-ai-runtimes-2026-09.md §3 WP-F item 4). Until this round only
+# $SYSTEM_DIR was tightened (chmod 700 near the top of this script) and
+# $DUDUCLAW_HOME kept whatever umask gave it -- 0755 in practice. That was
+# already loose, and this round makes it actively wrong: the gateway's unit
+# now sets HOME=/data/duduclaw (duduclaw-ab-update's 20-home.conf drop-in),
+# so EVERY vendor AI CLI the gateway spawns writes its OAuth/refresh tokens
+# and API keys straight into this directory -- ~/.claude/.credentials.json,
+# ~/.codex/auth.json, ~/.gemini/oauth_creds.json, ~/.qwen, ~/.kimi,
+# ~/.copilot, ~/.config/opencode/auth.json, ~/.grok/auth.json,
+# ~/.local/share/cursor-agent. A world-readable parent directory means
+# duduclaw-kiosk (the only other real local account on this image) can read
+# every one of them. 0700 is the same posture $SYSTEM_DIR already has, for
+# the same reason, applied one level up now that the level above holds
+# secrets too.
+#
+# Applied AFTER the recursive chown on purpose: chown does not touch mode
+# bits, but the ordering keeps "who owns it" and "who may enter it" as one
+# readable block. Not `chmod -R`: subdirectories under here are owned by
+# their own creators (the CLIs themselves, each with its own idea of the
+# right mode -- claude-code already chmod 600's its credentials file) and
+# blanket-recursing would fight them on every boot.
+#
+# The one cross-user read this used to serve -- the kiosk shell reading the
+# Windows RemoteApp registry at $DUDUCLAW_HOME/windows-vm/apps.toml -- now
+# goes through /data/system/windows-vm instead (DUDUCLAW_WINDOWS_VM_APPS_DIR
+# in 20-home.conf; migration 1788717600 moves an existing file). Nothing
+# else under here is meant to be readable by another account.
+chmod 0700 "$DUDUCLAW_HOME"
 
 # --- kiosk user home directory --------------------------------------------
 # duduclaw-kiosk's passwd entry already points --home-dir at this path
@@ -218,6 +247,15 @@ default_language = "zh-TW"
 [gateway]
 bind = "0.0.0.0"
 port = 18789
+
+# The compositor's co-drive agent-seat socket lives in the kiosk session's
+# runtime dir (duduclaw-comp creates both files at every session start);
+# the gateway is a root system service with no XDG_RUNTIME_DIR of its own,
+# so it must be told explicitly -- see migration 1788591433.sh for the
+# retroactive half of this fix.
+[codrive]
+socket_path = "/run/duduclaw-kiosk/duduclaw-codrive.sock"
+token_path = "/run/duduclaw-kiosk/duduclaw-codrive.token"
 EOF
     mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     chown "$DUDUCLAW_OWNER" "$CONFIG_PATH"

@@ -1,0 +1,15 @@
+[Unit]
+Description=DuDuClaw OS: Flatpak installation on /data + offline/flathub remotes
+Documentation=file:///usr/sbin/duduclaw-flatpak-setup.sh
+After=data.mount duduclaw-firstboot-provision.service network.target
+Requires=data.mount
+ConditionPathExists=/etc/flatpak/installations.d/10-duduclaw-data.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/duduclaw-flatpak-setup.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

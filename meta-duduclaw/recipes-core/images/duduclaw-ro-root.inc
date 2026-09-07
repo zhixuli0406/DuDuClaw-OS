@@ -159,6 +159,14 @@ duduclaw_ro_root_hook () {
     # rounds surfaced; grep unit files for ConfigurationDirectory= if a
     # future service joins the image and fails the same way.
     install -d -m 0755 ${IMAGE_ROOTFS}${sysconfdir}/iwd
+    # (2c) /var/lib/systemd/timesync: mountpoint for duduclaw-data-binds'
+    # var-lib-systemd-timesync.mount (2026-09-05). systemd's own tmpfiles.d
+    # entry would create it at boot — impossible on ro root — and a .mount
+    # unit cannot create its own mountpoint either, so it has to exist in
+    # the image. systemd-timesyncd's StateDirectory= chowns the bound
+    # /data-side directory at service start; the mountpoint itself stays
+    # root 0755 (never visible once the bind is in place).
+    install -d -m 0755 ${IMAGE_ROOTFS}/var/lib/systemd/timesync
     # (3) systemd-random-seed writes /var/lib/systemd/random-seed and
     # FAILS (oneshot, non-degradable) on a read-only fs. Masked rather
     # than bind-mounting /var/lib/systemd wholesale: a bind would hide the

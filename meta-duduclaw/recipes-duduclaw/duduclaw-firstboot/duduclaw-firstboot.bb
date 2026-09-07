@@ -27,8 +27,11 @@ SRC_URI = " \
     file://duduclaw-firstboot-provision.service \
     file://duduclaw-data-migrate.service \
     file://10-data.conf \
+    file://20-home.conf \
     file://30-data.conf \
     file://1787540626.sh \
+    file://1788591433.sh \
+    file://1788717600.sh \
 "
 
 inherit systemd allarch
@@ -50,6 +53,12 @@ do_install() {
     # 10-ab-home.conf already set for the identical class of override.
     install -d ${D}${systemd_system_unitdir}/duduclaw-gateway.service.d
     install -m 0644 ${UNPACKDIR}/10-data.conf ${D}${systemd_system_unitdir}/duduclaw-gateway.service.d/10-data.conf
+    # 20-home.conf (WP-F, 2026-09-05): Environment=HOME=/data/duduclaw, so
+    # the vendor AI CLIs duduclaw-ai-runtimes ships write their credential
+    # trees onto the durable partition instead of the read-only, update-
+    # overwritten root. See that file's own header for the ten paths this
+    # covers and for why it is a separate drop-in from 10-data.conf.
+    install -m 0644 ${UNPACKDIR}/20-home.conf ${D}${systemd_system_unitdir}/duduclaw-gateway.service.d/20-home.conf
 
     # systemd-repart definition -- read by duduclaw-firstboot-repart.sh at
     # first real boot, not by wic at build time (see that .conf file's own
@@ -63,6 +72,8 @@ do_install() {
     # $DUDUCLAW_HOME with no Debian-specific assumption.
     install -d ${D}${datadir}/duduclaw/migrations
     install -m 0644 ${UNPACKDIR}/1787540626.sh ${D}${datadir}/duduclaw/migrations/1787540626.sh
+    install -m 0644 ${UNPACKDIR}/1788591433.sh ${D}${datadir}/duduclaw/migrations/1788591433.sh
+    install -m 0644 ${UNPACKDIR}/1788717600.sh ${D}${datadir}/duduclaw/migrations/1788717600.sh
 }
 
 # duduclaw-firstboot-provision.service/duduclaw-data-migrate.service/
@@ -82,8 +93,11 @@ FILES:${PN} += " \
     ${systemd_system_unitdir}/duduclaw-firstboot-provision.service \
     ${systemd_system_unitdir}/duduclaw-data-migrate.service \
     ${systemd_system_unitdir}/duduclaw-gateway.service.d/10-data.conf \
+    ${systemd_system_unitdir}/duduclaw-gateway.service.d/20-home.conf \
     ${nonarch_libdir}/repart.d/30-data.conf \
     ${datadir}/duduclaw/migrations/1787540626.sh \
+    ${datadir}/duduclaw/migrations/1788591433.sh \
+    ${datadir}/duduclaw/migrations/1788717600.sh \
 "
 
 # bash: every script here uses `set -euo pipefail` / `[[ ]]` (bash-isms,

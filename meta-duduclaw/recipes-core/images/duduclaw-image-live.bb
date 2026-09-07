@@ -194,22 +194,34 @@ APPEND = "console=${KERNEL_CONSOLE}"
 # context to compress the install material; the binary must be staged into
 # do_bootimg's native sysroot (image-live.bbclass's own do_bootimg deps —
 # mkisofs/syslinux/etc. — do not pull it in).
-do_bootimg[depends] += "duduclaw-image-ab:do_image_complete zstd-native:do_populate_sysroot"
+# Which finished image the ISO carries as install material (2026-09-04, the
+# "desktop-edition installer" follow-up). Default = the headless A/B image,
+# byte-for-byte the Y19 behaviour; duduclaw-image-live-desktop.bb `require`s
+# this recipe and overrides ONLY this one name to duduclaw-image-appliance
+# (A/B + own compositor/shell + Flatpak apps + IME). Every reference below —
+# the cross-image task dependency, the .wic lookup, the fallback glob, the
+# error text — keys off this single variable so the two ISOs cannot drift.
+DUDUCLAW_INSTALL_PAYLOAD_IMAGE ?= "duduclaw-image-ab"
 
-DUDUCLAW_INSTALL_AB_WIC ?= "${DEPLOY_DIR_IMAGE}/duduclaw-image-ab-${MACHINE}.rootfs.wic"
+do_bootimg[depends] += "${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}:do_image_complete zstd-native:do_populate_sysroot"
+
+DUDUCLAW_INSTALL_AB_WIC ?= "${DEPLOY_DIR_IMAGE}/${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}-${MACHINE}.rootfs.wic"
 
 populate_live:append() {
     ab_wic="${DUDUCLAW_INSTALL_AB_WIC}"
     if [ ! -e "$ab_wic" ]; then
         # symlink name can vary with IMAGE_NAME_SUFFIX; fall back to a glob on
         # the stable prefix rather than guessing the timestamped basename.
-        ab_wic="$(ls -1 ${DEPLOY_DIR_IMAGE}/duduclaw-image-ab-${MACHINE}*.wic 2>/dev/null | grep -v '\-[0-9]\{14\}\.wic$' | head -n1 || true)"
-        [ -n "$ab_wic" ] && [ -e "$ab_wic" ] || ab_wic="$(ls -1t ${DEPLOY_DIR_IMAGE}/duduclaw-image-ab-${MACHINE}*.wic 2>/dev/null | head -n1 || true)"
+        ab_wic="$(ls -1 ${DEPLOY_DIR_IMAGE}/${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}-${MACHINE}*.wic 2>/dev/null | grep -v '\-[0-9]\{14\}\.wic$' | head -n1 || true)"
+        [ -n "$ab_wic" ] && [ -e "$ab_wic" ] || ab_wic="$(ls -1t ${DEPLOY_DIR_IMAGE}/${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}-${MACHINE}*.wic 2>/dev/null | head -n1 || true)"
     fi
     if [ -z "$ab_wic" ] || [ ! -s "$ab_wic" ]; then
-        bbfatal "duduclaw-image-live: production A/B install material not found (looked for ${DUDUCLAW_INSTALL_AB_WIC} and duduclaw-image-ab-${MACHINE}*.wic in ${DEPLOY_DIR_IMAGE}). Build duduclaw-image-ab first."
+        bbfatal "${PN}: install material not found (looked for ${DUDUCLAW_INSTALL_AB_WIC} and ${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}-${MACHINE}*.wic in ${DEPLOY_DIR_IMAGE}). Build ${DUDUCLAW_INSTALL_PAYLOAD_IMAGE} first."
     fi
-    bbnote "duduclaw-image-live: embedding install material $ab_wic -> $1/duduclaw-install.wic.zst"
+    bbnote "${PN}: embedding install material $ab_wic (${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}) -> $1/duduclaw-install.wic.zst"
+    # Edition marker next to the payload so the installer (and anyone mounting
+    # the ISO) can tell which finished image this medium carries.
+    printf '%s\n' "${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}" > "$1/duduclaw-install.edition"
     # -T0 multi-thread, -3 fast level (the .wic is mostly already-compact ext4
     #  + a small ESP; a higher level buys little and costs minutes on every ISO
     #  rebuild). -f overwrite, stream to the ISO tree.

@@ -67,9 +67,12 @@ minisign -V -P RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n -m <file
 shasum -a 256 -c <file>.sha256
 ```
 
-Artifacts are distributed only via GitHub Releases on this repo. The image
-itself enforces Secure Boot with self-signed keys, a read-only root verified
-by dm-verity, and TPM2-sealed LUKS (partial — see the README status note).
+Artifacts are distributed only via GitHub Releases on this repo. The build
+layer supports Secure Boot signing with self-signed keys, dm-verity root
+verification and TPM2-sealed LUKS as build-time overlays; the v0.1.0
+artifacts were built without them (unsigned UKIs, no verity partition, no
+TPM stack — see the README's Trust chain section). The desktop edition ships
+with a read-only root.
 
 ## Disclosure Policy
 

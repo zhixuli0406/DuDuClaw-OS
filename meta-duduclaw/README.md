@@ -51,8 +51,9 @@ meta-duduclaw/
 │                                            #   + refresh-src.sh each; plus OS glue recipes: ab-update,
 │                                            #   firstboot, data-binds, data-open, persist-seed, firewall,
 │                                            #   journald, secaudit-scan, rescue, os-installer, live-tweaks,
-│                                            #   flatpak-offline-repo, flatpak-kiosk-verify, polkit-flatpak,
-│                                            #   compat-runners, steam-devices
+│                                            #   flatpak-offline-repo, flatpak-setup, flatpak-kiosk-verify, polkit-flatpak,
+│                                            #   compat-runners, steam-devices, ai-runtimes, llama-server
+├── recipes-ai/llama-cpp/                    # llama.cpp v0.4.0 — llama-server / llama-cli (CPU build)
 ├── recipes-kernel/linux/                    # linux-yocto 6.18 bbappend + per-machine config fragments
 ├── recipes-graphics/mesa/                   # Mesa version pin (LLVM codegen fix for the GUI stack)
 ├── recipes-multimedia/pipewire/             # PipeWire / WirePlumber audio backend wiring
@@ -75,24 +76,40 @@ meta-duduclaw/
 
 | Recipe | What it is | Role |
 |---|---|---|
-| `duduclaw-image-appliance` | A/B update chain + full desktop payload (own compositor/shell, Flatpak-preloaded Chromium / LibreOffice / Steam, fcitx5 IME), shipping hardening | **Shipping image** — the `.wic.zst` in each release |
+| `duduclaw-image-appliance` | **Desktop edition**: A/B update chain + the desktop stack + Flatpak-preloaded Chromium / LibreOffice / Steam + app compatibility layer + read-only root + firewall + login hardening | **Shipping image** — the `.wic.zst` in each release, and the payload of `duduclaw-image-live-desktop` |
 | `duduclaw-image-appliance-test` | Same payload, root serial autologin | QEMU test variant, never shipped |
-| `duduclaw-image-ab` | A/B GPT layout + update chain, headless gateway + dashboard | Install payload embedded in the live installer |
-| `duduclaw-image-live` (+ `-live-initramfs`) | squashfs live environment with the graphical installer, writes `duduclaw-image-ab` to the target disk | The `.iso` in each release |
+| `duduclaw-image-ab` | **Base image**: A/B GPT layout + update chain on top of `duduclaw-image` (which already carries the desktop stack — comp/shell, IME, audio, XWayland — and the gateway); no app layer, no read-only root, no firewall | Payload of the v0.1.0 `duduclaw-image-live` ISO; a bring-up artifact |
+| `duduclaw-image-live` (+ `-live-initramfs`) | squashfs live environment with the graphical installer; writes the image named by `DUDUCLAW_INSTALL_PAYLOAD_IMAGE` (default `duduclaw-image-ab`) to the target disk | The v0.1.0 `.iso` |
+| `duduclaw-image-live-desktop` | Same live environment, payload = `duduclaw-image-appliance` (desktop edition) | The desktop-edition installer `.iso` (added to v0.1.0 on 2026-09-04) |
 | `duduclaw-image-flatpak` | Flatpak / bubblewrap / ostree / polkit carriage on top of `-data` | Building block |
 | `duduclaw-image-data` | `/data` partition + first-boot provisioning on top of `duduclaw-image` | Building block |
 | `duduclaw-image` | `duduclaw-sysd` + `duduclaw` payload on top of `-minimal` | Building block |
 | `duduclaw-image-minimal` | Console-only UKI + systemd-boot image | Bring-up / smoke |
 
-Shared payload sets: `duduclaw-image-{data,flatpak,desktop,compat}.inc`;
-read-only root + dm-verity wiring: `duduclaw-ro-root.inc`.
+Shared payload sets:
+`duduclaw-image-{data,flatpak,desktop,compat,runtimes}.inc`;
+read-only root wiring: `duduclaw-ro-root.inc`.
+`duduclaw-image-runtimes.inc` (the AI payload: `nodejs` + `nodejs-npm`,
+`duduclaw-ai-runtimes`, `llama-cpp`, `duduclaw-llama-server`) is required
+only by `duduclaw-image-appliance` — deliberately not by `desktop.inc`,
+which `duduclaw-image-live` shares, so ~2 GB of coding agents stays out of
+the installer ISO. It is also why `DUDUCLAW_AB_SLOT_SIZE_MB` is 8192 on the
+appliance image; see [`../docs/guides/ai-runtimes.md`](../docs/guides/ai-runtimes.md)
+for the budget and the refresh procedure. Secure Boot signing and
+dm-verity are enabled by the `kas/sb-signing.yml` overlay, TPM2 + LUKS by
+`kas/tpm-luks.yml`; a build without those overlays (which is what
+`scripts/release-os.sh build` does today, and what v0.1.0 shipped) produces
+unsigned UKIs, no verity partition and no TPM stack. Release ISO builds also
+need `kas/serial1.yml` (SPDX off, `-j1`).
 
 ## Usage
 
 The release pipeline (`scripts/release-os.sh build / smoke / package /
 publish`, see the repo-root README) wraps everything below with builder
-concurrency guards and the `serial1.yml` overlay. The manual steps are for
-development and debugging.
+concurrency guards. It currently passes only the base kas config, so signed /
+verity / TPM builds and the SPDX-off `serial1.yml` overlay have to be added by
+hand (`kas build a.yml:b.yml`); the manual steps below are for development
+and debugging.
 
 ### Host prerequisites
 
@@ -139,8 +156,11 @@ docker run -d --name duduclaw-yocto --platform linux/arm64 \
 ```
 
 The container is long-lived; `release-os.sh` only `exec`s into one that is
-already up and refuses to start a build while another kas/bitbake process
-is in flight.
+already up, refuses to start a build while another kas/bitbake process
+is in flight, and refuses when the Mac volume holding `$HOME` has less than
+`DUDUCLAW_MIN_HOST_FREE_GB` (30) GB free — Docker Desktop's sparse
+`Docker.raw` grows on that volume and the engine crashes mid-image when it
+fills (seen 2026-09-06).
 
 ### Build
 

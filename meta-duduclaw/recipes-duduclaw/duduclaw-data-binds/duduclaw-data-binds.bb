@@ -72,7 +72,10 @@
 #     ugly, easy-to-typo unit filename for zero benefit over editing the
 #     one line that names the path in the first place.
 #   - /var/lib/systemd (random-seed, timesync clock) — NOT bound to /data
-#     this round; systemd-random-seed.service is instead MASKED at image
+#     this round (UPDATE 2026-09-05: the single timesync subdirectory now
+#     IS bound — var-lib-systemd-timesync.mount — because timesyncd's
+#     StateDirectory= crash-looped on the shipped ro root; the parent stays
+#     on the root slot for the reasons below); systemd-random-seed.service is instead MASKED at image
 #     build time by duduclaw-ro-root.inc's rootfs hook (see that file for
 #     the full reasoning — a bind here would hide the shipped journal
 #     catalog and add another very-early ordering edge). UPDATE
@@ -122,6 +125,7 @@ SRC_URI = " \
     file://var-lib-iwd.mount \
     file://var-lib-docker.mount \
     file://var-lib-waydroid.mount \
+    file://var-lib-systemd-timesync.mount \
 "
 
 S = "${UNPACKDIR}"
@@ -139,6 +143,7 @@ do_install() {
     install -m 0644 ${UNPACKDIR}/var-lib-iwd.mount ${D}${systemd_system_unitdir}/
     install -m 0644 ${UNPACKDIR}/var-lib-docker.mount ${D}${systemd_system_unitdir}/
     install -m 0644 ${UNPACKDIR}/var-lib-waydroid.mount ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/var-lib-systemd-timesync.mount ${D}${systemd_system_unitdir}/
 }
 
 FILES:${PN} += " \
@@ -148,6 +153,7 @@ FILES:${PN} += " \
     ${systemd_system_unitdir}/var-lib-iwd.mount \
     ${systemd_system_unitdir}/var-lib-docker.mount \
     ${systemd_system_unitdir}/var-lib-waydroid.mount \
+    ${systemd_system_unitdir}/var-lib-systemd-timesync.mount \
 "
 
 # Each .mount unit's own [Install] RequiredBy= is what actually wires it to
@@ -162,7 +168,7 @@ FILES:${PN} += " \
 # symlinks) the same way it already does for every other unit in this
 # layer with a non-trivial [Install] section (e.g.
 # duduclaw-secaudit-scan.timer's WantedBy=timers.target).
-SYSTEMD_SERVICE:${PN} = "duduclaw-data-binds-early.service var-log.mount var-lib-iwd.mount var-lib-docker.mount var-lib-waydroid.mount"
+SYSTEMD_SERVICE:${PN} = "duduclaw-data-binds-early.service var-log.mount var-lib-iwd.mount var-lib-docker.mount var-lib-waydroid.mount var-lib-systemd-timesync.mount"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 # Doc-only RDEPENDS (this project's own "one explicit source of truth,

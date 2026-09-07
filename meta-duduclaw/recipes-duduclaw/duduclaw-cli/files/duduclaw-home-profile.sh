@@ -9,3 +9,9 @@
 # agree on one home. profile.d reaches login shells only; the services keep
 # their own explicit Environment= lines and do not depend on this file.
 export DUDUCLAW_HOME=/data/duduclaw
+# Same value duduclaw-firstboot's 20-home.conf gives the gateway unit: the
+# Windows RemoteApp registry lives outside the 0700 gateway home so the
+# kiosk shell can read it (see that drop-in's own comment). Without this an
+# operator's `duduclaw compat windows-vm app-add` over serial would write to
+# /data/duduclaw/windows-vm/apps.toml, a file the Launcher never reads.
+export DUDUCLAW_WINDOWS_VM_APPS_DIR=/data/system/windows-vm

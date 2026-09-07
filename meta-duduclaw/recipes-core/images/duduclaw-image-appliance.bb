@@ -58,6 +58,16 @@ require recipes-core/images/duduclaw-image-flatpak.inc
 # the same payload.
 require recipes-core/images/duduclaw-image-compat.inc
 
+# WP-F (2026-09-05, the platform repo's docs/todo/TODO-ai-runtimes-2026-09.md §3 WP-F): the AI
+# runtime payload -- nodejs/npm, the ten bundled vendor coding CLIs
+# under /opt/duduclaw/runtimes, and llama.cpp's local model server. Required
+# HERE and not from duduclaw-image-desktop.inc on purpose: desktop.inc is
+# shared with duduclaw-image-live.bb, and the installer ISO has no use for
+# 2 GB of coding agents. See that .inc's own header for the full root-slot
+# budget this payload consumes -- it is the reason
+# DUDUCLAW_AB_SLOT_SIZE_MB moves to 8192 below.
+require recipes-core/images/duduclaw-image-runtimes.inc
+
 # VER-RO rollout gate PROMOTED to the shipping image (2026-09-04,
 # DESIGN-os-trust-chain-2026-09.md "依賴鏈補記" + §2 支柱一). Read-only root
 # is the security line's whole point (an immutable, verifiable, self-
@@ -196,7 +206,41 @@ IMAGE_FEATURES:remove = "${@'' if d.getVar('DUDUCLAW_IMAGE_TEST_LOGIN') == '1' e
 # separate real-build measurement before shipping to actual hardware --
 # NOT done in this ticket (QEMU-only verification per this ticket's own
 # scope), tracked as a follow-up in TODO-agent-first-os-2026-08.md.
-DUDUCLAW_AB_SLOT_SIZE_MB = "7168"
+#
+# ROUND 3 (WP-F, 2026-09-05, docs/todo/TODO-ai-runtimes-2026-09.md §1 決策 2
+# "全部"): 7168 -> 8192 MiB. This round adds the whole AI-runtime payload to
+# the same slot -- nodejs+npm, duduclaw-ai-runtimes (ten bundled vendor coding
+# CLIs under /opt/duduclaw/runtimes), llama.cpp's llama-server/llama-cli --
+# via recipes-core/images/duduclaw-image-runtimes.inc, which this recipe
+# `require`s below. Round 2's own margin arithmetic no longer holds with
+# that payload on top of the 5924 MiB it measured, so the slot grows by the
+# next power-of-two step rather than by a hand-fitted number.
+#
+# THE CEILING THAT USED TO CAP THIS AT 7168 IS BEING RAISED IN THE SAME
+# WAVE, NOT IGNORED: round 2 chose 7168 specifically to stay under
+# crates/duduclaw-gateway/src/os_update.rs's `MAX_ROOT_BYTES = 8 GiB`
+# (the non-sparse-aware update transfer trips on the FULL declared
+# partition length, not on real content -- see round 2's note above). 8192
+# MiB IS that ceiling exactly, so the platform-side constant goes to 9 GiB
+# in the same TODO's WP-B (a different agent, platform repo, `MAX_ROOT_BYTES
+# = 9 * 1024 * 1024 * 1024`). Until that lands, a `device.update_apply`
+# against an image built from THIS recipe will fail
+# `verification_failed: ... exceeded its 8589934592-byte ceiling` -- the two
+# changes are a pair and neither is complete alone. This is the "future
+# round needs a bigger slot" case the CROSS-REFERENCE note above predicted.
+#
+# Root-A + root-B + /data (8192 MiB, unchanged below) + ESP still fit the
+# QEMU dev disk the wks builds; no wks change is needed, both root
+# partitions read this same variable (files/wic/duduclaw-ab-bootdisk.wks.in
+# lines 203/279, `--fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}` on each).
+# classes/duduclaw-verity.bbclass's own `int(d.getVar('DUDUCLAW_AB_SLOT_
+# SIZE_MB') or '7168')` fallback is a DEFAULT for recipes that never set the
+# variable, not an assertion about this one -- it reads whatever this line
+# says; the literal in that fallback (and the one in
+# recipes-duduclaw/duduclaw-journald/files/duduclaw.conf's comment) is
+# annotated in the same wave rather than left to imply 7168 is still this
+# image's size.
+DUDUCLAW_AB_SLOT_SIZE_MB = "8192"
 
 # /data: revised twice against real measurements (Y14-A round 1 → Y14 T2/T6
 # round 2, 2026-08-27/28), up from the A/B line's own inherited default

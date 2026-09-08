@@ -2,6 +2,21 @@
 # DuDuClaw OS (Yocto layer, meta-duduclaw/) — release-time image build,
 # artifact collection, and signing.
 #
+# zstd compression of the .wic (2026-09-09 incident): GitHub Releases
+# refuses any single asset >= 2 GiB (GH_ASSET_MAX_BYTES below) with an
+# HTTP 422. The v0.2.0 qemux86-64 .wic (7.3 GB of real data) compressed
+# with plain `zstd -T0` (level 3 default) landed at 2,383,873,796 bytes —
+# over the limit — and `publish` died on the 422 instead of `package`
+# catching it up front. `zstd -19 --long=27` on the SAME wic produced
+# 1,723,552,098 bytes, comfortably under it. `package` now compresses with
+# level/window OS_ZSTD_LEVEL/OS_ZSTD_LONG (default 19/27, override via
+# DUDUCLAW_OS_ZSTD_LEVEL / DUDUCLAW_OS_ZSTD_LONG) and refuses to sign an
+# oversized result (DUDUCLAW_OS_ALLOW_OVERSIZE=1 to override); `publish`
+# re-checks the same limit on every staged file before uploading. A
+# `--long=N` artifact needs a decompressor that also passes `--long=N` (or
+# a big enough `--memory=`) — see each artifact's manifest.json
+# "decompress_hint" field and the release notes `publish` writes.
+#
 # Usage:
 #   In every subcommand below, v<version> is OPTIONAL and defaults to the OS
 #   release version in the repo-root VERSION file (see that file's header —
@@ -236,6 +251,24 @@ OS_VERSION_FILE="VERSION"
 # split (wiki/pm/repo-split-runbook-2026-09.md) — the OS .wic ships here, the
 # platform gateway/desktop ships from the DuDuClaw repo's scripts/release.sh.
 OS_GH_REPO="${DUDUCLAW_OS_GH_REPO:-zhixuli0406/DuDuClaw-OS}"
+
+# zstd compression level / long-distance-matching window for the .wic
+# artifact (see the top-of-file header for the 2026-09-09 incident this
+# fixes). -19 --long=27 shrank the measured qemux86-64 v0.2.0 wic from
+# 2,383,873,796 bytes (old -T0 default level 3) to 1,723,552,098 bytes.
+# Override per-run if a future image needs a different size/time trade-off.
+# NOTE: --long=N requires the DECOMPRESSOR to also pass --long=N (or a
+# large enough --memory=) — surfaced in the manifest's "decompress_hint"
+# and in publish's release notes so this isn't a silent gotcha downstream.
+OS_ZSTD_LEVEL="${DUDUCLAW_OS_ZSTD_LEVEL:-19}"
+OS_ZSTD_LONG="${DUDUCLAW_OS_ZSTD_LONG:-27}"
+
+# GitHub's hard per-release-asset size limit (2 GiB; HTTP 422 past this) —
+# the 2026-09-09 incident's root cause. 'package' checks the compressed
+# .wic against this BEFORE signing (fail-fast); 'publish' re-checks every
+# staged file before upload, so a hand-copied oversized artifact is
+# refused locally instead of surfacing as a GitHub 422.
+GH_ASSET_MAX_BYTES=2147483648
 
 # Read the OS release version from VERSION: first non-comment, non-blank line,
 # whitespace-stripped, optional leading 'v' removed, validated as bare semver.
@@ -693,6 +726,10 @@ run_package() {
         echo "     (avoids docker-cp'ing the full sparse .wic — its apparent"
         echo "     size can be far larger than its real content) as:"
         echo "       $out_dir/$artifact_wic"
+        echo "     exact flags: zstd -${OS_ZSTD_LEVEL} --long=${OS_ZSTD_LONG} -T0 -f -o ..."
+        echo "     then refuse (exit before signing) if the result is >="
+        echo "     $GH_ASSET_MAX_BYTES bytes (GitHub's per-asset limit) unless"
+        echo "     DUDUCLAW_OS_ALLOW_OVERSIZE=1 is set."
         echo "  4. shasum -a 256 -> $out_dir/$artifact_wic.sha256"
         echo "  5. minisign -S -s $OS_SIGN_KEY -m $out_dir/$artifact_wic"
         echo "     -> $out_dir/$artifact_wic.minisig"
@@ -777,10 +814,12 @@ run_package() {
     echo ""
     echo "Compressing (inside $BUILDER_CONTAINER, writing straight to the"
     echo "bind-mounted $out_dir — no docker-cp of the uncompressed sparse .wic)..."
+    echo "  zstd flags: -${OS_ZSTD_LEVEL} --long=${OS_ZSTD_LONG} -T0 (override via" \
+         "DUDUCLAW_OS_ZSTD_LEVEL / DUDUCLAW_OS_ZSTD_LONG)"
     if ! docker exec -u 1000 "$BUILDER_CONTAINER" bash -c \
         "command -v zstd >/dev/null 2>&1 || { echo 'zstd not found in $BUILDER_CONTAINER' >&2; exit 1; }; \
          mkdir -p '/workspace/$out_dir' && \
-         zstd -T0 -f -o '/workspace/$out_dir/$artifact_wic' '$wic_real'"; then
+         zstd -${OS_ZSTD_LEVEL} --long=${OS_ZSTD_LONG} -T0 -f -o '/workspace/$out_dir/$artifact_wic' '$wic_real'"; then
         echo "Error: zstd compression failed inside $BUILDER_CONTAINER." >&2
         return 1
     fi
@@ -788,6 +827,37 @@ run_package() {
         echo "Error: expected compressed artifact not found on host at" >&2
         echo "       $out_dir/$artifact_wic" >&2
         return 1
+    fi
+
+    # Size guard (2026-09-09 incident): fail fast at package time, BEFORE
+    # signing, instead of letting an oversized artifact reach 'publish' and
+    # die on a GitHub 422. DUDUCLAW_OS_ALLOW_OVERSIZE=1 overrides (warn +
+    # continue) for cases the operator has already decided how to handle.
+    local wic_bytes
+    wic_bytes="$(stat -f%z "$out_dir/$artifact_wic" 2>/dev/null || stat -c%s "$out_dir/$artifact_wic" 2>/dev/null)"
+    if [[ -n "$wic_bytes" ]] && (( wic_bytes >= GH_ASSET_MAX_BYTES )); then
+        if [[ "${DUDUCLAW_OS_ALLOW_OVERSIZE:-0}" == "1" ]]; then
+            echo "" >&2
+            echo "WARNING: $artifact_wic is $wic_bytes bytes, >= GitHub's" >&2
+            echo "         $GH_ASSET_MAX_BYTES-byte (2 GiB) per-asset limit." >&2
+            echo "         DUDUCLAW_OS_ALLOW_OVERSIZE=1 set — signing anyway." >&2
+            echo "         'publish' will refuse this file unless the same" >&2
+            echo "         override is set there too." >&2
+        else
+            echo "" >&2
+            echo "Error: $artifact_wic is $wic_bytes bytes, >= GitHub's" >&2
+            echo "       $GH_ASSET_MAX_BYTES-byte (2 GiB) per-release-asset limit —" >&2
+            echo "       'gh release upload'/'create' would fail with HTTP 422." >&2
+            echo "       Ways out:" >&2
+            echo "         1. Raise compression (e.g. DUDUCLAW_OS_ZSTD_LEVEL=22," >&2
+            echo "            or a larger DUDUCLAW_OS_ZSTD_LONG window)." >&2
+            echo "         2. Split the artifact into multiple release assets." >&2
+            echo "         3. Host it outside GitHub Releases (object storage,"  >&2
+            echo "            a CDN, ...) and link to it from the release notes." >&2
+            echo "       Set DUDUCLAW_OS_ALLOW_OVERSIZE=1 to sign anyway (not" >&2
+            echo "       recommended for a real release)." >&2
+            return 1
+        fi
     fi
 
     ( cd "$out_dir" && shasum -a 256 "$artifact_wic" > "$artifact_wic.sha256" )
@@ -820,9 +890,9 @@ run_package() {
         | sed -E 's/^DISTRO_VERSION = "(.*)"$/\1/' \
         | sed "s/\${DUDUCLAW_PLATFORM_VERSION}/${platform_v}/")"
 
-    python3 - "$out_dir" "$artifact_base" "$version" "$version_full" "$machine" "$image" "$artifact_wic" "$artifact_sha" "${rpm_count:-0}" "${rpm_size:-0}" "$OS_SIGN_KEY" "${platform_v:-}" <<'PYEOF'
+    python3 - "$out_dir" "$artifact_base" "$version" "$version_full" "$machine" "$image" "$artifact_wic" "$artifact_sha" "${rpm_count:-0}" "${rpm_size:-0}" "$OS_SIGN_KEY" "${platform_v:-}" "$OS_ZSTD_LONG" <<'PYEOF'
 import json, sys, datetime, pathlib
-out_dir, artifact_base, version, version_full, machine, image, artifact_wic, artifact_sha, rpm_count, rpm_size, sign_key, platform_version = sys.argv[1:13]
+out_dir, artifact_base, version, version_full, machine, image, artifact_wic, artifact_sha, rpm_count, rpm_size, sign_key, platform_version, zstd_long = sys.argv[1:14]
 wic_path = pathlib.Path(out_dir, artifact_wic)
 manifest = {
     "schema": 2,
@@ -837,6 +907,10 @@ manifest = {
         "size": wic_path.stat().st_size,
         "sha256": artifact_sha,
     },
+    # zstd was run with --long=<N> (2026-09-09 incident, see this script's
+    # top-of-file header) -- the decompressor must pass the SAME --long=<N>
+    # (or a big enough --memory=) or it will refuse the frame.
+    "decompress_hint": f"zstd -d --long={zstd_long} <file>",
     "signed_with": pathlib.Path(sign_key).name.replace(".key", ".pub"),
     "rpm_feed": {
         "note": ("auxiliary provenance only -- NOT part of the signed artifact "
@@ -853,6 +927,10 @@ PYEOF
     echo "  $artifact_wic.sha256"
     echo "  $artifact_wic.minisig"
     echo "  $artifact_base.manifest.json"
+    echo ""
+    echo "Decompress with: zstd -d --long=${OS_ZSTD_LONG} $artifact_wic"
+    echo "  (the decompressor must pass the same --long=${OS_ZSTD_LONG}, or a"
+    echo "   big enough --memory=, that it was compressed with)"
     echo ""
     echo "Next: ./scripts/release-os.sh publish v$version --machine $machine"
     echo "  (uploads the four files above to a GitHub Release on $OS_GH_REPO)"
@@ -918,6 +996,40 @@ run_publish() {
         return 1
     fi
 
+    # Size guard (2026-09-09 incident), re-checked here in case an artifact
+    # was hand-copied into place rather than produced by this run's own
+    # 'package' (which already checks this before it signs) — refuse
+    # locally with a clear message instead of letting 'gh release
+    # create/upload' fail with an HTTP 422 partway through the upload.
+    local f_bytes
+    for f in "${files[@]}"; do
+        f_bytes="$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null)"
+        if [[ -n "$f_bytes" ]] && (( f_bytes >= GH_ASSET_MAX_BYTES )); then
+            if [[ "${DUDUCLAW_OS_ALLOW_OVERSIZE:-0}" == "1" ]]; then
+                echo "" >&2
+                echo "WARNING: $f is $f_bytes bytes, >= GitHub's" >&2
+                echo "         $GH_ASSET_MAX_BYTES-byte (2 GiB) per-asset limit." >&2
+                echo "         DUDUCLAW_OS_ALLOW_OVERSIZE=1 set — uploading anyway" >&2
+                echo "         (GitHub itself may still reject it with HTTP 422)." >&2
+            else
+                echo "" >&2
+                echo "Error: $f is $f_bytes bytes, >= GitHub's" >&2
+                echo "       $GH_ASSET_MAX_BYTES-byte (2 GiB) per-release-asset limit —" >&2
+                echo "       'gh release upload'/'create' would fail with HTTP 422." >&2
+                echo "       Ways out:" >&2
+                echo "         1. Re-run 'package' with a higher" >&2
+                echo "            DUDUCLAW_OS_ZSTD_LEVEL (and/or a larger" >&2
+                echo "            DUDUCLAW_OS_ZSTD_LONG window)." >&2
+                echo "         2. Split the artifact into multiple release assets." >&2
+                echo "         3. Host it outside GitHub Releases (object storage," >&2
+                echo "            a CDN, ...) and link to it from the release notes." >&2
+                echo "       Set DUDUCLAW_OS_ALLOW_OVERSIZE=1 to upload anyway (not" >&2
+                echo "       recommended for a real release)." >&2
+                return 1
+            fi
+        fi
+    done
+
     if ! minisign -V -m "$out_dir/$artifact_wic" -P "$OS_RELEASE_PUBKEY" >/dev/null; then
         echo "Error: self-verification against OS_RELEASE_PUBKEY failed — refusing" >&2
         echo "       to publish an artifact that cannot verify itself." >&2
@@ -959,7 +1071,7 @@ Verify before flashing:
     shasum -a 256 -c $artifact_wic.sha256
 
 Artifacts:
-- $artifact_wic — zstd-compressed whole-disk image (decompress with zstd -d, then flash with bmaptool/dd)
+- $artifact_wic — zstd-compressed whole-disk image (decompress with zstd -d --long=$OS_ZSTD_LONG, then flash with bmaptool/dd; --long=$OS_ZSTD_LONG on the decompressor is REQUIRED, or use --memory=128MB)
 - $artifact_wic.sha256, $artifact_wic.minisig — integrity
 - $artifact_base.manifest.json — build provenance (NOT part of the trust chain)"; then
             echo "Error: gh release create failed." >&2

@@ -44,7 +44,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=87e8e4a396af46e141a08fbc9f1b0455"
 #       way, and every one of comp's *-sys build.rs scripts that shells out
 #       to `pkg-config` (wayland-sys, xkbcommon-dl, libseat-sys,
 #       libudev-sys, gbm-sys, drm-sys) would fail the same way
-#       duduclaw-cli_1.62.0.bb's own comment documents openssl-sys failing
+#       duduclaw-cli_1.63.0.bb's own comment documents openssl-sys failing
 #       for the identical reason ("pkg-config command could not be found").
 DEPENDS = "wayland wayland-protocols-native libinput seatd libdrm mesa libxkbcommon systemd"
 

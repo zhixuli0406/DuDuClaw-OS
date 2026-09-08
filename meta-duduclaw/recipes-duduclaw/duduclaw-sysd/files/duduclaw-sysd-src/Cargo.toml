@@ -2,7 +2,7 @@
 # from crates/duduclaw-sysd/Cargo.toml — DO NOT HAND-EDIT, re-run the script.
 # workspace.* shorthand fields resolved to concrete values (source: repo-root
 # Cargo.toml [workspace.package] / [workspace.dependencies], read at
-# generation time, 2026-08-25T06:06:38Z).
+# generation time from platform commit 35e99e89).
 
 # Empty [workspace] table: makes this manifest cargo-standalone even though
 # it physically nests inside the DuDuClaw monorepo (which has its own
@@ -16,7 +16,7 @@
 
 [package]
 name = "duduclaw-sysd"
-version = "1.62.0"
+version = "1.63.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["DuDuClaw Contributors"]

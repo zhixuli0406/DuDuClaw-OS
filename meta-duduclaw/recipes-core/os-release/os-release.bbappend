@@ -45,7 +45,7 @@
 # stays in the default quoted bucket, same treatment VERSION/PRETTY_NAME
 # already get from the base recipe — systemd's own os-release parser
 # (env-file-style) handles quoted values transparently, and DISTRO_VERSION
-# ("1.62.0-y1-bringup") contains no characters that would need the
+# ("1.63.0-y1-bringup") contains no characters that would need the
 # VERSION_ID-only `sanitise_value()` lowercase/space-to-underscore
 # treatment anyway.
 OS_RELEASE_FIELDS += "IMAGE_VERSION"

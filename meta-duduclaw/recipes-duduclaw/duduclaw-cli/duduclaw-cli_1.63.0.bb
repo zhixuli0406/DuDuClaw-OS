@@ -46,6 +46,15 @@ CARGO_SRC_DIR = "crates/duduclaw-cli"
 # dashboard on, desktop off -- desktop pulls enigo/xcap, which on Linux pull
 # wayland/pipewire/gbm this recipe has no business depending on.
 CARGO_BUILD_FLAGS:append = " --no-default-features --features duduclaw-gateway/dashboard"
+# 2026-09-08 (fix14 bake, twice in a row): cargo.bbclass's CARGO_BUILD_FLAGS
+# carries no `-j`, so cargo spawns nproc rustc jobs regardless of
+# PARALLEL_MAKE / BB_NUMBER_THREADS (neither reaches cargo). The
+# duduclaw-gateway lib rustc and the duduclaw-cli rustc each need several GB;
+# side by side on the 12 GB builder the kernel SIGKILLed one of them
+# (`(signal: 9, SIGKILL: kill)`, cargo exit 101, no diagnostic at all) — with
+# `-j 2` and with `-j 1` make flags alike. One rustc at a time for this
+# megacrate; the small crates before it are cheap enough not to matter.
+CARGO_BUILD_FLAGS:append = " -j 1"
 
 # Y2-3 (2026-08-25) real fix for do_package_qa's buildpaths QA failure, hit
 # by actually running bitbake:

@@ -59,7 +59,7 @@ cat > "$OUT_DIR/Cargo.toml" <<EOF
 # from crates/duduclaw-sysd/Cargo.toml — DO NOT HAND-EDIT, re-run the script.
 # workspace.* shorthand fields resolved to concrete values (source: repo-root
 # Cargo.toml [workspace.package] / [workspace.dependencies], read at
-# generation time, $(date -u +%Y-%m-%dT%H:%M:%SZ)).
+# generation time from platform commit $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)).
 
 # Empty [workspace] table: makes this manifest cargo-standalone even though
 # it physically nests inside the DuDuClaw monorepo (which has its own

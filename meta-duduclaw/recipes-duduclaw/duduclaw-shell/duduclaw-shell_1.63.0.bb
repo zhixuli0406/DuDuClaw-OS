@@ -155,7 +155,7 @@ python do_unpack:append() {
 python do_patch:append() {
     import subprocess
     unpackdir = d.getVar("UNPACKDIR")
-    marker = "/* cold_path() stripped: unstable on Yocto rust_1.94.1, see duduclaw-shell_1.62.0.bb comment; pure optimizer hint, no behavior change (rust-lang/rust#136873) */"
+    marker = "/* cold_path() stripped: unstable on Yocto rust_1.94.1, see duduclaw-shell_1.63.0.bb comment; pure optimizer hint, no behavior change (rust-lang/rust#136873) */"
     for relpath in ("profiler.rs", "profiler/actions.rs"):
         target = os.path.join(unpackdir, "gpui", "src", relpath)
         if not os.path.exists(target):
@@ -229,7 +229,7 @@ python do_patch:append() {
 # that was NOT ruled out ahead of time -- left for the real bitbake build to
 # either confirm clean or reveal, rather than pre-emptively applying
 # duduclaw-cli's CFLAGS/CXXFLAGS fix on a guess. If do_package_qa's
-# `buildpaths` check fires here, mirror duduclaw-cli_1.62.0.bb's
+# `buildpaths` check fires here, mirror duduclaw-cli_1.63.0.bb's
 # `CFLAGS:append`/`CXXFLAGS:append` fix verbatim -- same root cause, same
 # remedy, see that recipe's own comment for the full mechanism.
 

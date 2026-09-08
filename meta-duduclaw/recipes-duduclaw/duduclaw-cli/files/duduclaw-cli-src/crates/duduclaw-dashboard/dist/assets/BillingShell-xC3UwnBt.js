@@ -1,1 +1,0 @@
-import{ga as e,la as t,pa as n}from"./index-BHGfrXW_.js";import{BillingPage as r}from"./BillingPage-CQuCBRDA.js";var i=e();function a(){let[e]=n();return e.get(`tab`)===`accounts`?(0,i.jsx)(t,{to:`/app/system/accounts`,replace:!0}):(0,i.jsx)(r,{})}export{a as BillingShell};

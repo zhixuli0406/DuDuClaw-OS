@@ -382,6 +382,14 @@ local_conf_header:
     # build-time INHERIT, not baked into the distro conf, so a future
     # debug build can drop it without editing distro policy.
     INHERIT += "rm_work"
+    # runqemu looks up qemu-helper-native's recipe-sysroot-native (tunctl,
+    # the qemu-system lookup) INSIDE that recipe's WORKDIR, which rm_work
+    # deletes as soon as the recipe has built — `bitbake qemu-helper-native
+    # -c addto_recipe_sysroot` repopulates it and rm_work wipes it again on
+    # the same run. Keeping this one recipe's WORKDIR is the documented fix
+    # (Yocto dev manual, rm_work + runqemu) and what release-os.sh smoke
+    # relies on (2026-09-08).
+    RM_WORK_EXCLUDE += "qemu-helper-native"
 
     # Root cause turned out to be TMPDIR's filesystem (see TMPDIR comment
     # above), not parallelism — restored to match the VM's 4 CPUs after

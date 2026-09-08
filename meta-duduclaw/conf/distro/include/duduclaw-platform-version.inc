@@ -27,4 +27,4 @@
 # owner (whoever tracks the Y-line milestones, see
 # commercial/docs/TODO-agent-first-os-2026-08.md "Y 線") can rename it
 # freely without conflicting with a release-triggered edit to this file.
-DUDUCLAW_PLATFORM_VERSION = "1.62.0"
+DUDUCLAW_PLATFORM_VERSION = "1.63.0"

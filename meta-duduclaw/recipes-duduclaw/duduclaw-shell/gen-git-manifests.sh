@@ -67,7 +67,7 @@
 # `cargo vendor` run and checks them into
 # files/duduclaw-shell-git-manifests/<name>/Cargo.toml -- 26 small, human-
 # diffable TOML snapshots (not a 942MB blob), applied as a
-# `do_unpack:append()` overwrite in duduclaw-shell_1.62.0.bb AFTER the raw
+# `do_unpack:append()` overwrite in duduclaw-shell_1.63.0.bb AFTER the raw
 # git fetch lands, immediately before do_patch/do_configure run. Re-run
 # this script (from a Mac with this crate already built locally at least
 # once, so `--offline` has everything cached) whenever

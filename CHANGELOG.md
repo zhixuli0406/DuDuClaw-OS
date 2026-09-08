@@ -9,6 +9,13 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [0.2.0] - 2026-09-09 — 平台快照同步 v1.63.0×sync-platform 一鍵同步×release-os smoke 修復
 
+### Removed
+- **本版未附 desktop live 安裝 ISO（`duduclaw-image-live-desktop`）**：內建 AI runtimes 後 ISO 達 2.66GB，超過 GitHub 單一 release 資產 2GiB 上限；一般 installer ISO（590MB）與 appliance 整碟 `.wic.zst` 照常。待 OS 發布流程有 GitHub 以外的大檔散發點後恢復。
+
+### Fixed（發布日補）
+- **`release-os.sh build/smoke/package` 預設串 release overlay `serial1.yml`**：先前只吃機型 kas 設定，deploy/spdx 被清後開烤即死於 `do_create_recipe_spdx`；現由 `kas_cfg_chain` 統一串上（`DUDUCLAW_OS_KAS_OVERLAY=` 可關）。
+- **wic.zst 壓縮改 `zstd -19 --long=27`＋2GiB 資產上限硬檢查**：level 3 壓出 2.38GB 撞 GitHub 422；同一顆 wic 以 -19 為 1.72GB。package 壓完先量、超限拒簽，publish 上傳前再查；manifest 加 `decompress_hint`，解壓需 `zstd -d --long=27`。
+
 ### Added
 - **`scripts/sync-platform.sh <平台版本>`（決策 B：與平台同步發版節奏、OS 保留 0.x）**：一次做完四份快照 refresh、`duduclaw-platform-version.inc` bump 與四個 recipe 改名（含引用註解）、crates.io 依賴集合比對（有變就要求重生 `*-crates.inc`，exit 2）、CHANGELOG 樣板；`--check` 只跑防呆。防呆項：平台 checkout 版本不符、平台有未提交變更（`--force` 放行）、detached lock 與 manifest 版本不一致、相依表格版本被 bump 改壞、dashboard dist 過期（預設自動 `npm run build`）。在 1.62.0 的 HEAD worktree 上實測一次 1.62.0→1.63.0，產出與手動對齊完全一致。文件：`docs/guides/platform-sync.md`。
 - **`duduclaw-shell/refresh-src.sh` 拒絕 vendor 版本不一致的 Cargo.lock**：快照的 lock 裡 `duduclaw-shell`／`duduclaw-native-gui` 的版本若與各自 Cargo.toml 不符就停下並印出修法（`cargo metadata --offline`）。2026-09-08 fix14 烤製踩到：平台 bump 後 lock 的 native-gui 項未同步，`cargo build --frozen` 因此去要 zed 的 git 來源而離線失敗。

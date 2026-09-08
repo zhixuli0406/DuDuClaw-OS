@@ -111,6 +111,15 @@
 # (smoke) process in flight. Fail-closed, no queueing, no retrying — see
 # check_builder_idle() below.
 #
+# Release kas overlay: `build`/`smoke`/`package` chain
+# meta-duduclaw/kas/serial1.yml onto every kas config by default (serial
+# BB_NUMBER_THREADS/PARALLEL_MAKE for the 8 GB builder VM, and SPDX/SBOM
+# generation turned off) — a v0.2.0 release attempt on 2026-09-09 built
+# with only the machine kas config and crashed on a pruned-SPDX error the
+# overlay exists specifically to avoid. Set DUDUCLAW_OS_KAS_OVERLAY= (empty)
+# to disable the overlay, or to another path to swap it; see
+# kas_cfg_chain() below for the exact chaining/fail-closed rules.
+#
 # Design: commercial/docs/DESIGN-unified-release-2026-08.md (version
 # single-source + release.sh/release-os.sh split) and
 # commercial/docs/DESIGN-os-release-pipeline-2026-08.md (this script's own
@@ -143,6 +152,52 @@ kas_config_for_machine() {
     esac
 }
 DEFAULT_MACHINES=(duduclaw-qemux86-64 duduclaw-genericx86-64)
+
+# Release bake overlay (meta-duduclaw/kas/serial1.yml, added in commit
+# 3580dce): BB_NUMBER_THREADS=1 + PARALLEL_MAKE=-j1 for the 8 GB builder
+# VM, and `INHERIT:remove = "create-spdx create-spdx-2.2 create-spdx-3.0"`
+# because deploy/spdx is pruned at release time. 2026-09-09 incident: the
+# v0.2.0 `build` ran with only the machine kas config (no overlay), so
+# SPDX generation stayed on and the bake died on
+# `do_create_recipe_spdx: Could not find a static SPDX document named
+# static-cmake-native` — v0.1.0 had chained the overlay by hand
+# (`kas build duduclaw-os.yml:serial1.yml`) but this script never did.
+# Note the `-` (not `:-`): an explicitly empty
+# DUDUCLAW_OS_KAS_OVERLAY="" disables the overlay on purpose; only an
+# UNSET var falls back to the default path.
+OS_KAS_OVERLAY="${DUDUCLAW_OS_KAS_OVERLAY-meta-duduclaw/kas/serial1.yml}"
+
+# kas_cfg_chain <machine> — the single place that turns a machine name into
+# the exact kas config string every `kas build`/`kas shell` invocation in
+# this script must use. Wraps kas_config_for_machine() (left unchanged) and
+# chains $OS_KAS_OVERLAY onto it with kas's ':' multi-file syntax, unless
+# the overlay is empty. Echoes "" (and returns 0) for an unknown machine —
+# callers keep their existing "unknown machine" error on an empty result —
+# but fails closed with a clear error (return 1, nothing on stdout) if
+# OS_KAS_OVERLAY is non-empty and does not exist on disk: a release bake
+# must never silently fall back to full-parallel/SPDX-on because of a typo'd
+# path. Every build/discovery/smoke/package call site routes through this
+# helper so 'build' and deploy-dir discovery can never drift onto different
+# configs again (the exact failure mode of the 2026-09-09 incident above).
+kas_cfg_chain() {
+    local machine="$1" base
+    base="$(kas_config_for_machine "$machine")"
+    if [[ -z "$base" ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ -z "$OS_KAS_OVERLAY" ]]; then
+        echo "$base"
+        return 0
+    fi
+    if [[ ! -f "$OS_KAS_OVERLAY" ]]; then
+        echo "Error: DUDUCLAW_OS_KAS_OVERLAY='$OS_KAS_OVERLAY' does not" >&2
+        echo "       exist. Set it to an existing kas overlay file, or to" >&2
+        echo "       an empty string to disable overlay chaining." >&2
+        return 1
+    fi
+    echo "${base}:${OS_KAS_OVERLAY}"
+}
 
 # The Y10-2 image-convergence shipping target (commercial/docs/
 # DESIGN-image-convergence-2026-08.md, landed Y14 2026-08-27/28,
@@ -329,7 +384,9 @@ run_os_audit() {
 # --- plan: print, never execute ----------------------------------------------
 run_plan() {
     local version="$1" machine="$2" image="$3" kas_cfg
-    kas_cfg="$(kas_config_for_machine "$machine")"
+    if ! kas_cfg="$(kas_cfg_chain "$machine")"; then
+        return 1
+    fi
     if [[ -z "$kas_cfg" ]]; then
         echo "Error: unknown machine '$machine' (known: ${DEFAULT_MACHINES[*]})" >&2
         return 1
@@ -365,7 +422,9 @@ run_plan() {
 # --- build: REAL kas build inside the already-running builder container ----
 run_build() {
     local version="$1" machine="$2" image="$3" dry_run="$4" kas_cfg
-    kas_cfg="$(kas_config_for_machine "$machine")"
+    if ! kas_cfg="$(kas_cfg_chain "$machine")"; then
+        return 1
+    fi
     if [[ -z "$kas_cfg" ]]; then
         echo "Error: unknown machine '$machine' (known: ${DEFAULT_MACHINES[*]})" >&2
         return 1
@@ -443,7 +502,9 @@ run_build() {
 # explains.
 run_smoke_test() {
     local machine="$1" image="$2" timeout_s="${3:-300}" kas_cfg
-    kas_cfg="$(kas_config_for_machine "$machine")"
+    if ! kas_cfg="$(kas_cfg_chain "$machine")"; then
+        return 1
+    fi
     if [[ -z "$kas_cfg" ]]; then
         echo "Error: unknown machine '$machine' (known: ${DEFAULT_MACHINES[*]})" >&2
         return 1
@@ -601,7 +662,9 @@ run_smoke_test() {
 run_package() {
     local version="$1" machine="$2" image="$3" dry_run="$4" skip_smoke="$5"
     local kas_cfg out_dir artifact_base artifact_wic
-    kas_cfg="$(kas_config_for_machine "$machine")"
+    if ! kas_cfg="$(kas_cfg_chain "$machine")"; then
+        return 1
+    fi
     if [[ -z "$kas_cfg" ]]; then
         echo "Error: unknown machine '$machine' (known: ${DEFAULT_MACHINES[*]})" >&2
         return 1

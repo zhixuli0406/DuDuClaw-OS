@@ -244,9 +244,13 @@ check_host_disk_free() {
 # prove idle", never as "assume idle". Never queues, never retries — the
 # caller must re-run once the other process is done.
 check_builder_idle() {
-    local rc
-    docker exec "$BUILDER_CONTAINER" pgrep -f 'bitbake|kas ' >/dev/null 2>&1
-    rc=$?
+    # `|| rc=$?` — NOT a bare `cmd; rc=$?`: this script runs under `set -e`,
+    # and pgrep exits 1 when nothing matches (the NORMAL, idle case), which a
+    # bare call turns into an immediate script exit before `rc` is even read.
+    # Measured 2026-09-08: `smoke` died silently right after its banner every
+    # time no QEMU was running. Same fix at both pgrep sites.
+    local rc=0
+    docker exec "$BUILDER_CONTAINER" pgrep -f 'bitbake|kas ' >/dev/null 2>&1 || rc=$?
     if [[ $rc -eq 0 ]]; then
         echo "Error: builder container '$BUILDER_CONTAINER' has an in-flight" >&2
         echo "       kas/bitbake process. Refusing to start a concurrent" >&2
@@ -454,9 +458,8 @@ run_smoke_test() {
     # Never touch a qemu-system process we didn't start ourselves — could
     # belong to another session's own test. Fail closed on detection error
     # too (same discipline as check_builder_idle).
-    local rc
-    docker exec "$BUILDER_CONTAINER" pgrep -f 'qemu-system' >/dev/null 2>&1
-    rc=$?
+    local rc=0   # see the builder-concurrency check above for why `|| rc=$?`
+    docker exec "$BUILDER_CONTAINER" pgrep -f 'qemu-system' >/dev/null 2>&1 || rc=$?
     if [[ $rc -eq 0 ]]; then
         echo "Error: a qemu-system process is already running inside" >&2
         echo "       $BUILDER_CONTAINER — not touching it (may belong to" >&2
@@ -476,15 +479,39 @@ run_smoke_test() {
         echo "Error: 'bitbake ovmf' failed — cannot smoke-test without UEFI firmware." >&2
         return 1
     fi
+    # runqemu needs qemu-helper-native's recipe sysroot (tunctl/qemu-oe-bridge-helper
+    # and the qemu-system binary lookup). With rm_work enabled (local.conf) that
+    # work dir is deleted the moment the recipe finishes building, so a smoke run
+    # on a freshly baked tree died with "Native sysroot directory ... qemu-helper-
+    # native/1.0/recipe-sysroot-native/usr/bin doesn't exist" (2026-09-08).
+    # addto_recipe_sysroot is the documented way to bring it back — FORCED with
+    # `-C` (invalidate that task's stamp): a plain `-c addto_recipe_sysroot`
+    # is a no-op once its stamp exists, and the stamp survives rm_work while
+    # the directory does not (measured: "Attempted 1 tasks ... didn't need to
+    # be rerun", directory still absent). Cheap and idempotent either way.
+    # duduclaw-os.yml also lists the recipe in RM_WORK_EXCLUDE so the sysroot
+    # stays put once populated.
+    echo "  Ensuring qemu-helper-native's sysroot is populated (rm_work removes it)..."
+    if ! docker exec -u 1000 "$BUILDER_CONTAINER" bash -c \
+        "cd /workspace && kas shell $kas_cfg -c 'bitbake -C addto_recipe_sysroot qemu-helper-native'" >/dev/null 2>&1; then
+        echo "Error: 'bitbake -C addto_recipe_sysroot qemu-helper-native' failed — runqemu cannot start." >&2
+        return 1
+    fi
 
     echo "  Launching runqemu (detached, serial console -> $log_path inside container)..."
     docker exec -u 1000 -d "$BUILDER_CONTAINER" bash -c \
         "cd /workspace && kas shell $kas_cfg -c 'runqemu $image nographic serial wic ovmf slirp' > $log_path 2>&1"
 
-    local seen_login=false
+    local seen_login=false died=false
     while (( elapsed < timeout_s )); do
         if docker exec "$BUILDER_CONTAINER" grep -qE '(^| )login:' "$log_path" 2>/dev/null; then
             seen_login=true
+            break
+        fi
+        # Fail fast when runqemu itself has given up — otherwise this loop sat
+        # out the full timeout on a QEMU that never started (2026-09-08).
+        if docker exec "$BUILDER_CONTAINER" grep -qE 'runqemu - ERROR|failed with error|Shell returned non-zero' "$log_path" 2>/dev/null; then
+            died=true
             break
         fi
         sleep "$poll_interval"
@@ -499,7 +526,11 @@ run_smoke_test() {
     docker exec "$BUILDER_CONTAINER" pkill -f 'bin/runqemu' >/dev/null 2>&1 || true
 
     if ! $seen_login; then
-        echo "Error: smoke test timed out after ${timeout_s}s without a login prompt." >&2
+        if $died; then
+            echo "Error: runqemu exited before a login prompt (~${elapsed}s)." >&2
+        else
+            echo "Error: smoke test timed out after ${timeout_s}s without a login prompt." >&2
+        fi
         echo "       Last 40 lines of $log_path (inside $BUILDER_CONTAINER):" >&2
         docker exec "$BUILDER_CONTAINER" tail -n 40 "$log_path" >&2 2>/dev/null || true
         return 1
@@ -521,7 +552,7 @@ run_smoke_test() {
 #                                            independent of the embedded
 #                                            platform version since the
 #                                            2026-09 split
-#     "platform_version": "<embedded CLI>", e.g. "1.62.0" — the vendored
+#     "platform_version": "<embedded CLI>", e.g. "1.63.0" — the vendored
 #                                            DuDuClaw gateway/CLI snapshot's
 #                                            version (duduclaw-platform-
 #                                            version.inc); provenance only

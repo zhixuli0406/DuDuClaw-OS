@@ -33,6 +33,7 @@ duplicated here.
 | Document | Description |
 |----------|-------------|
 | [guides/ai-runtimes.md](guides/ai-runtimes.md) | The bundled AI coding CLIs and llama.cpp: what is installed, what is deliberately not, where credentials live, how to run a local model, how to regenerate the runtime bundle, and the root-slot budget it consumes |
+| [guides/platform-sync.md](guides/platform-sync.md) | Bringing the OS layer to one platform release with `scripts/sync-platform.sh`: the four snapshot refreshes, the embedded platform version bump + recipe renames, the fail-closed guards (stale detached lockfile, clobbered dependency version, stale dashboard dist), and what to bake and verify afterwards |
 
 The remaining subdirectories are created when their first document lands:
 
@@ -63,6 +64,7 @@ User-facing OS docs currently published from the platform repo:
 | [../wiki/reports/bring-up-evidence/](../wiki/reports/bring-up-evidence/README.md) | QEMU boot and bitbake transcripts behind the bring-up "verified" claims |
 | [../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md](../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md) | Desktop-edition installer ISO walked end to end under QEMU on a Mac host (installer → first boot → lock screen); PASS table, defects found, demo video provenance |
 | [../wiki/eval/ai-runtimes-qemu-walkthrough-2026-09-06.md](../wiki/eval/ai-runtimes-qemu-walkthrough-2026-09-06.md) | AI-runtime bundle / local model / fine-tuning round walked under QEMU: bundled CLI versions, OOBE provider list + risk notice + real `claude setup-token` URL, `runtime.detect`, GGUF download → llama-server, dry-run fine-tune job, defects found and fixed (/lib64 loader, `linux-container`, `openai_compat` wire name) |
+| [../wiki/eval/fix14-launcher-footer-qemu-2026-09-08.md](../wiki/eval/fix14-launcher-footer-qemu-2026-09-08.md) | fix14 → v1.63.0 platform sync: shell snapshot (Launcher footer「⌘K 隨時喚起」), then all four platform snapshots + `duduclaw-platform-version.inc` moved to v1.63.0, baked and verified under QEMU (os-release, `duduclaw --version`, A/B UKI `duduclaw-os_1.63.0-y1-bringup.efi`); the bake log — stale detached Cargo.lock and a dependency-clobbering bump in the platform's release.sh, cargo ignoring PARALLEL_MAKE (OOM), 89 GB build-volume exhaustion — and what each taught |
 
 ---
 

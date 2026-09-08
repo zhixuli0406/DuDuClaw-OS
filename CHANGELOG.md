@@ -8,6 +8,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 ## [Unreleased]
 
 ### Added
+- **`scripts/sync-platform.sh <平台版本>`（決策 B：與平台同步發版節奏、OS 保留 0.x）**：一次做完四份快照 refresh、`duduclaw-platform-version.inc` bump 與四個 recipe 改名（含引用註解）、crates.io 依賴集合比對（有變就要求重生 `*-crates.inc`，exit 2）、CHANGELOG 樣板；`--check` 只跑防呆。防呆項：平台 checkout 版本不符、平台有未提交變更（`--force` 放行）、detached lock 與 manifest 版本不一致、相依表格版本被 bump 改壞、dashboard dist 過期（預設自動 `npm run build`）。在 1.62.0 的 HEAD worktree 上實測一次 1.62.0→1.63.0，產出與手動對齊完全一致。文件：`docs/guides/platform-sync.md`。
 - **`duduclaw-shell/refresh-src.sh` 拒絕 vendor 版本不一致的 Cargo.lock**：快照的 lock 裡 `duduclaw-shell`／`duduclaw-native-gui` 的版本若與各自 Cargo.toml 不符就停下並印出修法（`cargo metadata --offline`）。2026-09-08 fix14 烤製踩到：平台 bump 後 lock 的 native-gui 項未同步，`cargo build --frozen` 因此去要 zed 的 git 來源而離線失敗。
 - **`scripts/release-os.sh` 烤前主機磁碟防呆**：新增 `check_host_disk_free`，`$HOME` 所在卷可用空間低於
   `DUDUCLAW_MIN_HOST_FREE_GB`（預設 30）就拒絕開烤。Docker Desktop 的 `Docker.raw` 是稀疏檔，主機卷滿時
@@ -45,6 +46,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   存在哪裡、本機模型怎麼開、bundle 怎麼重新產生、root 槽預算。
 
 ### Changed
+- **平台快照全面同步到 v1.63.0（gateway 跟主 repo 對齊）**：`duduclaw-cli`／`duduclaw-comp`／`duduclaw-sysd` 快照重新 vendor（shell 已於 73ab67b 更新），`duduclaw-platform-version.inc` 1.62.0→1.63.0（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名 `duduclaw-os_1.63.0-y1-bringup.efi`、A/B loader 項），四個 recipe 檔名改為 `_1.63.0.bb`；dashboard `dist/` 依平台 111d748b 重建後才 vendor。帶進的平台變更：帳號憑證硬化（真探測取代 auth status 假陽性、auth-dead 退避、壞憑證載入排除、寫入前驗證、認證失效告警，b787c48a）、dashboard 帳號卡憑證狀態徽章＋新增帳號對話框顯示伺服器真實錯誤（111d748b）、Launcher 頁腳「⌘K 隨時喚起」（50b5acc0）。四份快照的 crates.io 依賴集合與 1.62.0 相同，`*-crates.inc` 未動。OS 自己的 release 版本（`VERSION` 0.1.0）不受影響。
 - **root A/B 槽 7168 → 8192 MiB**（`duduclaw-image-appliance.bb`）：容納上述 AI
   payload。8192 是天花板不是階梯——它等於平台 repo `os_update.rs` 的
   `MAX_ROOT_BYTES`，該常數在同一波（WP-B）升到 9 GiB；在那之前對本映像做
@@ -117,6 +119,10 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 
 ### Fixed
+- **`release-os.sh smoke` 在 rm_work 的樹上起不來、起不來還會等滿 timeout**：runqemu 需要 `qemu-helper-native` 的 recipe sysroot，rm_work 把它清掉後 runqemu 立刻以「Native sysroot directory … doesn't exist」退出，smoke 卻繼續輪詢到 timeout（20 分鐘）。現在啟動前先 `bitbake -C addto_recipe_sysroot qemu-helper-native`（`-C` 強制：stamp 在 rm_work 後還在、目錄卻沒了，`-c` 會判定不用重做），`duduclaw-os.yml` 把 `qemu-helper-native` 加進 `RM_WORK_EXCLUDE`（否則同一趟 rm_work 又把剛補好的 sysroot 刪掉），輪詢看到 `runqemu - ERROR` 立即失敗並印 log。
+- **`release-os.sh` 的 builder 並行檢查與 smoke 的 QEMU 檢查在「沒東西在跑」時把整個腳本殺掉**：兩處 `docker exec … pgrep …; rc=$?` 在 `set -e` 下，pgrep 沒比對到（正常的閒置狀態）回 1 就直接結束腳本，`rc` 從未被讀到——`smoke` 每次都在印出橫幅後靜默 exit 1（2026-09-08 對 v1.63.0 appliance 跑 smoke 時發現）。改為 `|| rc=$?`。
+- **`duduclaw-sysd/refresh-src.sh` 產出可重現**：flattened Cargo.toml 的註解改標平台 commit 而非產生時間；先前每跑一次 refresh 就改到 Cargo.toml、`file://` checksum 變了，sysd 就白白重編一次，`sync-platform.sh` 也因此無法「再跑一次沒差異」。
+- **`duduclaw-cli` recipe 限制 cargo 單一 rustc（`CARGO_BUILD_FLAGS:append = " -j 1"`）**：`cargo.bbclass` 不帶 `-j`，cargo 照 nproc 開 rustc，`PARALLEL_MAKE`／`BB_NUMBER_THREADS` 都管不到；gateway lib 與 cli 兩支大 rustc 並行在 12 GB builder 上被 SIGKILL（cargo exit 101、無診斷），2026-09-08 fix14 連續兩次。
 - **shell 快照更新至平台 v1.63.0（僅 `duduclaw-shell`／`duduclaw-native-gui` 兩個 crate）**：帶入平台 50b5acc0——Launcher 底部提示「Super 鍵隨時喚起」改為真實綁定「⌘K 隨時喚起」（整個堆疊沒有綁定單擊 Super；2026-09-08 在 fix13 VM 實測單擊 Super 無反應、Super+K 與選單列膠囊皆可開啟）。`duduclaw-cli`／`duduclaw-comp` 快照與 `duduclaw-platform-version.inc` 仍為 1.62.0，待下一次整體快照更新一併對齊。
 - **內建 AI CLI 全數「cannot execute: required file not found」**：claude（SEA）、opencode、
   Cursor 內附的 node、Copilot 平台二進位的 PT_INTERP 都是 `/lib64/ld-linux-x86-64.so.2`，

@@ -121,7 +121,7 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 前置需求：
 
 - Docker。Yocto 建置在 `duduclaw-yocto-builder` 容器裡跑（macOS 沒有原生 bitbake）。
-- 平台 repo 的 sibling checkout。只有要重整 vendored 快照時才需要（`meta-duduclaw/recipes-duduclaw/duduclaw-cli/refresh-src.sh`，路徑可用 `DUDUCLAW_CLI_SRC_ROOT` 覆寫）。
+- 平台 repo 的 sibling checkout。只有要重整 vendored 快照時才需要（整套對齊用 `scripts/sync-platform.sh <平台版本>`，見 `docs/guides/platform-sync.md`；單一 recipe 用 `meta-duduclaw/recipes-duduclaw/duduclaw-cli/refresh-src.sh`，路徑可用 `DUDUCLAW_CLI_SRC_ROOT` 覆寫）。
 - `minisign` 與 `gh`，簽章與發布用。
 
 ```bash

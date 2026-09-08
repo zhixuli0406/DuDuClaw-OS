@@ -39,3 +39,13 @@ meta-duduclaw/recipes-duduclaw/duduclaw-flatpak-offline-repo/files/*.tar.zst
 # the same reason the flatpak offline repo does.
 meta-duduclaw/recipes-duduclaw/duduclaw-ai-runtimes/files/*.tar.zst
 meta-duduclaw/recipes-duduclaw/duduclaw-ai-runtimes/files/*.tar.zst.sha256
+
+# kas layer checkouts + bitbake build dir live at the repo root (kas fetches them here); never commit
+/bitbake/
+/build/
+/openembedded-core/
+/meta-yocto/
+/meta-virtualization/
+/meta-openembedded/
+# release-os.sh smoke logs
+.release-os-smoke-*.log

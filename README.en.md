@@ -121,7 +121,7 @@ dd if=<wic> of=/dev/<target-disk> bs=4M conv=fsync    # or bmaptool copy
 Prerequisites:
 
 - Docker. The Yocto build runs inside a `duduclaw-yocto-builder` container (macOS has no native bitbake).
-- A sibling checkout of the platform repo, needed only to refresh the vendored snapshots (`meta-duduclaw/recipes-duduclaw/duduclaw-cli/refresh-src.sh`; override the path with `DUDUCLAW_CLI_SRC_ROOT`).
+- A sibling checkout of the platform repo, needed only to refresh the vendored snapshots (`scripts/sync-platform.sh <platform-version>` does all four plus the version bump, see `docs/guides/platform-sync.md`; per recipe: `meta-duduclaw/recipes-duduclaw/duduclaw-cli/refresh-src.sh`; override the path with `DUDUCLAW_CLI_SRC_ROOT`).
 - `minisign` and `gh` for signing and publishing.
 
 ```bash

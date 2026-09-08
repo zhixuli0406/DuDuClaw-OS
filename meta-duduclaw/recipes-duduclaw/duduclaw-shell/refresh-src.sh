@@ -51,6 +51,31 @@ SHELL_OUT="$HERE/files/duduclaw-shell-src"
 GUI_SRC="$REPO_ROOT/crates/duduclaw-native-gui"
 GUI_OUT="$HERE/files/duduclaw-native-gui"
 
+# Fail closed on a stale detached lockfile (2026-09-08, fix14 bake): the
+# platform's release.sh bumps every Cargo.toml and each excluded crate's OWN
+# self-version entry in its sibling Cargo.lock, but duduclaw-shell's lock also
+# carries duduclaw-native-gui (a path dependency) and that entry was left at
+# the old version. Vendored as-is, bitbake's `cargo build --frozen` cannot
+# re-sync the lock, treats native-gui's deps as unlocked, tries to load the
+# zed git source and dies with "Unable to update https://github.com/
+# zed-industries/zed ... offline mode (--frozen)". Cheap to catch here:
+# every path package in the lock must carry its manifest's version.
+for crate in duduclaw-shell duduclaw-native-gui; do
+    manifest_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/crates/$crate/Cargo.toml" | head -1)"
+    lock_ver="$(awk -v n="$crate" '$0 == "name = \"" n "\"" { getline; sub(/^version = "/, ""); sub(/"$/, ""); print; exit }' "$SHELL_SRC/Cargo.lock")"
+    if [[ -z "$manifest_ver" || -z "$lock_ver" ]]; then
+        echo "refresh-src: could not read $crate version (manifest='$manifest_ver' lock='$lock_ver')" >&2
+        exit 1
+    fi
+    if [[ "$manifest_ver" != "$lock_ver" ]]; then
+        echo "refresh-src: $SHELL_SRC/Cargo.lock has $crate $lock_ver but crates/$crate/Cargo.toml says $manifest_ver." >&2
+        echo "  The detached lockfile is stale (release.sh bump did not re-sync it). Run" >&2
+        echo "    (cd $SHELL_SRC && cargo metadata --offline --format-version 1 >/dev/null)" >&2
+        echo "  commit the Cargo.lock change, then re-run this script. Refusing to vendor a lock that --frozen cannot build." >&2
+        exit 1
+    fi
+done
+
 rm -rf "$SHELL_OUT" "$GUI_OUT"
 # --exclude target/: both crates' local dev target/ dirs were measured at
 # 7.7G (duduclaw-shell) + 12G (duduclaw-native-gui) on this machine -- a

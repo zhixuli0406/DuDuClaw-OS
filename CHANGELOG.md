@@ -8,6 +8,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 ## [Unreleased]
 
 ### Added
+- **`duduclaw-shell/refresh-src.sh` 拒絕 vendor 版本不一致的 Cargo.lock**：快照的 lock 裡 `duduclaw-shell`／`duduclaw-native-gui` 的版本若與各自 Cargo.toml 不符就停下並印出修法（`cargo metadata --offline`）。2026-09-08 fix14 烤製踩到：平台 bump 後 lock 的 native-gui 項未同步，`cargo build --frozen` 因此去要 zed 的 git 來源而離線失敗。
 - **`scripts/release-os.sh` 烤前主機磁碟防呆**：新增 `check_host_disk_free`，`$HOME` 所在卷可用空間低於
   `DUDUCLAW_MIN_HOST_FREE_GB`（預設 30）就拒絕開烤。Docker Desktop 的 `Docker.raw` 是稀疏檔，主機卷滿時
   VM 內寫入失敗、Docker 引擎直接崩潰（2026-09-06 在 `do_image_ext4`／`do_image_wic` 階段連續三次），

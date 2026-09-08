@@ -17,4 +17,4 @@
 # 0.x on purpose: the OS is still in bring-up (internal DISTRO_VERSION carries
 # the "-y1-bringup" milestone) — 0.y.z signals pre-GA. Cross 1.0.0 only when
 # the bring-up line is declared shippable-GA.
-0.1.0
+0.2.0

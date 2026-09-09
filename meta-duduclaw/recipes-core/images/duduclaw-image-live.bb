@@ -207,6 +207,9 @@ do_bootimg[depends] += "${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}:do_image_complete zstd
 
 DUDUCLAW_INSTALL_AB_WIC ?= "${DEPLOY_DIR_IMAGE}/${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}-${MACHINE}.rootfs.wic"
 
+# zstd flags for the embedded install payload (see populate_live:append below).
+DUDUCLAW_INSTALL_PAYLOAD_ZSTD ?= "-19 --long=27"
+
 populate_live:append() {
     ab_wic="${DUDUCLAW_INSTALL_AB_WIC}"
     if [ ! -e "$ab_wic" ]; then
@@ -222,8 +225,14 @@ populate_live:append() {
     # Edition marker next to the payload so the installer (and anyone mounting
     # the ISO) can tell which finished image this medium carries.
     printf '%s\n' "${DUDUCLAW_INSTALL_PAYLOAD_IMAGE}" > "$1/duduclaw-install.edition"
-    # -T0 multi-thread, -3 fast level (the .wic is mostly already-compact ext4
-    #  + a small ESP; a higher level buys little and costs minutes on every ISO
-    #  rebuild). -f overwrite, stream to the ISO tree.
-    zstd -T0 -3 -f "$ab_wic" -o "$1/duduclaw-install.wic.zst"
+    # Payload compression level. Default -19 --long=27 (2026-09-09): at the old
+    # -3 the v0.2.0 desktop-edition payload (appliance .wic with the bundled AI
+    # runtimes) compressed to 2.38 GB and the ISO came out at 2.66 GB, above
+    # GitHub's 2 GiB per-release-asset limit; the same .wic at -19 --long=27
+    # measured 1.72 GB. --long=27 (128 MiB window) is exactly zstd's default
+    # decompression window limit, so the installer's plain `zstd -dc` and
+    # `zstd -lv` keep working with no flag change. Costs ~10 min per ISO on the
+    # 4-vCPU builder instead of ~1 min; override per build if that matters:
+    #   DUDUCLAW_INSTALL_PAYLOAD_ZSTD = "-3"
+    zstd -T0 ${DUDUCLAW_INSTALL_PAYLOAD_ZSTD} -f "$ab_wic" -o "$1/duduclaw-install.wic.zst"
 }

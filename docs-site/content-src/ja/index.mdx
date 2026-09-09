@@ -1,0 +1,110 @@
+---
+title: DuDuClaw OS ドキュメント
+description: DuDuClaw OS と DuDuClaw プラットフォームの公開ドキュメント。インストール、デスクトップ、AI ランタイム、アーキテクチャ、仕様。
+template: splash
+hero:
+  tagline: AI の同僚がネイティブに住む Linux。インストール、設定、そして内部の仕組みはここから。
+  image:
+    file: ../../../assets/duduclaw-mark-circle.svg
+    alt: DuDuClaw
+  actions:
+    - text: クイックスタート
+      # Relative on purpose: Starlight writes hero action links verbatim,
+      # so they must not hard-code the base. These resolve against this
+      # page's own URL, which already carries base + locale.
+      link: os/readme/#quickstart
+      icon: right-arrow
+      variant: primary
+    - text: ハードウェア要件
+      link: guides/hardware-requirements/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+export const base = import.meta.env.BASE_URL.replace(/\/?$/, '/') + 'ja/';
+export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+\/$/, '') || '/';
+
+## まずはここから
+
+<CardGrid>
+  <LinkCard
+    title="クイックスタート"
+    href={base + 'os/readme/#quickstart'}
+    description="イメージをダウンロードし、minisign で検証して USB に書き込み、起動する。"
+  />
+  <LinkCard
+    title="デスクトップ版"
+    href={base + 'features/52-desktop-edition/'}
+    description="デスクトップの見た目、シャドウワークスペースが人に席を譲る仕組み、ロック画面と初回セットアップ。"
+  />
+  <LinkCard
+    title="ハードウェア要件"
+    href={base + 'guides/hardware-requirements/'}
+    description="x86-64-v3 / UEFI / SSD の必須条件、推奨ミニ PC、既知のドライバの穴。"
+  />
+  <LinkCard
+    title="アプリ互換レイヤ"
+    href={base + 'guides/app-compat/'}
+    description="compat.d ランナー、Bottles による Windows アプリ、Waydroid による Android、そして保証しないこと。"
+  />
+  <LinkCard
+    title="AI ランタイム"
+    href={base + 'os/guides/ai-runtimes/'}
+    description="イメージに同梱される AI CLI、認証情報の置き場所、ランタイムバンドルの再生成方法。"
+  />
+  <LinkCard
+    title="キーボードショートカット"
+    href={base + 'features/51-os-keyboard-shortcuts/'}
+    description="コンポジタのグローバルキー、シェル UI、いつでも仕事を渡せる Cmd+K。"
+  />
+  <LinkCard
+    title="ローカルモデル"
+    href={base + 'features/53-local-models/'}
+    description="llama.cpp でモデルを手元で動かす。オフライン推論、ルーティング、必要なハードウェア。"
+  />
+  <LinkCard
+    title="OS のビルド"
+    href={base + 'os/readme/#build'}
+    description="kas でソースからイメージをビルドし、QEMU で起動確認して署名・公開する。"
+  />
+  <LinkCard
+    title="セキュリティ報告"
+    href={base + 'os/security/'}
+    description="脆弱性の報告窓口、対象範囲、リリース成果物の検証方法。"
+  />
+</CardGrid>
+
+## セクション
+
+<CardGrid>
+  <LinkCard
+    title="機能"
+    href={base + 'features/50-duduclaw-os-appliance/'}
+    description="ユーザー視点で見た各機能。ゴールループ、メモリ、チャネル、進化エンジン。"
+  />
+  <LinkCard
+    title="ガイド"
+    href={base + 'guides/deployment-guide/'}
+    description="デプロイ、開発、Docker、チャネル接続、評価——そのまま動く手順。"
+  />
+  <LinkCard
+    title="アーキテクチャ"
+    href={base + 'architecture/overview/'}
+    description="システム全体像と進化エンジンの設計。"
+  />
+  <LinkCard
+    title="仕様"
+    href={base + 'spec/soul-md-spec/'}
+    description="オープンフォーマット。SOUL.md、CONTRACT.toml、SKILL.md、エキスパートパック。"
+  />
+  <LinkCard
+    title="API"
+    href={base + 'api/'}
+    description="ゲートウェイのプロトコルと OpenAPI リファレンス。"
+  />
+</CardGrid>
+
+---
+
+<p class="back-to-site"><a href={home}>&#8592; DuDuClaw OS の公式サイトへ</a></p>

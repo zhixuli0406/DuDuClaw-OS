@@ -1,0 +1,110 @@
+---
+title: DuDuClaw OS Docs
+description: Public documentation for DuDuClaw OS and the DuDuClaw platform — install, desktop, AI runtimes, architecture and specifications.
+template: splash
+hero:
+  tagline: A Linux where AI coworkers are native residents. Start here to install it, set it up, and understand what runs underneath.
+  image:
+    file: ../../../assets/duduclaw-mark-circle.svg
+    alt: DuDuClaw
+  actions:
+    - text: Quick start
+      # Relative on purpose: Starlight writes hero action links verbatim,
+      # so they must not hard-code the base. These resolve against this
+      # page's own URL, which already carries base + locale.
+      link: os/readme/#quickstart
+      icon: right-arrow
+      variant: primary
+    - text: Hardware requirements
+      link: guides/hardware-requirements/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+export const base = import.meta.env.BASE_URL.replace(/\/?$/, '/') + 'en/';
+export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+\/$/, '') || '/';
+
+## Start with these
+
+<CardGrid>
+  <LinkCard
+    title="Quick start"
+    href={base + 'os/readme/#quickstart'}
+    description="Download an image, verify it with minisign, write it to a USB stick, boot."
+  />
+  <LinkCard
+    title="Desktop edition"
+    href={base + 'features/52-desktop-edition/'}
+    description="What the desktop looks like, how the shadow workspace yields to a human, lock screen and first-run setup."
+  />
+  <LinkCard
+    title="Hardware requirements"
+    href={base + 'guides/hardware-requirements/'}
+    description="The x86-64-v3 / UEFI / SSD hard floor, recommended mini PCs, and the known driver gaps."
+  />
+  <LinkCard
+    title="App compatibility"
+    href={base + 'guides/app-compat/'}
+    description="compat.d runners, Windows apps through Bottles, Android through Waydroid — and what is not promised."
+  />
+  <LinkCard
+    title="AI runtimes"
+    href={base + 'os/guides/ai-runtimes/'}
+    description="Which AI CLIs ship in the image, where credentials live, how to regenerate the runtime bundle."
+  />
+  <LinkCard
+    title="Keyboard shortcuts"
+    href={base + 'features/51-os-keyboard-shortcuts/'}
+    description="Global compositor bindings, the shell UI, and Cmd+K to hand over a task at any moment."
+  />
+  <LinkCard
+    title="Local models"
+    href={base + 'features/53-local-models/'}
+    description="Running a model on the box with llama.cpp: offline inference, routing, hardware floor."
+  />
+  <LinkCard
+    title="Building the OS"
+    href={base + 'os/readme/#build'}
+    description="Build an image from source with kas, boot it in QEMU, then sign and publish."
+  />
+  <LinkCard
+    title="Reporting a security issue"
+    href={base + 'os/security/'}
+    description="Disclosure channel, scope, and how to verify release artifacts."
+  />
+</CardGrid>
+
+## Sections
+
+<CardGrid>
+  <LinkCard
+    title="Features"
+    href={base + 'features/50-duduclaw-os-appliance/'}
+    description="Every capability from the user's side: goal loop, memory, channels, evolution engine."
+  />
+  <LinkCard
+    title="Guides"
+    href={base + 'guides/deployment-guide/'}
+    description="Deployment, development, Docker, channel wiring, evals — steps that actually run."
+  />
+  <LinkCard
+    title="Architecture"
+    href={base + 'architecture/overview/'}
+    description="The system overview and the design of the evolution engine."
+  />
+  <LinkCard
+    title="Specifications"
+    href={base + 'spec/soul-md-spec/'}
+    description="The open formats: SOUL.md, CONTRACT.toml, SKILL.md, expert packs."
+  />
+  <LinkCard
+    title="API"
+    href={base + 'api/'}
+    description="Gateway protocol and the OpenAPI reference."
+  />
+</CardGrid>
+
+---
+
+<p class="back-to-site"><a href={home}>&#8592; Back to the DuDuClaw OS site</a></p>

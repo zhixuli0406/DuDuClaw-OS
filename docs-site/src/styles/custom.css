@@ -1,0 +1,335 @@
+/* DuDuClaw OS docs — theme bridge.
+ *
+ * The main site (website/assets/css/site.css) owns the design tokens; this
+ * file maps them onto Starlight's CSS custom properties so the docs read as a
+ * section of the same site rather than a bolted-on generator.
+ *
+ * Starlight's convention, followed here: `:root` carries the dark palette and
+ * `:root[data-theme='light']` the light one. Starlight's own inline script
+ * stamps `data-theme` before first paint from the stored choice or
+ * `prefers-color-scheme`, so all three states (light / dark / system) work.
+ *
+ * Crimson (#e5484d) is brand-reserved for the logo mark and appears nowhere
+ * as a UI colour.
+ */
+
+/* ---------- fonts + shared metrics ---------- */
+
+:root {
+  --sl-font: 'Inter', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  --sl-content-width: 50rem;
+  --sl-text-code: 0.875rem;
+
+  --ddc-radius-card: 12px;
+  --ddc-radius-btn: 10px;
+  --ddc-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ddc-dur: 180ms;
+}
+
+/* ---------- dark (Starlight default state) ---------- */
+
+:root {
+  color-scheme: dark;
+
+  --sl-color-accent-low: #12294a;
+  --sl-color-accent: #4390ee;
+  --sl-color-accent-high: #a9cdf8;
+
+  --sl-color-white: #fafafa;
+  --sl-color-gray-1: #ededf0;
+  --sl-color-gray-2: #d6d6db;
+  --sl-color-gray-3: #9f9fa9;
+  --sl-color-gray-4: #71717b;
+  --sl-color-gray-5: #3a3a3e;
+  --sl-color-gray-6: #27272a;
+  --sl-color-gray-7: #1e1e21;
+  --sl-color-black: #0c0c0e;
+
+  --sl-color-bg: #0c0c0e;
+  --sl-color-bg-nav: rgba(18, 18, 21, 0.74);
+  --sl-color-bg-sidebar: #0c0c0e;
+  --sl-color-bg-inline-code: #17171a;
+  --sl-color-bg-accent: #4390ee;
+
+  --sl-color-text: #d6d6db;
+  --sl-color-text-accent: #59a6ff;
+  --sl-color-text-invert: #0c0c0e;
+
+  --sl-color-hairline: #27272a;
+  --sl-color-hairline-light: #27272a;
+  --sl-color-hairline-shade: #1c1c1f;
+
+  --sl-color-green: #4cc463;
+  --sl-color-green-low: rgba(76, 196, 99, 0.16);
+  --sl-color-green-high: #8fe3a0;
+  --sl-color-orange: #e0b13a;
+  --sl-color-orange-low: rgba(220, 164, 0, 0.18);
+  --sl-color-orange-high: #f0cf7d;
+  --sl-color-red: #ff6b8b;
+  --sl-color-red-low: rgba(255, 107, 139, 0.16);
+  --sl-color-red-high: #ffa8bb;
+  --sl-color-blue: #4390ee;
+  --sl-color-blue-low: rgba(67, 144, 238, 0.16);
+  --sl-color-blue-high: #a9cdf8;
+  --sl-color-purple: #a78bfa;
+  --sl-color-purple-low: rgba(167, 139, 250, 0.16);
+  --sl-color-purple-high: #cbb9ff;
+
+  --ddc-surface: #1e1e21;
+  --ddc-surface-2: #17171a;
+  --ddc-accent-soft: rgba(67, 144, 238, 0.14);
+  --ddc-accent-line: rgba(67, 144, 238, 0.36);
+  --ddc-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ddc-shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- light ---------- */
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --sl-color-accent-low: #e2edfb;
+  --sl-color-accent: #2171cc;
+  --sl-color-accent-high: #12406f;
+
+  --sl-color-white: #09090b;
+  --sl-color-gray-1: #18181b;
+  --sl-color-gray-2: #3f3f46;
+  --sl-color-gray-3: #71717b;
+  --sl-color-gray-4: #9f9fa9;
+  --sl-color-gray-5: #d4d4d8;
+  --sl-color-gray-6: #e4e4e7;
+  --sl-color-gray-7: #f4f4f5;
+  --sl-color-black: #ffffff;
+
+  --sl-color-bg: #f3f3f3;
+  --sl-color-bg-nav: rgba(255, 255, 255, 0.74);
+  --sl-color-bg-sidebar: #f3f3f3;
+  --sl-color-bg-inline-code: #e8e8ea;
+  --sl-color-bg-accent: #2171cc;
+
+  --sl-color-text: #3f3f46;
+  --sl-color-text-accent: #1a5ba6;
+  --sl-color-text-invert: #ffffff;
+
+  --sl-color-hairline: #e4e4e7;
+  --sl-color-hairline-light: #e4e4e7;
+  --sl-color-hairline-shade: #e9e9ec;
+
+  --sl-color-green: #1c882d;
+  --sl-color-green-low: rgba(28, 136, 45, 0.12);
+  --sl-color-green-high: #10561d;
+  --sl-color-orange: #8a6600;
+  --sl-color-orange-low: rgba(220, 164, 0, 0.16);
+  --sl-color-orange-high: #5c4400;
+  --sl-color-red: #e0335a;
+  --sl-color-red-low: rgba(224, 51, 90, 0.12);
+  --sl-color-red-high: #8d1533;
+  --sl-color-blue: #2171cc;
+  --sl-color-blue-low: rgba(33, 113, 204, 0.11);
+  --sl-color-blue-high: #12406f;
+  --sl-color-purple: #6d4bd8;
+  --sl-color-purple-low: rgba(109, 75, 216, 0.11);
+  --sl-color-purple-high: #3c2482;
+
+  --ddc-surface: #ffffff;
+  --ddc-surface-2: #fafafa;
+  --ddc-accent-soft: rgba(33, 113, 204, 0.09);
+  --ddc-accent-line: rgba(33, 113, 204, 0.28);
+  --ddc-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --ddc-shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.12);
+}
+
+/* ---------- chrome ---------- */
+
+.header {
+  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+/* The main site's wordmark is neutral, not accent-coloured; Starlight's
+   default paints the site title with the accent. Match the main site. */
+.site-title {
+  color: var(--sl-color-white);
+  font-weight: 700;
+  font-size: var(--sl-text-lg);
+  letter-spacing: -0.01em;
+}
+
+.site-title img {
+  height: 1.75rem;
+  width: auto;
+  border-radius: 999px;
+}
+
+/* Sidebar: hairline rails, rounded active state, calmer weight. */
+starlight-menu-button button,
+.sidebar-pane {
+  border-inline-end-color: var(--sl-color-hairline);
+}
+
+.sidebar-content a {
+  border-radius: 8px;
+  padding-block: 0.3rem;
+  transition: background-color var(--ddc-dur) var(--ddc-ease),
+    color var(--ddc-dur) var(--ddc-ease);
+}
+
+.sidebar-content a:hover {
+  background: var(--ddc-accent-soft);
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  background: var(--ddc-accent-soft);
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+}
+
+.sidebar-content summary {
+  padding-block: 0.35rem;
+}
+
+/* ---------- content surfaces ---------- */
+
+.sl-markdown-content :is(h2, h3, h4) {
+  letter-spacing: -0.01em;
+}
+
+.sl-markdown-content :is(h2) {
+  border-top: 1px solid var(--sl-color-hairline);
+  padding-top: 1.4rem;
+}
+
+.sl-markdown-content :is(h2):first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* Wide reference tables are the norm in these docs: give them their own
+   scroll container so the page body never scrolls sideways. */
+.sl-markdown-content table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.sl-markdown-content :is(th, td) {
+  border: 1px solid var(--sl-color-hairline);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+}
+
+.sl-markdown-content th {
+  background: var(--ddc-surface-2);
+  font-weight: 600;
+  text-align: start;
+}
+
+.sl-markdown-content blockquote {
+  border-inline-start: 2px solid var(--ddc-accent-line);
+  color: var(--sl-color-gray-3);
+}
+
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+.sl-markdown-content a {
+  text-underline-offset: 0.2em;
+}
+
+/* Cards and link cards on the landing page. */
+.card,
+.sl-link-card {
+  border-radius: var(--ddc-radius-card);
+  border-color: var(--sl-color-hairline);
+  background: var(--ddc-surface);
+  box-shadow: var(--ddc-shadow-card);
+  transition: transform var(--ddc-dur) var(--ddc-ease),
+    box-shadow var(--ddc-dur) var(--ddc-ease),
+    border-color var(--ddc-dur) var(--ddc-ease);
+}
+
+.sl-link-card:hover {
+  border-color: var(--ddc-accent-line);
+  box-shadow: var(--ddc-shadow-soft);
+  transform: translateY(-2px);
+}
+
+.sl-link-card .icon {
+  color: var(--sl-color-text-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-link-card,
+  .sidebar-content a,
+  .site-link {
+    transition: none;
+  }
+  .sl-link-card:hover {
+    transform: none;
+  }
+}
+
+/* Splash hero on the landing page. */
+.hero > img,
+.hero .hero-html img {
+  filter: drop-shadow(0 18px 40px rgba(0, 0, 0, 0.18));
+  max-height: 15rem;
+}
+
+.hero .tagline {
+  color: var(--sl-color-gray-3);
+  max-width: 46ch;
+}
+
+.hero .actions .sl-link-button.primary {
+  border-radius: var(--ddc-radius-btn);
+}
+
+.hero .actions .sl-link-button.minimal {
+  border-radius: var(--ddc-radius-btn);
+}
+
+/* Splash pages have no sidebar, so they also have no mobile menu to hold the
+   header's "back to the main site" link. The landing pages repeat it in the
+   content, shown only where the header one is hidden. */
+.back-to-site {
+  font-size: var(--sl-text-sm);
+}
+
+.back-to-site a {
+  color: var(--sl-color-gray-3);
+  text-decoration: none;
+}
+
+.back-to-site a:hover {
+  color: var(--sl-color-text-accent);
+}
+
+@media (min-width: 50rem) {
+  .back-to-site {
+    display: none;
+  }
+}
+
+/* Asides (the English-original notice, tips, cautions). */
+.starlight-aside {
+  border-radius: var(--ddc-radius-card);
+  border-inline-start-width: 2px;
+}
+
+/* Search modal + pagination cards pick up the same radius. */
+.pagination-links a {
+  border-radius: var(--ddc-radius-card);
+  border-color: var(--sl-color-hairline);
+  box-shadow: var(--ddc-shadow-card);
+}

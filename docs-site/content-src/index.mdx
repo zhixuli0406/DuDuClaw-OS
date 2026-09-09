@@ -1,0 +1,110 @@
+---
+title: DuDuClaw OS 文件
+description: DuDuClaw OS 與 DuDuClaw 平台的公開文件：安裝、桌面、AI runtime、架構與規格，全部在自家網域上。
+template: splash
+hero:
+  tagline: 一台把 AI 員工當原生住民的 Linux。從這裡開始安裝、設定，並了解它底下怎麼運作。
+  image:
+    file: ../../assets/duduclaw-mark-circle.svg
+    alt: DuDuClaw
+  actions:
+    - text: 快速開始
+      # Relative on purpose: Starlight writes hero action links verbatim,
+      # so they must not hard-code the base. These resolve against this
+      # page's own URL, which already carries base + locale.
+      link: os/readme/#quickstart
+      icon: right-arrow
+      variant: primary
+    - text: 硬體需求
+      link: guides/hardware-requirements/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+export const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+\/$/, '') || '/';
+
+## 從這幾件事開始
+
+<CardGrid>
+  <LinkCard
+    title="快速開始"
+    href={base + 'os/readme/#quickstart'}
+    description="下載映像、用 minisign 驗簽、寫進隨身碟，然後開機。"
+  />
+  <LinkCard
+    title="桌面版"
+    href={base + 'features/52-desktop-edition/'}
+    description="桌面環境長什麼樣、影子工作區怎麼讓位給人、鎖定畫面與首次設定。"
+  />
+  <LinkCard
+    title="硬體需求"
+    href={base + 'guides/hardware-requirements/'}
+    description="x86-64-v3、UEFI、SSD 的硬性門檻，推薦的迷你主機與已知的驅動缺口。"
+  />
+  <LinkCard
+    title="app 相容層"
+    href={base + 'guides/app-compat/'}
+    description="compat.d runner、Bottles 跑 Windows 程式、Waydroid 跑 Android，以及哪些事不保證。"
+  />
+  <LinkCard
+    title="AI runtimes"
+    href={base + 'os/guides/ai-runtimes/'}
+    description="映像內建的 AI CLI 有哪些、憑證放在哪、怎麼重新產生 runtime bundle。"
+  />
+  <LinkCard
+    title="快捷鍵"
+    href={base + 'features/51-os-keyboard-shortcuts/'}
+    description="compositor 全域鍵位、殼層 UI、隨時交辦的 Cmd+K。"
+  />
+  <LinkCard
+    title="本機模型"
+    href={base + 'features/53-local-models/'}
+    description="用 llama.cpp 在機器上跑模型：離線推論、路由與硬體門檻。"
+  />
+  <LinkCard
+    title="建置 OS"
+    href={base + 'os/readme/#build'}
+    description="用 kas 從原始碼建出映像，在 QEMU 開機驗證，再簽章發布。"
+  />
+  <LinkCard
+    title="回報安全問題"
+    href={base + 'os/security/'}
+    description="漏洞回報管道、涵蓋範圍，以及發布產物的驗證方式。"
+  />
+</CardGrid>
+
+## 文件分區
+
+<CardGrid>
+  <LinkCard
+    title="功能"
+    href={base + 'features/50-duduclaw-os-appliance/'}
+    description="從使用者角度看每一項能力：目標迴圈、記憶、通道、演化引擎。"
+  />
+  <LinkCard
+    title="指南"
+    href={base + 'guides/deployment-guide/'}
+    description="部署、開發、Docker、通道串接、評測——照著做就會動的步驟。"
+  />
+  <LinkCard
+    title="架構"
+    href={base + 'architecture/overview/'}
+    description="系統全貌與演化引擎的設計說明。"
+  />
+  <LinkCard
+    title="規格"
+    href={base + 'spec/soul-md-spec/'}
+    description="SOUL.md、CONTRACT.toml、SKILL.md、專家包的開放格式。"
+  />
+  <LinkCard
+    title="API"
+    href={base + 'api/'}
+    description="Gateway 的協定與 OpenAPI 參考。"
+  />
+</CardGrid>
+
+---
+
+<p class="back-to-site"><a href={home}>&#8592; 回到 DuDuClaw OS 官網</a></p>

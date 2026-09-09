@@ -1,0 +1,63 @@
+---
+/**
+ * Replaces Starlight's SocialIcons slot in the header.
+ *
+ * The docs site deliberately links nowhere on GitHub — the only outbound link
+ * in the chrome goes back to the main site, which is the parent of this
+ * build's base path (`/docs/` -> `/`).
+ */
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const mainSite = base.replace(/[^/]+\/$/, '') || '/';
+
+const rest = Astro.url.pathname.startsWith(base) ? Astro.url.pathname.slice(base.length) : '';
+const locale = rest.startsWith('en/') ? 'en' : rest.startsWith('ja/') ? 'ja' : 'zh-TW';
+
+const labels = {
+  'zh-TW': '回到官網',
+  en: 'Main site',
+  ja: '公式サイト',
+};
+---
+
+<a class="site-link" href={mainSite}>
+  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none">
+    <path
+      d="M10 3.5 5.5 8l4.5 4.5"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"></path>
+  </svg>
+  <span>{labels[locale]}</span>
+</a>
+
+<style>
+  .site-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 999px;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    line-height: 1.4;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color 180ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      border-color 180ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      background-color 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .site-link:hover {
+    color: var(--sl-color-text-accent);
+    border-color: var(--ddc-accent-line);
+    background: var(--ddc-accent-soft);
+  }
+
+  .site-link svg {
+    flex: none;
+    opacity: 0.7;
+  }
+</style>

@@ -49,3 +49,18 @@ meta-duduclaw/recipes-duduclaw/duduclaw-ai-runtimes/files/*.tar.zst.sha256
 /meta-openembedded/
 # release-os.sh smoke logs
 .release-os-smoke-*.log
+
+# --- Documentation site (docs-site/) build state ---
+# The Starlight content tree is generated from two repos by
+# docs-site/scripts/sync-docs.mjs on every build, and _site/ is the assembled
+# website/ + docs-site/dist output produced by scripts/build-site.sh. All four
+# are reproducible; none belongs in git.
+/_site/
+docs-site/node_modules/
+docs-site/dist/
+docs-site/src/content/docs/
+docs-site/src/start-links.json
+docs-site/.astro/
+
+# --- Cloud Run staging copy of _site/ (scripts/deploy-cloudrun.sh) ---
+deploy/cloudrun/_site/

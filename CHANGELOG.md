@@ -9,10 +9,8 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [0.2.0] - 2026-09-09 — 平台快照同步 v1.63.0×sync-platform 一鍵同步×release-os smoke 修復
 
-### Removed
-- **本版未附 desktop live 安裝 ISO（`duduclaw-image-live-desktop`）**：內建 AI runtimes 後 ISO 達 2.66GB，超過 GitHub 單一 release 資產 2GiB 上限；一般 installer ISO（590MB）與 appliance 整碟 `.wic.zst` 照常。待 OS 發布流程有 GitHub 以外的大檔散發點後恢復。
-
 ### Fixed（發布日補）
+- **live 安裝 ISO 載荷壓縮改 `zstd -19 --long=27`**（`DUDUCLAW_INSTALL_PAYLOAD_ZSTD` 可調）：desktop 版 ISO 在舊的 -3 下達 2.66GB，超過 GitHub 單資產 2GiB 上限；改後 qemu 1.996GB／generic 2.006GB，兩機的 desktop ISO 照常隨 0.2.0 出貨。`--long=27` 為 zstd 解壓端預設視窗上限，安裝程式不需改。
 - **`release-os.sh build/smoke/package` 預設串 release overlay `serial1.yml`**：先前只吃機型 kas 設定，deploy/spdx 被清後開烤即死於 `do_create_recipe_spdx`；現由 `kas_cfg_chain` 統一串上（`DUDUCLAW_OS_KAS_OVERLAY=` 可關）。
 - **wic.zst 壓縮改 `zstd -19 --long=27`＋2GiB 資產上限硬檢查**：level 3 壓出 2.38GB 撞 GitHub 422；同一顆 wic 以 -19 為 1.72GB。package 壓完先量、超限拒簽，publish 上傳前再查；manifest 加 `decompress_hint`，解壓需 `zstd -d --long=27`。
 

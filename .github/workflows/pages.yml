@@ -9,20 +9,25 @@ name: Publish site
 # whitelist of the platform repo (features / guides / architecture / spec /
 # api). The platform repo is checked out read-only into platform/.
 
+# Manual only for now: the repository does not have GitHub Pages enabled
+# (actions/configure-pages fails with 404 until it is), and the production
+# site is served from Cloud Run (scripts/deploy-cloudrun.sh). To turn this
+# into the primary path: enable Pages (Settings → Pages → Source: GitHub
+# Actions), then restore the push trigger below.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'website/**'
-      - 'docs-site/**'
-      - 'docs/**'
-      - 'README.md'
-      - 'README.en.md'
-      - 'CHANGELOG.md'
-      - 'SECURITY.md'
-      - 'scripts/build-site.sh'
-      - '.github/workflows/pages.yml'
   workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'website/**'
+  #     - 'docs-site/**'
+  #     - 'docs/**'
+  #     - 'README.md'
+  #     - 'README.en.md'
+  #     - 'CHANGELOG.md'
+  #     - 'SECURITY.md'
+  #     - 'scripts/build-site.sh'
+  #     - '.github/workflows/pages.yml'
 
 permissions:
   contents: read

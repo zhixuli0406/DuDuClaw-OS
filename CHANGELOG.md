@@ -31,6 +31,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   網站主體維持零建置，只有文件站需要 Node。
 
 ### Changed
+  （2026-09-09 補：Pages 尚未啟用時 `configure-pages` 會失敗，故改為僅 `workflow_dispatch` 手動觸發；正式站走 Cloud Run。啟用 Pages 後再恢復 push 觸發。）
 - **`README.md`／`README.en.md`／`docs/README.md`：連到平台 repo 使用者文件的連結，從 GitHub
   blob 連結全部改連文件站** `https://os.duduclaw.dudustudio.monster/docs/...`（值班機、桌面版、
   OS 快捷鍵、硬體需求、app 相容層、mkosi 安裝指南六處）；GitHub 上只留 repo、Releases、Issues

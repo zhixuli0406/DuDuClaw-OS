@@ -7,6 +7,51 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Added
+- **正式站部署到 Cloud Run**：`deploy/cloudrun/`（nginx 靜態容器：CSP、快取標頭、`mjs`／`avif`／`wasm` MIME）與
+  `scripts/deploy-cloudrun.sh`（建置 `_site/` 後以 deployer SA `gcloud run deploy --source`）；服務 `duduclaw-os-site`
+  （`louis-460302`／`asia-east1`），網域 `os.duduclaw.dudustudio.monster`（domain mapping＋Cloud DNS CNAME 一次性設定）。
+  `og:image` 改為正式網域絕對網址；文件站 `SITE_URL` 由 deploy 腳本帶入。
+- **文件站 `docs-site/`（Astro 7 ＋ Starlight 0.42，發布在主站的 `/docs/`）**：把本 repo 的
+  `docs/**` 與根目錄 `README.md`／`README.en.md`／`CHANGELOG.md`／`SECURITY.md`，加上平台 repo
+  的公開白名單（`docs/` 底下的 `features`／`guides`／`architecture`／`spec`／`api`，其餘如
+  `todo`／`rfc`／`adr` 一律不讀），組成 zh-TW（預設）／en／ja 三語系的靜態站，搜尋用
+  Pagefind。**站內任何位置都不連 GitHub**：關掉 editLink、header 不放 GitHub 圖示、內文指向
+  非公開檔案的連結一律降級成純文字（不留 GitHub 備援連結），只有指向 Releases 的連結保留。
+  主題以 CSS 變數對接 `website/assets/css/site.css` 的既有 token（`#f3f3f3`／`#0c0c0e` 底、
+  MDS 藍 `#2171cc`／`#4390ee`、Inter＋Noto Sans TC、JetBrains Mono、10–12px 圓角），緋紅
+  `#e5484d` 只出現在 logo。`scripts/sync-docs.mjs` 每次建置前重建內容樹（注入 frontmatter、
+  改寫相對 `.md` 連結、複製引用圖檔、印出統計），零額外相依、可重複執行。
+- **`scripts/build-site.sh`**：本機把 `website/` ＋ `docs-site/dist` 組成 `_site/`（文件放
+  `_site/docs/`），`SKIP_DOCS=1` 可重用既有 `dist`。
+- **`.github/workflows/pages.yml`**：push 到 main 時 checkout 兩個 repo（平台以 sparse
+  checkout 只取 `docs`）、建置文件站、組出 `_site/` 並發布到 GitHub Pages。
+  `DOCS_BASE` 由 `configure-pages` 的 `base_path` 推出，因此自訂網域／使用者頁（`/docs`）
+  與專案頁（`/<repo>/docs`）共用同一份設定；`docs-site/base.mjs` 是唯一的正規化點。
+  網站主體維持零建置，只有文件站需要 Node。
+
+### Changed
+- **`README.md`／`README.en.md`／`docs/README.md`：連到平台 repo 使用者文件的連結，從 GitHub
+  blob 連結全部改連文件站** `https://os.duduclaw.dudustudio.monster/docs/...`（值班機、桌面版、
+  OS 快捷鍵、硬體需求、app 相容層、mkosi 安裝指南六處）；GitHub 上只留 repo、Releases、Issues
+  與 LICENSE 連結，與文件站「站內不連 GitHub」的原則對齊。
+- **`docs/README.md`**：「Start here」補上正式站＋文件站連結；「Component references」補上
+  `../website/README.md` 一列；使用者文件表格標題改為「發佈在文件站」，不再稱「currently
+  published from the platform repo」。
+- **`README.md`／`README.en.md`／`meta-duduclaw/README.md`：信任鏈與版本敘述全面更新到 v0.2.0**
+  ——版本徽章、狀態列、需求對照表、信任鏈段落、Quick start 的 Secure Boot 提示、
+  `duduclaw-genericx86-64` 驗證現況，原本綁死在「v0.1.0 未啟用／v0.1.0 只做過設定稽核」的
+  措辭改為「截至 v0.2.0 仍未啟用／只做過設定稽核」，並補上 `scripts/release-os.sh build`
+  目前預設只疊加 `kas/serial1.yml`（release overlay，不含 `sb-signing.yml`／`tpm-luks.yml`）
+  這個先前沒寫清楚的細節。`meta-duduclaw/README.md` 的映像角色表格與 Status 一節同步更新，
+  不再把仍持續適用的敘述（安裝器 ISO 的角色、三種產物形式）錯釘在 v0.1.0 單一版本上。
+
+### Fixed
+- **`SECURITY.md`「Release Artifact Security」敘述漏掉第三種發布產物、且誤植兩種 ISO 都有
+  `.manifest.json`**：改為正確描述每機型三種產物（wic 桌面版、installer 基礎版 ISO、
+  installer-desktop 桌面版 ISO），三者皆附 `.sha256`／`.minisig`，但 `.manifest.json` 只有
+  wic 才有（以 `artifacts/os/v0.2.0/` 下實際產物核對）。
+
 ## [0.2.0] - 2026-09-09 — 平台快照同步 v1.63.0×sync-platform 一鍵同步×release-os smoke 修復
 
 ### Added

@@ -78,9 +78,9 @@ meta-duduclaw/
 |---|---|---|
 | `duduclaw-image-appliance` | **Desktop edition**: A/B update chain + the desktop stack + Flatpak-preloaded Chromium / LibreOffice / Steam + app compatibility layer + read-only root + firewall + login hardening | **Shipping image** — the `.wic.zst` in each release, and the payload of `duduclaw-image-live-desktop` |
 | `duduclaw-image-appliance-test` | Same payload, root serial autologin | QEMU test variant, never shipped |
-| `duduclaw-image-ab` | **Base image**: A/B GPT layout + update chain on top of `duduclaw-image` (which already carries the desktop stack — comp/shell, IME, audio, XWayland — and the gateway); no app layer, no read-only root, no firewall | Payload of the v0.1.0 `duduclaw-image-live` ISO; a bring-up artifact |
-| `duduclaw-image-live` (+ `-live-initramfs`) | squashfs live environment with the graphical installer; writes the image named by `DUDUCLAW_INSTALL_PAYLOAD_IMAGE` (default `duduclaw-image-ab`) to the target disk | The v0.1.0 `.iso` |
-| `duduclaw-image-live-desktop` | Same live environment, payload = `duduclaw-image-appliance` (desktop edition) | The desktop-edition installer `.iso` (added to v0.1.0 on 2026-09-04) |
+| `duduclaw-image-ab` | **Base image**: A/B GPT layout + update chain on top of `duduclaw-image` (which already carries the desktop stack — comp/shell, IME, audio, XWayland — and the gateway); no app layer, no read-only root, no firewall | Payload of the `duduclaw-image-live` ISO since v0.1.0; a bring-up artifact |
+| `duduclaw-image-live` (+ `-live-initramfs`) | squashfs live environment with the graphical installer; writes the image named by `DUDUCLAW_INSTALL_PAYLOAD_IMAGE` (default `duduclaw-image-ab`) to the target disk | The base-edition installer `.iso`, shipped with every release since v0.1.0 |
+| `duduclaw-image-live-desktop` | Same live environment, payload = `duduclaw-image-appliance` (desktop edition) | The desktop-edition installer `.iso` (added 2026-09-04, alongside v0.1.0, and shipped with every release since) |
 | `duduclaw-image-flatpak` | Flatpak / bubblewrap / ostree / polkit carriage on top of `-data` | Building block |
 | `duduclaw-image-data` | `/data` partition + first-boot provisioning on top of `duduclaw-image` | Building block |
 | `duduclaw-image` | `duduclaw-sysd` + `duduclaw` payload on top of `-minimal` | Building block |
@@ -98,9 +98,10 @@ appliance image; see [`../docs/guides/ai-runtimes.md`](../docs/guides/ai-runtime
 for the budget and the refresh procedure. Secure Boot signing and
 dm-verity are enabled by the `kas/sb-signing.yml` overlay, TPM2 + LUKS by
 `kas/tpm-luks.yml`; a build without those overlays (which is what
-`scripts/release-os.sh build` does today, and what v0.1.0 shipped) produces
-unsigned UKIs, no verity partition and no TPM stack. Release ISO builds also
-need `kas/serial1.yml` (SPDX off, `-j1`).
+`scripts/release-os.sh build` does today, and what every release through
+v0.2.0 has shipped) produces unsigned UKIs, no verity partition and no TPM
+stack. Release builds do chain `kas/serial1.yml` by default (SPDX off,
+`-j1`) — that overlay is unrelated to the trust chain.
 
 ## Usage
 
@@ -232,7 +233,11 @@ kernel; both are handled in this layer but bite anyone adding a machine:
 
 ## Status
 
-See the repo-root [`CHANGELOG.md`](../CHANGELOG.md). v0.1.0 (2026-09-04) is
-the first tagged bring-up release: both machines × both artifact forms are
-published and signed; the QEMU machine is boot-verified for both forms, the
-real-hardware machine is config-audited only.
+See the repo-root [`CHANGELOG.md`](../CHANGELOG.md). v0.1.0 (2026-09-04) was
+the first tagged bring-up release; v0.2.0 (2026-09-09) resynced the
+embedded platform snapshot to v1.63.0. Both releases publish, per machine,
+all three artifact forms (the whole-disk image, the base-edition installer
+ISO, and the desktop-edition installer ISO), each signed; the QEMU machine
+is boot-verified for all three, the real-hardware machine
+(`duduclaw-genericx86-64`) remains config-audited only — it has not yet
+been booted on real hardware.

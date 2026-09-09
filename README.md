@@ -10,10 +10,10 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 
 這個 repo 是 **base-OS 線**：`meta-duduclaw/` Yocto layer（distro 政策、機器定義、`duduclaw-*` binary 的 recipe）加上 `scripts/release-os.sh` 建置／簽章／發布產線。DuDuClaw 平台的 Rust workspace 在另一個 repo，這裡以剪枝過的快照 vendor 進來。
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/zhixuli0406/DuDuClaw-OS/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/zhixuli0406/DuDuClaw-OS/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-> **狀態：bring-up（0.1.0，pre-GA）。** 映像能開機、能 A/B 更新並回滾；信任鏈在 layer 已接好，但發布映像尚未啟用簽章／verity／TPM（見信任鏈一節）。這不是正式版：`0.x` 追蹤 bring-up，`1.0.0` 才是第一個 GA。目前所有驗證都在 QEMU 上完成，**尚未在真實 x86-64 硬體上開機過**。
+> **狀態：bring-up（0.2.0，pre-GA）。** 映像能開機、能 A/B 更新並回滾；信任鏈在 layer 已接好，但截至 v0.2.0，發布映像仍未啟用簽章／verity／TPM（見信任鏈一節）。這不是正式版：`0.x` 追蹤 bring-up，`1.0.0` 才是第一個 GA。目前所有驗證都在 QEMU 上完成，**尚未在真實 x86-64 硬體上開機過**。
 
 ## 目錄
 
@@ -37,9 +37,9 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 |---|---|---|
 | 首次設定 | SSH 進去手動改設定 | 首次開機自動 provision，後台直接出現在區網 |
 | 系統更新 | 套件管理器，失敗要自己救 | A/B 雙槽原子更新，開機失敗自動回滾 |
-| 防竄改 | 自行設定 | 唯讀 root（桌面版出貨預設）；dm-verity 逐塊驗證已接好，由建置 overlay 啟用（v0.1.0 未啟用） |
-| 開機信任 | 多半直接關掉 Secure Boot | 自簽 Secure Boot、每槽雙簽 UKI、首次開機自動 enroll 已接好，由建置 overlay 啟用（v0.1.0 映像未簽章，開機需關閉 Secure Boot） |
-| 磁碟金鑰 | 手動 LUKS | TPM2 PCR 7+11 密封（建置 overlay 選項，部分完成，v0.1.0 未啟用） |
+| 防竄改 | 自行設定 | 唯讀 root（桌面版出貨預設）；dm-verity 逐塊驗證已接好，由建置 overlay 啟用（截至 v0.2.0 仍未啟用） |
+| 開機信任 | 多半直接關掉 Secure Boot | 自簽 Secure Boot、每槽雙簽 UKI、首次開機自動 enroll 已接好，由建置 overlay 啟用（截至 v0.2.0，發布映像仍未簽章，開機需關閉 Secure Boot） |
+| 磁碟金鑰 | 手動 LUKS | TPM2 PCR 7+11 密封（建置 overlay 選項，部分完成，截至 v0.2.0 仍未啟用） |
 | 桌面與應用 | 逐一安裝 | 自家 compositor/shell、Flatpak 離線倉庫（Chromium、LibreOffice 從 Launcher 一鍵安裝，不需網路）、注音輸入法 |
 | 人與 AI 共用一台機器 | 各開各的視窗，互不知情 | 桌面殼內建交辦列（Cmd+K）；agent 的 GUI 工作預設在影子工作區跑，不碰你的視窗與游標；你一動鍵盤滑鼠，正在你桌面上操作的 agent 立刻凍結 |
 | AI 工具鏈 | 一家一家 `npm install -g`，換機重來 | 十套廠商 CLI 直接在映像裡：`claude`／`codex`／`gemini`／`qwen`／`kimi`／`copilot`／`grok`／`agent`（Cursor）／`opencode`／`vibe`，開機即可用，憑證存在 `/data`，更新不會被洗掉 |
@@ -56,8 +56,8 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 | 產物 | 內容 | 用途 |
 |---|---|---|
 | `duduclaw-os-<machine>-v<ver>.wic.zst` | **桌面版** `duduclaw-image-appliance`：A/B 更新鏈＋桌面殼＋Chromium／LibreOffice／Steam＋注音 IME＋app 相容層＋唯讀 root＋防火牆＋登入硬化 | 整碟燒錄，日常主力機 |
-| `duduclaw-os-installer-<machine>-v<ver>.iso` | `duduclaw-image-live`：squashfs live 環境＋圖形安裝精靈。v0.1.0 寫入的是**基礎版** `duduclaw-image-ab`：同樣的 A/B 佈局、桌面殼與 gateway，但沒有應用層、app 相容層、唯讀 root 與防火牆，屬 bring-up 產物 | 燒成 USB 開機安裝 |
-| `duduclaw-os-installer-desktop-<machine>-v<ver>.iso` | `duduclaw-image-live-desktop`：同一個安裝精靈，寫入的是桌面版 `duduclaw-image-appliance`（v0.1.0 於 2026-09-04 補上） | 燒成 USB 開機安裝，得到與整碟映像相同的桌面版 |
+| `duduclaw-os-installer-<machine>-v<ver>.iso` | `duduclaw-image-live`：squashfs live 環境＋圖形安裝精靈，寫入的是**基礎版** `duduclaw-image-ab`：同樣的 A/B 佈局、桌面殼與 gateway，但沒有應用層、app 相容層、唯讀 root 與防火牆，屬 bring-up 產物 | 燒成 USB 開機安裝 |
+| `duduclaw-os-installer-desktop-<machine>-v<ver>.iso` | `duduclaw-image-live-desktop`：同一個安裝精靈，寫入的是桌面版 `duduclaw-image-appliance`（v0.1.0／2026-09-04 首度隨版補上，之後每版持續提供） | 燒成 USB 開機安裝，得到與整碟映像相同的桌面版 |
 
 <a id="desktop"></a>
 
@@ -65,26 +65,26 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 
 每一種 DuDuClaw OS 映像開機都直接進自家桌面，全部用鍵盤就能操作（桌面版多了應用層與出貨硬化，見上表）：
 
-- **自家 compositor 與殼**：`duduclaw-comp`（Wayland compositor）＋`duduclaw-shell`（桌面殼），有首頁、視窗切換、鎖定畫面與控制中心；Cmd+K 在任何 app 上叫出交辦列，把工作直接丟給 AI 員工。快捷鍵總表見平台 repo 的 [OS 快捷鍵](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/features/zh-TW/51-os-keyboard-shortcuts.md)。
+- **自家 compositor 與殼**：`duduclaw-comp`（Wayland compositor）＋`duduclaw-shell`（桌面殼），有首頁、視窗切換、鎖定畫面與控制中心；Cmd+K 在任何 app 上叫出交辦列，把工作直接丟給 AI 員工。快捷鍵總表見文件站的 [OS 快捷鍵](https://os.duduclaw.dudustudio.monster/docs/features/51-os-keyboard-shortcuts/)。
 - **首次設定精靈**：語言、帳號、主題、Wi-Fi 在第一次開機的圖形精靈裡完成；安裝器 ISO 同樣是圖形精靈（選碟、確認、寫入進度、重開）。
 - **輸入與音訊**：fcitx5 注音輸入法、PipeWire／WirePlumber 音訊、XWayland 跑 X11 程式。
-- **人機共用，不影響日常使用**：agent 有自己的輸入 seat；GUI 任務預設在 headless 影子工作區執行（可開子母畫面旁觀），不碰你的視窗、焦點與游標；人輸入永遠優先，compositor 層強制凍結正在你桌面上操作的 agent（QEMU 實測 3–4 ms）；Super+Enter 交還、Super+Esc 急停；共駕能力預設關閉、後果性動作先審批、登入與付款一律交人。完整說明見平台 repo 的 [桌面版](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/features/zh-TW/52-desktop-edition.md)。
+- **人機共用，不影響日常使用**：agent 有自己的輸入 seat；GUI 任務預設在 headless 影子工作區執行（可開子母畫面旁觀），不碰你的視窗、焦點與游標；人輸入永遠優先，compositor 層強制凍結正在你桌面上操作的 agent（QEMU 實測 3–4 ms）；Super+Enter 交還、Super+Esc 急停；共駕能力預設關閉、後果性動作先審批、登入與付款一律交人。完整說明見文件站的 [桌面版](https://os.duduclaw.dudustudio.monster/docs/features/52-desktop-edition/)。
 - **AI 工具鏈內建**（桌面版）：十套廠商 coding CLI 打包在 `/opt/duduclaw/runtimes`，`/usr/bin` 直接有 `claude`、`codex`、`gemini`、`qwen`、`kimi`、`copilot`、`grok`、`agent`、`opencode`、`vibe`；憑證統一寫在 `/data/duduclaw`（0700），系統更新不會清掉。本機推理由 llama.cpp `llama-server` 負責，權重不進映像、由後台下載到 `/data/duduclaw/models`。哪些沒內建、為什麼、怎麼重新產生這包，見 [AI runtimes 指南](docs/guides/ai-runtimes.md)。
-- **應用程式**（桌面版）：映像內建 Flatpak 離線倉庫，Chromium、LibreOffice 在 Launcher 按「安裝」即從本機倉庫裝好，不需網路；其他 app 走 Flathub。app 相容層以 `compat.d` 宣告：Bottles 跑 Windows 桌面程式、KVM 虛擬機＋RDP 跑完整 Windows、Waydroid 跑 Android（不含 GApps，需自行設定）；macOS 程式不做本機執行。範圍與明確不承諾的項目見 [app 相容層指南](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/guides/zh-TW/app-compat.md)。
+- **應用程式**（桌面版）：映像內建 Flatpak 離線倉庫，Chromium、LibreOffice 在 Launcher 按「安裝」即從本機倉庫裝好，不需網路；其他 app 走 Flathub。app 相容層以 `compat.d` 宣告：Bottles 跑 Windows 桌面程式、KVM 虛擬機＋RDP 跑完整 Windows、Waydroid 跑 Android（不含 GApps，需自行設定）；macOS 程式不做本機執行。範圍與明確不承諾的項目見文件站的 [app 相容層指南](https://os.duduclaw.dudustudio.monster/docs/guides/app-compat/)。
 
-v0.1.0 安裝器 ISO 寫進磁碟的基礎版 `duduclaw-image-ab` 有同一個桌面殼與 gateway，只是沒有應用層；管理後台由 gateway 提供，有沒有接螢幕都能從區網瀏覽器操作。沒接螢幕時桌面本身的行為（會不會自動退回純無頭）還沒在真機上定義，屬 bring-up 待辦。
+安裝器 ISO（`installer` 變體）寫進磁碟的基礎版 `duduclaw-image-ab` 有同一個桌面殼與 gateway，只是沒有應用層；管理後台由 gateway 提供，有沒有接螢幕都能從區網瀏覽器操作。沒接螢幕時桌面本身的行為（會不會自動退回純無頭）還沒在真機上定義，屬 bring-up 待辦。
 
 <a id="trust"></a>
 
 ## 信任鏈
 
-layer 已接好整條鏈，但 v0.1.0 發布的映像只啟用了一部分。出貨即有：**A/B 原子更新與回滾**、**唯讀 root**（桌面版）。下列三項是建置期 overlay 選項，**v0.1.0 的發布映像沒有啟用**（拆開發布 wic 查證：兩槽 UKI 與 systemd-boot 皆無簽章、GPT 無 verity 分割、無 TPM 套件）：
+layer 已接好整條鏈，但截至 v0.2.0，發布的映像都只啟用了一部分。出貨即有：**A/B 原子更新與回滾**、**唯讀 root**（桌面版）。下列三項是建置期 overlay 選項，**截至 v0.2.0 的發布映像都沒有啟用**（拆開發布 wic 查證：兩槽 UKI 與 systemd-boot 皆無簽章、GPT 無 verity 分割、無 TPM 套件）：
 
 - **Secure Boot＋dm-verity**（`kas/sb-signing.yml`）：自簽 PK/KEK/db、每槽雙簽 UKI、首次開機自動 enroll；rootfs 逐塊驗證，竄改即讀取失敗。
 - **TPM2 + LUKS**（`kas/tpm-luks.yml`，部分完成）：PCR 7+11 量測開機的金鑰密封與 fail-open 復原路徑已接好；自動 enroll 是待解缺陷，要等真機 TPM 才能完成（QEMU/swtpm 做不到）。
 - **發布產物簽章**（已啟用）：每個檔案附 `.sha256` 與 minisign `.minisig`，公鑰釘在 `scripts/release-os.sh`，上傳前 fail-closed 重驗。漏洞回報方式見 [SECURITY.md](SECURITY.md)。
 
-`scripts/release-os.sh build` 目前只用基本 kas 設定；要出簽章版必須帶 overlay 建置，列為下一版待辦。
+`scripts/release-os.sh build` 目前預設只會疊加 `kas/serial1.yml`（release overlay：`-j1` 序列建置＋SPDX off），不含 `sb-signing.yml`／`tpm-luks.yml`；要出簽章版必須手動疊加這兩個 overlay 建置，列為下一版待辦。
 
 <a id="quickstart"></a>
 
@@ -103,7 +103,7 @@ shasum -a 256 -c <檔案>.sha256
 dd if=<iso> of=/dev/<usb> bs=4M conv=fsync    # 或用 balenaEtcher
 ```
 
-目標機用 UEFI 開機，**Secure Boot 關閉**（v0.1.0 映像未簽章；簽章版才會在首次開機自動 enroll 金鑰）。從 USB 開機進圖形安裝精靈，選目標 SSD 安裝；重開機後就是 A/B UKI + systemd-boot 系統，用同一區網的瀏覽器開後台。
+目標機用 UEFI 開機，**Secure Boot 關閉**（截至 v0.2.0，發布映像仍未簽章；簽章版才會在首次開機自動 enroll 金鑰）。從 USB 開機進圖形安裝精靈，選目標 SSD 安裝；重開機後就是 A/B UKI + systemd-boot 系統，用同一區網的瀏覽器開後台。
 
 **整碟映像（桌面版：桌面＋應用程式＋出貨硬化）**
 
@@ -112,7 +112,7 @@ zstd -d <wic.zst>
 dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 ```
 
-> QEMU 版（`duduclaw-qemux86-64`）兩式都已實際開機驗證。`duduclaw-genericx86-64` 是真機目標，QEMU 開不起來，v0.1.0 只做過設定稽核；真機開機是目前最重要的待驗證項目。
+> QEMU 版（`duduclaw-qemux86-64`）兩式都已實際開機驗證。`duduclaw-genericx86-64` 是真機目標，QEMU 開不起來，截至 v0.2.0 只做過設定稽核；真機開機是目前最重要的待驗證項目。
 
 <a id="build"></a>
 
@@ -151,11 +151,12 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 
 ## 文件
 
+- 官網與文件站：<https://os.duduclaw.dudustudio.monster>（首頁與下載頁；文件站在同網域的 `/docs/`，彙整本 repo 與平台 repo 的公開文件，zh-TW／en／ja 三語系，站內不連 GitHub）。GitHub 上只留 repo、Releases、Issues 與 LICENSE。
 - [`docs/README.md`](docs/README.md)：本 repo 的文件索引（公開文件、元件參考、內部筆記、分級規則）。
 - [`meta-duduclaw/README.md`](meta-duduclaw/README.md)：layer 參考，含 layout、各 image 用途、builder 容器與 `kas build`。
 - [`CHANGELOG.md`](CHANGELOG.md)：版本紀錄，依 Keep a Changelog。
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)、[`SECURITY.md`](SECURITY.md)：貢獻方式與漏洞回報。
-- 使用者視角的功能說明在平台 repo：[DuDuClaw OS appliance](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/features/50-duduclaw-os-appliance.md)、[硬體需求與相容性](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/guides/hardware-requirements.md)、[app 相容層](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/guides/app-compat.md)。
+- 使用者視角的功能說明（原始碼在平台 repo，發佈在文件站）：[DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/features/50-duduclaw-os-appliance/)、[硬體需求與相容性](https://os.duduclaw.dudustudio.monster/docs/guides/hardware-requirements/)、[app 相容層](https://os.duduclaw.dudustudio.monster/docs/guides/app-compat/)。
 
 <a id="license"></a>
 

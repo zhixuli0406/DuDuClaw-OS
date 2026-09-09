@@ -49,16 +49,20 @@ maintained for security fixes.
 
 ## Release Artifact Security
 
-Every release publishes, per machine, a whole-disk image
-(`duduclaw-os-<machine>-v<version>.wic.zst`) and a live installer ISO
-(`duduclaw-os-installer-<machine>-v<version>.iso`), each with:
+Every release publishes, per machine, three artifact forms:
 
-- a `.sha256` sidecar,
-- a `.minisig` signature made with the OS release key, whose public key is
-  pinned in `scripts/release-os.sh` (`OS_RELEASE_PUBKEY`) and re-verified
-  fail-closed before anything is uploaded,
-- a `.manifest.json` recording the OS version, the embedded platform
-  version, the machine, and the image recipe.
+- a whole-disk image (`duduclaw-os-<machine>-v<version>.wic.zst`, the
+  desktop edition),
+- a base-edition installer ISO (`duduclaw-os-installer-<machine>-v<version>.iso`),
+- a desktop-edition installer ISO
+  (`duduclaw-os-installer-desktop-<machine>-v<version>.iso`).
+
+Every one of the three ships with a `.sha256` sidecar and a `.minisig`
+signature made with the OS release key, whose public key is pinned in
+`scripts/release-os.sh` (`OS_RELEASE_PUBKEY`) and re-verified fail-closed
+before anything is uploaded. The whole-disk image additionally ships a
+`.manifest.json` recording the OS version, the embedded platform version,
+the machine, and the image recipe; the two installer ISOs do not carry one.
 
 Verify before flashing:
 
@@ -69,10 +73,10 @@ shasum -a 256 -c <file>.sha256
 
 Artifacts are distributed only via GitHub Releases on this repo. The build
 layer supports Secure Boot signing with self-signed keys, dm-verity root
-verification and TPM2-sealed LUKS as build-time overlays; the v0.1.0
-artifacts were built without them (unsigned UKIs, no verity partition, no
-TPM stack — see the README's Trust chain section). The desktop edition ships
-with a read-only root.
+verification and TPM2-sealed LUKS as build-time overlays; every release
+through v0.2.0 has been built without them (unsigned UKIs, no verity
+partition, no TPM stack — see the README's Trust chain section). The
+desktop edition ships with a read-only root.
 
 ## Disclosure Policy
 

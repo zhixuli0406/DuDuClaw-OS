@@ -1,6 +1,6 @@
 # DuDuClaw OS Documentation
 
-> Public documentation index for DuDuClaw OS (v0.1.0, bring-up). Every
+> Public documentation index for DuDuClaw OS (v0.2.0, bring-up). Every
 > document in this repo is filed by the same TYPE × CONFIDENTIALITY rule as
 > the DuDuClaw platform repo — see [`../CLAUDE.md`](../CLAUDE.md) →
 > "Documentation Classification & Placement".
@@ -11,7 +11,8 @@
 
 | Document | Description |
 |----------|-------------|
-| [../README.md](../README.md) · [../README.en.md](../README.en.md) | What DuDuClaw OS is, the two release artifact forms, verify / flash quick start, build pipeline |
+| <https://os.duduclaw.dudustudio.monster> | The live website and docs site (home + download pages, and this whole doc tree plus the platform repo's public docs at `/docs/`, zh-TW / en / ja) |
+| [../README.md](../README.md) · [../README.en.md](../README.en.md) | What DuDuClaw OS is, the three release artifact forms per machine, verify / flash quick start, build pipeline |
 | [../CHANGELOG.md](../CHANGELOG.md) | Release history (Keep a Changelog 1.1.0; the OS version line is independent of the platform) |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Where changes go, definition of done, docs-in-the-same-commit rule |
 | [../SECURITY.md](../SECURITY.md) | Vulnerability reporting, scope, release-artifact verification |
@@ -23,6 +24,9 @@
 | [../meta-duduclaw/README.md](../meta-duduclaw/README.md) | The Yocto layer: target release, layout, image recipes and their roles, builder container, `kas build`, QEMU boot, machine-aliasing gotchas | Current |
 | [../appliance/README.md](../appliance/README.md) | The earlier Debian/mkosi appliance line: layout, boot sequence, A/B wiring, Flatpak layer, open points | **Frozen** (reference only) |
 | [../appliance/tests/README.md](../appliance/tests/README.md) | VM acceptance-test helper library (QMP screendump, serial expect-login, OCR screen assertions) | Frozen with the line |
+| [../website/README.md](../website/README.md) | The zero-build marketing site (home + download pages): screenshot pipeline, interactive modules, what to update on a new release, Cloud Run deploy and custom-domain notes | Current |
+| [../docs-site/README.md](../docs-site/README.md) | The documentation site (Astro + Starlight) that publishes this tree and the platform repo's public docs at `/docs/`: how to run it, the public whitelist, the three-locale layout, and the sync script | Current |
+| `../deploy/cloudrun/` + `../scripts/deploy-cloudrun.sh` | Cloud Run container for the public site (nginx, CSP/cache headers, extra MIME types) and the build-and-deploy script; one-time domain mapping notes live in `../website/README.md` | Current |
 
 Recipe-level behaviour is documented in each `.bb` / `.bbclass` header
 comment; those comments are the reference for that recipe and are not
@@ -45,15 +49,15 @@ The remaining subdirectories are created when their first document lands:
 | `spec/` | open formats: release manifest schema, update payload layout |
 | `adr/` · `rfc/` · `todo/` | decisions, proposals, public tracking |
 
-User-facing OS docs currently published from the platform repo:
+User-facing OS docs, authored in the platform repo and published on the docs site (not linked via GitHub):
 
 | Document | Description |
 |----------|-------------|
-| [DuDuClaw OS appliance](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/features/50-duduclaw-os-appliance.md) | What the finished box does, from the user's side |
-| [OS keyboard shortcuts](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/features/51-os-keyboard-shortcuts.md) | Global compositor bindings, shell UI, first-run setup, lock screen |
-| [Hardware requirements & compatibility](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/guides/hardware-requirements.md) | x86-64-v3 / UEFI / SSD hard requirements, recommended mini-PCs, driver gaps |
-| [App compatibility layer](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/guides/app-compat.md) | `compat.d` runners, Bottles, Waydroid, what is and is not promised |
-| [Building the mkosi appliance image](https://github.com/zhixuli0406/DuDuClaw/blob/main/docs/guides/appliance-build.md) | Describes the `appliance/` line, which is now frozen here |
+| [DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/features/50-duduclaw-os-appliance/) | What the finished box does, from the user's side |
+| [OS keyboard shortcuts](https://os.duduclaw.dudustudio.monster/docs/features/51-os-keyboard-shortcuts/) | Global compositor bindings, shell UI, first-run setup, lock screen |
+| [Hardware requirements & compatibility](https://os.duduclaw.dudustudio.monster/docs/guides/hardware-requirements/) | x86-64-v3 / UEFI / SSD hard requirements, recommended mini-PCs, driver gaps |
+| [App compatibility layer](https://os.duduclaw.dudustudio.monster/docs/guides/app-compat/) | `compat.d` runners, Bottles, Waydroid, what is and is not promised |
+| [Building the mkosi appliance image](https://os.duduclaw.dudustudio.monster/docs/guides/appliance-build/) | Describes the `appliance/` line, which is now frozen here |
 
 ## Internal notes (L2, `wiki/`)
 

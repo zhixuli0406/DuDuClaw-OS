@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>3D 摺紙貓 · 驗收頁 — DuDuClaw OS</title>
+<link rel="icon" href="../assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens copied from assets/css/site.css so this page stays standalone. */
+:root {
+  color-scheme: light;
+  --ground: #f3f3f3; --surface: #ffffff; --surface-2: #fafafa;
+  --border: #e4e4e7; --border-strong: #d4d4d8;
+  --text: #09090b; --muted: #71717b; --subtle: #9f9fa9;
+  --accent: #2171cc; --accent-soft: rgba(33,113,204,.09); --accent-line: rgba(33,113,204,.28);
+  --crimson: #e5484d;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.05);
+  --r-card: 12px; --r-btn: 10px; --r-pill: 999px;
+  --font-sans: "Inter","Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --font-mono: "JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  --dur: 180ms; --ease: cubic-bezier(.22,.61,.36,1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0c0c0e; --surface: #1e1e21; --surface-2: #17171a;
+    --border: #27272a; --border-strong: #3a3a3e;
+    --text: #fafafa; --muted: #9f9fa9; --subtle: #71717b;
+    --accent: #4390ee; --accent-soft: rgba(67,144,238,.14); --accent-line: rgba(67,144,238,.36);
+    --shadow-card: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0c0c0e; --surface: #1e1e21; --surface-2: #17171a;
+  --border: #27272a; --border-strong: #3a3a3e;
+  --text: #fafafa; --muted: #9f9fa9; --subtle: #71717b;
+  --accent: #4390ee; --accent-soft: rgba(67,144,238,.14); --accent-line: rgba(67,144,238,.36);
+  --shadow-card: 0 1px 2px rgba(0,0,0,.4);
+}
+
+* , *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--ground); color: var(--text);
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 72px; }
+header { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; }
+h1 { font-size: 1.5rem; line-height: 1.3; margin: 0 0 4px; letter-spacing: -.01em; }
+.sub { color: var(--muted); font-size: .9rem; margin: 0; }
+.actions { display: flex; gap: 8px; }
+button {
+  font: inherit; font-size: .875rem; font-weight: 500; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--r-btn); padding: 9px 16px; min-height: 44px; cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+button:hover { background: var(--surface-2); border-color: var(--accent-line); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 32px; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-card); box-shadow: var(--shadow-card); overflow: hidden;
+}
+.card h2 { font-size: .8125rem; font-weight: 600; margin: 0; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); letter-spacing: .01em; }
+.card h2 span { color: var(--muted); font-weight: 400; }
+.stage {
+  /* Both stages are the same box, so the two cats are the same size. */
+  position: relative; height: 460px; display: grid; place-items: center;
+  background:
+    linear-gradient(var(--surface-2), var(--surface-2)) padding-box,
+    repeating-conic-gradient(var(--surface-2) 0% 25%, var(--surface) 0% 50%) 0 0/16px 16px;
+}
+.stage > .cat { width: 190px; height: 420px; }
+.cat { position: relative; }
+/* The SVG is sized by JS from cat-panels.json meta + api.pxPerUnit so all three
+   cats land at exactly the same scale and the overlay registers pixel-for-pixel. */
+.cat > img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 190px; height: auto; max-width: none; }
+
+.note { margin-top: 28px; background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: var(--r-card); padding: 18px 22px; }
+.note h3 { margin: 0 0 10px; font-size: .9375rem; }
+.note ol { margin: 0; padding-left: 20px; }
+.note li { margin: 4px 0; font-size: .9375rem; }
+.note code { font-family: var(--font-mono); font-size: .85em; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+
+#status { margin-top: 20px; font-family: var(--font-mono); font-size: .8125rem;
+  color: var(--muted); white-space: pre-wrap; }
+.pill { display: inline-block; border-radius: var(--r-pill); padding: 2px 10px;
+  font-size: .75rem; font-weight: 500; border: 1px solid var(--border-strong); }
+.pill.ok { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.pill.fallback { color: var(--crimson); border-color: color-mix(in srgb, var(--crimson) 40%, transparent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>3D 摺紙貓 · 驗收頁</h1>
+    <p class="sub">獨立模組驗收用。左為原始 SVG，中為 OGL 3D 版，右為兩者疊圖（3D 疊在 SVG 上、50% 不透明）。</p>
+  </div>
+  <div class="actions">
+    <button id="replay" type="button">重播展開</button>
+    <button id="theme" type="button">切換主題</button>
+  </div>
+</header>
+
+<div class="grid">
+  <section class="card">
+    <h2>① 原始 SVG <span>— duduclaw-cat.svg</span></h2>
+    <div class="stage">
+      <div class="cat">
+        <img src="../assets/brand/duduclaw-cat.svg" alt="DuDuClaw 摺紙貓（原始 SVG）">
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>② 3D 低面數版 <span>— cat3d.mjs + OGL</span></h2>
+    <div class="stage">
+      <div class="cat" id="cat3d">
+        <!-- 這份 inline SVG 就是降級狀態：無 JS／無 WebGL／reduced-motion 時它留在畫面上 -->
+        <img src="../assets/brand/duduclaw-cat.svg" alt="DuDuClaw 摺紙貓" id="cat3d-svg">
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>③ 疊圖比對 <span>— 輪廓是否吻合</span></h2>
+    <div class="stage overlay">
+      <div class="cat" id="cat3d-overlay">
+        <img src="../assets/brand/duduclaw-cat.svg" alt="疊圖比對：SVG 底圖" style="opacity:1">
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="note">
+  <h3>要看什麼</h3>
+  <ol>
+    <li><strong>輪廓</strong>：第 ③ 格的 3D 貓（半透明疊在 SVG 上）不該有任何一塊超出 SVG 外緣，也不該在腳、尾巴、耳朵處露出底圖沒被蓋到的紅邊。</li>
+    <li><strong>展開</strong>：按「重播展開」，七片面板依序從 40–70° 的折角轉回平面，總長約 820ms，ease-out，<strong>只播一次不循環</strong>；轉動中面板受光會變亮／變暗，讀起來像紙在翻。</li>
+    <li><strong>顏色</strong>：靜止時應該和左邊的 SVG 幾乎一樣——緋紅不能被燈光洗白，也不能整體變暗。</li>
+    <li><strong>游標微傾</strong>：滑鼠在頁面上移動，貓整體傾斜上限 ±4°，放開後平順回正（臨界阻尼，不彈跳）。只在 <code>(hover:hover) and (pointer:fine)</code> 生效。</li>
+    <li><strong>閒置不燒 CPU</strong>：傾斜停下後 rAF 應完全停止；捲出畫面或切到別的分頁也會停。</li>
+    <li><strong>降級</strong>：<code>?nowebgl=1</code> 或系統開啟「減少動態效果」時，<code>mountCat3D</code> 回傳 <code>false</code>，畫面留在 SVG，狀態列會顯示 fallback。</li>
+  </ol>
+</div>
+
+<div id="status">載入中…</div>
+
+</div>
+
+<script type="module">
+import { mountCat3D } from '../assets/js/cat3d/cat3d.mjs';
+
+const statusEl = document.getElementById('status');
+const lines = [];
+const log = (s) => { lines.push(s); statusEl.textContent = lines.join('\n'); };
+
+// theme toggle — mirrors the site's data-theme convention
+const root = document.documentElement;
+document.getElementById('theme').addEventListener('click', () => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = root.getAttribute('data-theme') || (dark ? 'dark' : 'light');
+  root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+});
+
+const mounts = [
+  { el: document.getElementById('cat3d'), svg: document.getElementById('cat3d-svg'), hide: true },
+  { el: document.getElementById('cat3d-overlay'), svg: null, hide: false },
+];
+
+const live = [];
+let pending = mounts.length;
+
+for (const m of mounts) {
+  const api = mountCat3D(m.el, {});
+  if (!api) {
+    pending--;
+    log(`${m.el.id}: mountCat3D() → false（降級，SVG 留在畫面上）`);
+    continue;
+  }
+  live.push(api);
+  api.ready.then((ok) => {
+    pending--;
+    log(`${m.el.id}: mountCat3D() → ready ${ok}`);
+    // The caller — not the module — decides when to hide the SVG.
+    if (ok && m.hide) m.svg.style.visibility = 'hidden';
+    if (ok && !m.hide) api.canvas.style.opacity = '0.5';   // overlay panel
+    if (ok) alignSvgs(api.pxPerUnit);
+    if (pending === 0) summarise();
+  });
+}
+if (pending === 0) summarise();
+
+/* Size every <img> so its silhouette matches the canvas exactly: same px-per-unit,
+   then nudge by the offset between the viewBox centre and the silhouette centre
+   (the canvas centres the silhouette, `contain` would centre the viewBox). */
+let meta = null;
+async function alignSvgs(k) {
+  if (!k) return;
+  meta = meta || await (await fetch('../assets/data/cat-panels.json')).json().then((d) => d.meta);
+  const [, , vbW, vbH] = meta.viewBox;
+  const dx = (meta.centre_svg[0] - vbW / 2) * k;
+  const dy = (meta.centre_svg[1] - vbH / 2) * k;
+  for (const img of document.querySelectorAll('.cat > img')) {
+    img.style.width = (vbW * k).toFixed(2) + 'px';
+    img.style.height = (vbH * k).toFixed(2) + 'px';
+    img.style.transform = `translate(calc(-50% - ${dx.toFixed(2)}px), calc(-50% - ${dy.toFixed(2)}px))`;
+  }
+}
+
+document.getElementById('replay').addEventListener('click', () => {
+  live.forEach((a) => a.play());
+});
+
+async function summarise() {
+  const state = [];
+  state.push(`WebGL           : ${probe()}`);
+  state.push(`reduced-motion  : ${matchMedia('(prefers-reduced-motion: reduce)').matches}`);
+  state.push(`hover+fine      : ${matchMedia('(hover: hover) and (pointer: fine)').matches}`);
+  state.push(`devicePixelRatio: ${window.devicePixelRatio} (capped at 2)`);
+  try {
+    const r = await fetch('../assets/data/cat-panels.json');
+    const d = await r.json();
+    state.push(`panels          : ${d.meta.panels}`);
+    state.push(`triangles       : ${d.meta.triangles}`);
+    state.push(`silhouette pts  : ${d.meta.silhouette_points.flattened} → ${d.meta.silhouette_points.simplified}`);
+    state.push(`json            : ${(JSON.stringify(d).length / 1024).toFixed(1)} KB`);
+  } catch (e) { state.push(`geometry        : FAILED ${e.message}`); }
+  log('');
+  log(state.join('\n'));
+  const ok = live.length === mounts.length;
+  statusEl.insertAdjacentHTML('beforeend',
+    `\n\n<span class="pill ${ok ? 'ok' : 'fallback'}">${ok ? '3D 已掛載' : '降級為 SVG'}</span>`);
+}
+
+function probe() {
+  try {
+    const c = document.createElement('canvas');
+    const o = { failIfMajorPerformanceCaveat: true };
+    if (c.getContext('webgl2', o)) return 'webgl2';
+    if (c.getContext('webgl', o)) return 'webgl1';
+    return 'none';
+  } catch { return 'none'; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,2340 @@
+/* DuDuClaw OS website
+   Design tokens mirror the OS shell surface language.
+   Light palette on :root, dark palette declared twice so the manual
+   toggle wins in both directions. */
+
+/* ---------- tokens ---------- */
+
+:root {
+  color-scheme: light;
+
+  --ground: #f3f3f3;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #f4f4f5;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #09090b;
+  --muted: #71717b;
+  --subtle: #9f9fa9;
+
+  --accent: #2171cc;
+  --accent-hover: #1a5ba6;
+  --accent-soft: rgba(33, 113, 204, 0.09);
+  --accent-line: rgba(33, 113, 204, 0.28);
+  /* The lighter end of the blue ramp: scroll progress, glow rings, the
+     charging connector. Never crimson — that stays on the cat, the logo
+     and the H1 highlight. */
+  --accent-bright: #4f9cf0;
+  --accent-glow: rgba(33, 113, 204, 0.30);
+
+  /* The one crimson this stylesheet may use. Crimson is reserved for the
+     mascot, the logo and the H1 highlight; the mascot and logo carry their own
+     gradient stops inline, which leaves the H1 highlight as the only crimson
+     TEXT on the site. It needs a per-theme value: on the light hero the
+     background is mid-tone, where the #e5484d of the brand set falls under the
+     3:1 large-text floor. Both values below are stops the mascot's own
+     gradients already use, so this is the same crimson family. There is
+     deliberately no general-purpose --crimson token to reach for. */
+  --hero-hl: #d63d42;
+
+  --success: #1c882d;
+  --success-soft: rgba(28, 136, 45, 0.10);
+  --warning: #8a6600;
+  --warning-soft: rgba(220, 164, 0, 0.14);
+  --danger: #e0335a;
+
+  --hero-ground: #eef1f6;
+  --hero-circle-a: #c2d9f5;
+  --hero-circle-b: #cfe0f7;
+  /* Third, brighter highlight blob. Read by hero-shader.js as uH and by the
+     no-WebGL .c3 circle, so both routes share one value. */
+  --hero-glow: #dbeaff;
+  /* Body copy that sits directly on the hero background. --muted (#71717b)
+     only reaches 4.26:1 against --hero-ground and 4.02:1 against
+     --hero-glow; this darker grey clears 4.5:1 at the brightest point the
+     shader can paint. Measured in the report. */
+  --hero-muted: #5a5a63;
+
+  --nav-bg: rgba(255, 255, 255, 0.74);
+  --code-bg: #f4f4f5;
+  --code-text: #18181b;
+
+  --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.12);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-lift: 0 22px 52px rgba(0, 0, 0, 0.16);
+
+  /* Fully transparent twin of --surface. Fading to `transparent` renders as
+     a grey haze in some engines, so scroll hints fade to this instead. */
+  --surface-fade: rgba(255, 255, 255, 0);
+
+  /* The QR plate never inverts: a light plate with dark ink is the only
+     polarity every scanner reads, so the card follows the theme while the
+     symbol itself keeps its contrast direction. */
+  --qr-plate: #ffffff;
+  --qr-ink: var(--text);
+
+  --r-card: 12px;
+  --r-btn: 10px;
+  --r-pill: 999px;
+
+  --maxw: 1120px;
+  --gutter: 24px;
+
+  --font-sans: "Inter", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --dur: 180ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --ground: #0c0c0e;
+    --surface: #1e1e21;
+    --surface-2: #17171a;
+    --surface-3: #232326;
+    --border: #27272a;
+    --border-strong: #3a3a3e;
+    --text: #fafafa;
+    --muted: #9f9fa9;
+    --subtle: #71717b;
+
+    --accent: #4390ee;
+    --accent-hover: #59a6ff;
+    --accent-soft: rgba(67, 144, 238, 0.14);
+    --accent-line: rgba(67, 144, 238, 0.36);
+    --accent-bright: #7ec0ff;
+    --accent-glow: rgba(67, 144, 238, 0.42);
+
+    --hero-hl: #ff7a7e;
+
+    --success: #4cc463;
+    --success-soft: rgba(76, 196, 99, 0.14);
+    --warning: #e0b13a;
+    --warning-soft: rgba(220, 164, 0, 0.16);
+    --danger: #ff6b8b;
+
+    --hero-ground: #0c0c0e;
+    --hero-circle-a: #1a2540;
+    --hero-circle-b: #141b33;
+    --hero-glow: #1c3a66;
+    --hero-muted: #c4c4cc;
+
+    --nav-bg: rgba(18, 18, 21, 0.74);
+    --code-bg: #17171a;
+    --code-text: #e4e4e7;
+
+    --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.5);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-lift: 0 22px 52px rgba(0, 0, 0, 0.6);
+
+    --surface-fade: rgba(30, 30, 33, 0);
+
+    --qr-plate: #e9e9ec;
+    --qr-ink: #0c0c0e;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ground: #0c0c0e;
+  --surface: #1e1e21;
+  --surface-2: #17171a;
+  --surface-3: #232326;
+  --border: #27272a;
+  --border-strong: #3a3a3e;
+  --text: #fafafa;
+  --muted: #9f9fa9;
+  --subtle: #71717b;
+
+  --accent: #4390ee;
+  --accent-hover: #59a6ff;
+  --accent-soft: rgba(67, 144, 238, 0.14);
+  --accent-line: rgba(67, 144, 238, 0.36);
+  --accent-bright: #7ec0ff;
+  --accent-glow: rgba(67, 144, 238, 0.42);
+
+  --hero-hl: #ff7a7e;
+
+  --success: #4cc463;
+  --success-soft: rgba(76, 196, 99, 0.14);
+  --warning: #e0b13a;
+  --warning-soft: rgba(220, 164, 0, 0.16);
+  --danger: #ff6b8b;
+
+  --hero-ground: #0c0c0e;
+  --hero-circle-a: #1a2540;
+  --hero-circle-b: #141b33;
+  --hero-glow: #1c3a66;
+  --hero-muted: #c4c4cc;
+
+  --nav-bg: rgba(18, 18, 21, 0.74);
+  --code-bg: #17171a;
+  --code-text: #e4e4e7;
+
+  --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lift: 0 22px 52px rgba(0, 0, 0, 0.6);
+
+  --surface-fade: rgba(30, 30, 33, 0);
+
+  --qr-plate: #e9e9ec;
+  --qr-ink: #0c0c0e;
+}
+
+/* ---------- base ---------- */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  scroll-padding-top: 80px;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  /* clip, not hidden: `hidden` would turn body into a scroll container
+     and break the sticky nav. */
+  overflow-x: clip;
+}
+
+img, svg { max-width: 100%; }
+img { height: auto; display: block; }
+
+h1, h2, h3, h4 {
+  margin: 0;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+p { margin: 0; }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+code, kbd, pre { font-family: var(--font-mono); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 16px; top: -60px;
+  z-index: 200;
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: var(--r-btn);
+  font-weight: 600;
+  transition: top var(--dur) var(--ease);
+}
+.skip-link:focus { top: 16px; color: #fff; text-decoration: none; }
+
+.wrap {
+  width: 100%;
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* ---------- icons ---------- */
+
+.icon {
+  width: 20px; height: 20px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon-lg { width: 24px; height: 24px; }
+.icon-sm { width: 16px; height: 16px; }
+
+/* ---------- nav ---------- */
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--nav-bg);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 60px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  font-size: 16px;
+}
+.brand:hover { text-decoration: none; color: var(--text); }
+.brand img { width: 28px; height: 28px; border-radius: var(--r-pill); }
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.nav-links a {
+  color: var(--muted);
+  font-size: 14.5px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: var(--r-btn);
+}
+.nav-links a:hover {
+  color: var(--text);
+  background: var(--surface-3);
+  text-decoration: none;
+}
+.nav-links a[aria-current="page"] { color: var(--text); }
+
+.nav-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px; height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--r-btn);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.icon-btn:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
+
+.nav-toggle { display: none; }
+
+.theme-toggle .icon-moon { display: none; }
+:root[data-theme="dark"] .theme-toggle .icon-moon { display: block; }
+:root[data-theme="dark"] .theme-toggle .icon-sun { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-toggle .icon-moon { display: block; }
+  :root:not([data-theme="light"]) .theme-toggle .icon-sun { display: none; }
+}
+
+.nav-panel { display: none; }
+
+@media (max-width: 860px) {
+  .nav-links { display: none; }
+  .nav-toggle { display: inline-flex; }
+  .nav-tools { margin-left: auto; }
+
+  /* Closed state must collapse to zero height: padding and border are
+     applied by the open state only, otherwise max-height:0 still leaves
+     a visible strip under the nav. */
+  .nav-panel {
+    display: block;
+    border-top: 0 solid var(--border);
+    padding: 0 var(--gutter);
+    max-height: 0;
+    overflow: hidden;
+    visibility: hidden;
+    transition: max-height var(--dur) var(--ease), padding var(--dur) var(--ease);
+  }
+  .nav-panel[data-open="true"] {
+    max-height: 360px;
+    visibility: visible;
+    border-top-width: 1px;
+    padding-block: 8px 16px;
+  }
+  .nav-panel a {
+    display: block;
+    padding: 11px 8px;
+    color: var(--text);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-panel a:last-child { border-bottom: 0; }
+}
+
+/* ---------- release band ---------- */
+
+.release-band {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.release-band .wrap {
+  display: flex;
+  justify-content: center;
+  padding-block: 8px;
+}
+.release-band a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.release-band a:hover { color: var(--text); text-decoration: none; }
+.release-band .dot {
+  width: 7px; height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  flex: none;
+}
+.release-band strong { color: var(--text); font-weight: 600; }
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: var(--r-btn);
+  border: 1px solid transparent;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.btn:hover { text-decoration: none; }
+
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); color: #fff; }
+
+.btn-ghost {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.btn-ghost:hover { background: var(--surface-3); color: var(--text); }
+
+.btn-sm { padding: 8px 14px; font-size: 14px; }
+.btn-block { width: 100%; }
+
+/* ---------- sections ---------- */
+
+.section { padding-block: 88px; }
+.section-tight { padding-block: 56px; }
+.section-alt { background: var(--surface-2); border-block: 1px solid var(--border); }
+
+.eyebrow {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.section-head { max-width: 720px; margin-bottom: 40px; }
+.section-head h2 { font-size: clamp(26px, 3.4vw, 36px); }
+.section-head p { margin-top: 14px; color: var(--muted); font-size: 17px; }
+
+/* ---------- hero ---------- */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--hero-ground);
+  border-bottom: 1px solid var(--border);
+  padding-block: 72px 0;
+}
+.hero-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.hero-bg span {
+  position: absolute;
+  display: block;
+  border-radius: var(--r-pill);
+}
+/* Radii are +40% on the pre-W5 values, matching the shader's blob radii, so
+   the CSS fallback and the WebGL route read as the same picture. */
+.hero-bg .c1 {
+  width: 1540px; height: 1540px;
+  right: -320px; top: -520px;
+  background: radial-gradient(circle at 50% 50%,
+    var(--hero-circle-a) 0%, var(--hero-circle-a) 44%, transparent 66%);
+}
+.hero-bg .c2 {
+  width: 1260px; height: 1260px;
+  left: -460px; top: 40px;
+  background: radial-gradient(circle at 50% 50%,
+    var(--hero-circle-b) 0%, var(--hero-circle-b) 44%, transparent 66%);
+}
+/* The third, brighter highlight. Only the no-WebGL route ever shows it; the
+   shader paints its own from the same --hero-glow token. */
+.hero-bg .c3 {
+  width: 720px; height: 720px;
+  left: 46%; top: -120px;
+  background: radial-gradient(circle at 50% 50%,
+    var(--hero-glow) 0%, var(--hero-glow) 22%, transparent 62%);
+  opacity: 0.85;
+}
+
+/* The shader canvas is inserted by assets/js/hero-shader.js and only ever
+   sits on top of the two circles above. It starts transparent, so a canvas
+   that mounts but never paints still shows the circles. */
+.hero-gl {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hero-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 40px;
+  align-items: center;
+}
+
+.hero h1 {
+  font-size: clamp(34px, 5.4vw, 56px);
+  letter-spacing: -0.03em;
+}
+.hero h1 .hl { color: var(--hero-hl); }
+/* Everything that sits straight on the hero background uses --hero-muted,
+   not --muted: the shader can brighten the ground under it. */
+.hero .eyebrow { color: var(--hero-muted); }
+.hero-sub {
+  margin-top: 20px;
+  font-size: 17.5px;
+  color: var(--hero-muted);
+  max-width: 34em;
+}
+.hero-sub + .hero-sub { margin-top: 12px; }
+
+/* Scoped claim pill. Same blue-dot look as the release band; allowed
+   to wrap onto a second line on narrow screens. */
+/* No flex-wrap on purpose: the label wraps inside its own span, so the
+   dot stays beside the first line instead of breaking onto its own. */
+.hero-claim {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 22px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.hero-claim:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+.hero-claim .dot {
+  width: 7px; height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  flex: none;
+}
+
+.hero-cta {
+  margin-top: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.hero-meta {
+  margin-top: 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--hero-muted);
+  letter-spacing: 0.02em;
+}
+
+/* The mascot is inlined as SVG so its folded panels are individually
+   animatable. Three nested boxes keep the transforms from fighting: the
+   outer one owns the perspective, the middle one the idle float, the SVG
+   itself the pointer tilt. */
+.hero-cat {
+  position: relative;
+  justify-self: center;
+  width: min(220px, 60%);
+  perspective: 700px;
+  /* Stage geometry for the four-legged cat, read by .hero-cat-stage below.
+     A walking cat is longer than it is tall, so it needs more width than the
+     silhouette and only the bottom band of the box, where the silhouette's
+     feet already stand. */
+  --cat-stage-l: -60%;
+  --cat-stage-r: -60%;
+  --cat-stage-h: 62%;
+}
+.hero-cat-float { width: 100%; position: relative; }
+.hero-cat-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 18px 40px rgba(198, 53, 58, 0.24));
+}
+
+/* The 3D mascot mounted, so the SVG steps back. It keeps its box (the canvas
+   is absolutely positioned inside it and would otherwise have no height) and
+   its accessible name, and hands the unfold and the tilt over to the module. */
+.hero-cat[data-cat3d="on"] .hero-cat-svg {
+  opacity: 0;
+  filter: none;
+}
+
+/* With the 3D mascot up the whole box is a replay control (wired in the
+   inline module at the foot of index.html). No affordance without it: the
+   plain SVG has nothing to replay. */
+.hero-cat[data-cat3d="on"] .hero-cat-float { cursor: pointer; }
+.hero-cat[data-cat3d="on"] .hero-cat-float:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 8px;
+  border-radius: var(--r-card);
+}
+
+/* The walking cat's stage. Both canvases are aria-hidden and untouchable:
+   the pointer talks to the hero section, never to the picture. */
+.hero-cat-stage {
+  position: absolute;
+  left: var(--cat-stage-l);
+  right: var(--cat-stage-r);
+  bottom: 0;
+  height: var(--cat-stage-h);
+  pointer-events: none;
+}
+.hero-cat-stage canvas { pointer-events: none; }
+
+/* Cross-fade. Whichever module is not animating holds its last frame, so the
+   fade runs over two still pictures and only one rAF loop is ever live. */
+.hero-cat-3d { transition: opacity 300ms var(--ease); }
+.hero-cat[data-catwalk="on"] .hero-cat-3d { opacity: 0; }
+
+/* Touch and narrow viewports get a control instead of hover: one tap drops a
+   paper mouse on the floor line. Transparent, but never smaller than 44px. */
+.hero-cat-tap {
+  position: absolute;
+  inset: 0;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.hero-cat-tap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 8px;
+  border-radius: var(--r-card);
+}
+
+.hero-shot {
+  position: relative;
+  margin-top: 56px;
+  padding-bottom: 72px;
+}
+
+/* ---------- screenshot frame ---------- */
+
+.frame {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+.frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding-inline: 12px;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--border);
+}
+.frame-bar i {
+  width: 9px; height: 9px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  display: block;
+}
+.frame img { width: 100%; }
+
+.shot-dark { display: none; }
+:root[data-theme="dark"] .shot-dark { display: block; }
+:root[data-theme="dark"] .shot-light { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shot-dark { display: block; }
+  :root:not([data-theme="light"]) .shot-light { display: none; }
+}
+
+/* ---------- notice card ---------- */
+
+.notice {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  padding: 28px;
+  box-shadow: var(--shadow-card);
+}
+.notice h2 { font-size: 22px; }
+.notice ul { margin: 16px 0 0; padding-left: 20px; color: var(--muted); }
+.notice li { margin-block: 8px; }
+.notice li strong { color: var(--text); font-weight: 600; }
+
+/* ---------- claim card ---------- */
+
+/* Same frame as the honest status card, blue edge instead of amber:
+   this one states what we claim, not what is still unfinished. */
+.claim {
+  margin-bottom: 32px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  padding: 26px 28px;
+  box-shadow: var(--shadow-card);
+}
+.claim-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  margin-bottom: 14px;
+}
+.claim-title .icon { color: var(--accent); }
+.claim p { color: var(--muted); font-size: 15.5px; }
+.claim p + p { margin-top: 12px; }
+.claim p strong { color: var(--text); font-weight: 600; }
+.claim-sources {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13.5px;
+  line-height: 1.9;
+}
+.claim-sources a { color: var(--accent); }
+
+@media (max-width: 560px) {
+  .claim { padding: 22px 20px; }
+  .claim-title { align-items: flex-start; font-size: 17px; }
+  .claim-title .icon { margin-top: 2px; }
+}
+
+/* ---------- layer stack ---------- */
+
+/* One framed block, four hairline-separated rows. Each row is
+   identity / what DuDuClaw OS does / the plain-Linux contrast. */
+.stack {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* Vertical trace tying the four layers together as one machine.
+   Left offset matches the icon centre: 28px row padding + 40px / 2. */
+/* 3px, and the bright cap at the very bottom of the gradient stays on the
+   leading edge while the element is scaled up from scaleY(0) — that is the
+   travelling light point, at zero extra elements. */
+.stack::before {
+  content: "";
+  position: absolute;
+  left: 46px;
+  top: 46px;
+  bottom: 46px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(to bottom,
+    var(--accent-line) 0%, var(--accent-line) 93%,
+    var(--accent-bright) 96%, var(--accent-bright) 100%);
+}
+
+.stack-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 28px;
+  padding: 28px;
+}
+.stack-row + .stack-row { border-top: 1px solid var(--border); }
+
+/* Badge left, text right — the connector trace (left:47px) only ever
+   passes behind the badge column, never through the h3/role text. */
+.stack-id {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 14px;
+  align-items: start;
+  align-content: start; /* keep h3 + role together at the top of the row */
+}
+/* Solid fill so the trace passes behind the badge, not through it. */
+.stack-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: var(--r-btn);
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--accent);
+}
+.stack-id h3 { grid-column: 2; font-size: 17px; }
+.stack-id h3 code { font-size: 14.5px; font-weight: 500; color: var(--muted); }
+.stack-role { grid-column: 2; margin-top: 6px; color: var(--muted); font-size: 14.5px; }
+
+.stack-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.stack-do ul { margin: 0; padding-left: 19px; font-size: 15px; }
+.stack-do li { margin-block: 9px; }
+.stack-do li:first-child { margin-top: 0; }
+.stack-do li:last-child { margin-bottom: 0; }
+.stack-do code { font-size: 13.5px; }
+
+.stack-vs-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14.5px;
+}
+.stack-vs-line .icon { margin-top: 3px; }
+.stack-vs-line code { font-size: 13.5px; }
+
+.stack-foot {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 14.5px;
+}
+
+/* ---------- shadow workspace diagram ---------- */
+
+/* Two framed screens with the compositor divider between them.
+   Everything is CSS boxes plus two inline SVG cursors: no screenshots
+   and no product copy, so it reads as a schematic. All sizes are
+   percentages or clamps, which keeps it inside the frame at any width. */
+.shadow-fig { margin: 0; }
+
+.shadow-diagram {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 188px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.shadow-screen {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* Frozen: the amber ring is an inset outline, so nothing reflows when the
+   agent's seat is held. Driven by assets/js/freeze-demo.js. */
+.shadow-screen[data-frozen="true"] {
+  outline: 3px solid var(--warning);
+  outline-offset: -3px;
+}
+.shadow-screen[data-freeze-toggle] { cursor: pointer; }
+.shadow-screen[data-freeze-toggle]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.shadow-screen-title {
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+.shadow-screen-title code { font-size: 12px; font-weight: 500; color: var(--muted); }
+
+/* The stage is the desktop surface the wireframes sit on. */
+.shadow-stage {
+  position: relative;
+  margin: 14px;
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+
+/* left stage: one big window plus the picture-in-picture preview */
+.shadow-window {
+  position: absolute;
+  left: 6%; top: 6%;
+  width: 84%; height: 52%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.shadow-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.shadow-tab {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: clamp(9px, 1.4vw, 11px);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.shadow-window-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(5px, 1.2vw, 9px);
+  padding: clamp(8px, 2vw, 16px);
+}
+.shadow-bar {
+  height: clamp(5px, 1.1vw, 8px);
+  border-radius: 4px;
+  background: var(--border);
+}
+.shadow-window-body .shadow-bar:nth-child(1) { width: 82%; }
+.shadow-window-body .shadow-bar:nth-child(2) { width: 54%; }
+.shadow-window-body .shadow-bar:nth-child(3) { width: 68%; }
+
+.shadow-pip-row {
+  position: absolute;
+  left: 6%; right: 6%; bottom: 6%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.shadow-pip-label {
+  max-width: 55%;
+  color: var(--muted);
+  font-size: clamp(9.5px, 1.4vw, 11.5px);
+  line-height: 1.4;
+  text-align: right;
+}
+.shadow-pip {
+  flex: none;
+  width: 25%;
+  aspect-ratio: 16 / 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.shadow-pip .shadow-bar { height: 4px; }
+.shadow-pip .shadow-bar:nth-child(1) { width: 74%; }
+.shadow-pip .shadow-bar:nth-child(2) { width: 46%; }
+
+/* right stage: browser frame with a form wireframe inside */
+.shadow-browser {
+  position: absolute;
+  left: 8%; top: 6%;
+  width: 84%; height: 72%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.shadow-browser-bar {
+  flex: none;
+  height: clamp(12px, 2.6vw, 20px);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.shadow-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(6px, 1.4vw, 11px);
+  padding: clamp(9px, 2.2vw, 18px);
+}
+.shadow-field {
+  height: clamp(5px, 1.1vw, 8px);
+  border-radius: 4px;
+  background: var(--border);
+}
+.shadow-form .shadow-field:nth-child(3) { width: 62%; }
+.shadow-button {
+  position: relative;
+  margin-top: clamp(4px, 1vw, 8px);
+  width: 30%;
+  height: clamp(12px, 2.6vw, 20px);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 6px;
+}
+
+.shadow-tag {
+  position: absolute;
+  z-index: 2;
+  right: 6%; bottom: 6%;
+  padding: 3px 9px;
+  border: 1px solid var(--warning);
+  border-radius: var(--r-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: clamp(9.5px, 1.4vw, 11.5px);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* The agent's pointer trail. Inserted by assets/js/freeze-demo.js on top of
+   the browser wireframe and under the two labels below. */
+.shadow-agent-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.shadow-freeze-tag,
+.shadow-freeze-hint {
+  position: absolute;
+  z-index: 3;
+  left: 6%; bottom: 6%;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  font-size: clamp(9.5px, 1.4vw, 11.5px);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+/* Standing invitation on your own frame, so the demo reads as interactive
+   before anyone has moved a mouse. freeze-demo.js drops data-seen on it
+   after the first freeze and it fades out for good. */
+.shadow-hint-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--accent-line);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+.shadow-hint-chip .dot {
+  width: 7px; height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  flex: none;
+}
+.shadow-hint-chip[data-seen="true"] { opacity: 0; }
+
+.shadow-freeze-tag {
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.shadow-freeze-hint {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+/* Two cursors that never look alike: yours is a blue arrow, the
+   agent's is an amber boxed crosshair. Each is anchored to the thing
+   it points at (the window, the button) so it stays put at any width. */
+.shadow-cursor {
+  position: absolute;
+  aspect-ratio: 1;
+}
+/* The UA [hidden] rule does not apply to SVG elements, so freeze-demo.js
+   cannot stand the static agent cursor down without this. */
+.shadow-cursor[hidden] { display: none; }
+.shadow-cursor-you {
+  left: 34%; top: 38%;
+  width: clamp(14px, 6%, 20px);
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  /* A 12px halo, so your pointer is findable inside its own frame before it
+     has been moved. Filter, not box-shadow: this is an SVG element. */
+  filter: drop-shadow(0 0 12px var(--accent-glow))
+          drop-shadow(0 0 4px var(--accent-glow));
+}
+/* Straddles the button's bottom-right corner, the way a real pointer
+   would rest on it, rather than sitting inside it like an icon. */
+.shadow-cursor-agent {
+  right: -8%; bottom: -35%;
+  width: clamp(14px, 20%, 20px);
+  fill: none;
+  stroke: var(--warning);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.shadow-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-block: 6px;
+  text-align: center;
+}
+.shadow-divider-line {
+  flex: 1 1 auto;
+  width: 2px;
+  min-height: 18px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+.shadow-chip {
+  flex: none;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  white-space: nowrap;
+}
+.shadow-chip code { font-size: 12px; color: var(--text); }
+.shadow-divider-note {
+  flex: none;
+  max-width: 176px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.shadow-points { margin-top: 32px; }
+.shadow-foot {
+  margin-top: 22px;
+  max-width: 780px;
+  color: var(--muted);
+  font-size: 14.5px;
+}
+
+@media (max-width: 1000px) {
+  .shadow-diagram { grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr); }
+  .shadow-divider-note { max-width: 142px; }
+}
+
+/* Below 780px the two screens stack and the divider turns horizontal. */
+@media (max-width: 780px) {
+  .shadow-diagram { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .shadow-divider { gap: 14px; padding-block: 2px; }
+  .shadow-divider-line { width: 100%; height: 2px; flex: none; min-height: 0; }
+  .shadow-divider-note { max-width: 460px; }
+}
+
+@media (max-width: 560px) {
+  .shadow-stage { margin: 12px; }
+  .shadow-tab { padding: 2px 5px; }
+  .shadow-points { margin-top: 24px; }
+}
+
+/* ---------- table ---------- */
+
+.table-scroll { overflow-x: auto; border-radius: var(--r-card); border: 1px solid var(--border); }
+table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  background: var(--surface);
+  font-size: 15px;
+}
+caption { text-align: left; color: var(--muted); font-size: 14px; padding-bottom: 10px; }
+th, td {
+  text-align: left;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+thead th {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.col-old { color: var(--muted); }
+td.col-new { color: var(--text); }
+th[scope="row"] { font-weight: 600; white-space: nowrap; }
+
+/* ---------- cards ---------- */
+
+.grid { display: grid; gap: 20px; }
+.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  padding: 24px;
+  box-shadow: var(--shadow-card);
+}
+.card h3 { font-size: 17px; margin-bottom: 8px; }
+.card p { color: var(--muted); font-size: 15px; }
+
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: var(--r-btn);
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+
+/* ---------- tabs ---------- */
+
+.tablist {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 24px;
+  scrollbar-width: thin;
+}
+.tablist button {
+  flex: none;
+  padding: 9px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.tablist button:hover { color: var(--text); }
+.tablist button[aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.tabpanel[hidden] { display: none; }
+.tabpanel p.caption {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 15px;
+  max-width: 62em;
+}
+
+/* ---------- timeline ---------- */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  counter-reset: step;
+}
+.step {
+  position: relative;
+  padding-top: 28px;
+  border-top: 2px solid var(--border);
+}
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  top: -15px; left: 0;
+  width: 28px; height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.step h3 { font-size: 16px; margin-bottom: 8px; }
+.step p { color: var(--muted); font-size: 14.5px; }
+
+/* ---------- badges / pills ---------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: var(--r-pill);
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill-ok { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.pill-warn { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+.pill-accent { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---------- code / copy ---------- */
+
+/* The copy button lives in its own column so long one-line commands
+   scroll underneath nothing: the <pre> is the scroller, the button is
+   a static flex item pinned to the right edge. Markup order is button
+   then <pre>; `order` puts the button visually last. */
+.code {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-btn);
+  padding: 8px 8px 8px 16px;
+}
+.code pre {
+  order: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.code code {
+  font-size: 13.5px;
+  color: var(--code-text);
+  white-space: pre;
+}
+.copy-btn {
+  order: 2;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.copy-btn:hover { color: var(--text); background: var(--surface-3); }
+
+.key-block code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---------- two column list ---------- */
+
+.checklist { list-style: none; margin: 0; padding: 0; }
+.checklist li {
+  display: flex;
+  gap: 12px;
+  padding-block: 11px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+}
+.checklist li:last-child { border-bottom: 0; }
+.checklist .icon { margin-top: 3px; }
+.checklist .ok { color: var(--success); }
+.checklist .pending { color: var(--warning); }
+.checklist span { color: var(--muted); }
+.checklist strong { color: var(--text); font-weight: 600; display: block; }
+
+/* ---------- edition cards ---------- */
+
+.edition {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.edition h3 { font-size: 20px; }
+.edition .persona { color: var(--accent); font-weight: 600; font-size: 14.5px; }
+.edition ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 14.5px; }
+.edition li { margin-block: 6px; }
+.edition .btn { margin-top: auto; }
+
+/* ---------- link cards ---------- */
+
+.linkgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.linkcard {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+}
+.linkcard:hover { border-color: var(--accent-line); background: var(--accent-soft); text-decoration: none; }
+.linkcard .icon { color: var(--accent); margin-top: 2px; }
+.linkcard b { display: block; font-weight: 600; font-size: 15px; }
+.linkcard small { color: var(--muted); font-size: 13px; line-height: 1.5; display: block; margin-top: 2px; }
+
+/* ---------- CTA ---------- */
+
+.cta {
+  position: relative;
+  overflow: hidden;
+  background: var(--hero-ground);
+  border-block: 1px solid var(--border);
+  padding-block: 88px;
+  text-align: center;
+}
+.cta-cat {
+  position: absolute;
+  right: 6%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 300px;
+  opacity: 0.10;
+  pointer-events: none;
+}
+.cta-inner { position: relative; }
+.cta h2 { font-size: clamp(26px, 3.6vw, 38px); }
+.cta p { margin-top: 14px; color: var(--muted); font-size: 17px; }
+.cta .hero-cta { justify-content: center; }
+
+/* ---------- footer ---------- */
+
+.footer {
+  background: var(--surface-2);
+  padding-block: 56px 32px;
+  font-size: 14.5px;
+}
+.footer-grid {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr));
+  gap: 32px;
+}
+.footer h4 {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 14px;
+  font-weight: 700;
+}
+.footer ul { list-style: none; margin: 0; padding: 0; }
+.footer li { margin-bottom: 9px; }
+.footer li a { color: var(--muted); }
+.footer li a:hover { color: var(--text); }
+.footer-brand p { color: var(--muted); margin-top: 12px; max-width: 26em; }
+.footer-legal {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---------- download page ---------- */
+
+.page-head { padding-block: 56px 32px; }
+.page-head h1 { font-size: clamp(30px, 4.4vw, 44px); }
+.page-head p { margin-top: 16px; color: var(--muted); font-size: 17px; max-width: 46em; }
+.page-head .badge-row { margin-top: 22px; }
+
+.selector {
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  padding: 22px;
+  margin-bottom: 28px;
+}
+.selector-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding-block: 10px;
+}
+.selector-row + .selector-row { border-top: 1px solid var(--border); }
+.selector-row > .label {
+  width: 88px;
+  flex: none;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.selector-row > .label:empty { display: none; }
+.chipset { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  padding: 8px 15px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.chip:hover { color: var(--text); }
+.chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.asset-list { display: grid; gap: 14px; }
+
+.asset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  padding: 20px 22px;
+  box-shadow: var(--shadow-card);
+}
+.asset[hidden] { display: none; }
+.asset-meta { min-width: 0; }
+.asset-meta .badge-row { margin-bottom: 10px; }
+.asset-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  word-break: break-all;
+  line-height: 1.5;
+}
+.asset-sub {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+}
+.asset-sub a { font-family: var(--font-mono); font-size: 13px; }
+.asset-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+
+.empty-note {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-card);
+  padding: 20px 22px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.needs-js { display: none; }
+:root[data-js] .needs-js { display: block; }
+
+.steps-list { margin: 0; padding-left: 22px; color: var(--muted); }
+.steps-list li { margin-block: 10px; }
+.steps-list strong { color: var(--text); }
+
+/* ---------- reveal ---------- */
+
+:root[data-js] .reveal {
+  opacity: 0;
+  transform: translateY(24px) scale(0.98);
+}
+:root[data-js] .reveal.is-visible { opacity: 1; transform: none; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1000px) {
+  .grid-3, .linkgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* The trace only reads as a stack while the rows are three columns. */
+  .stack::before { display: none; }
+  .stack-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px;
+    padding: 24px;
+  }
+  .stack-id { grid-column: 1 / -1; }
+}
+
+@media (max-width: 780px) {
+  .section { padding-block: 60px; }
+  .hero { padding-top: 48px; }
+  .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  /* Single column: the mascot hugs the left gutter, so the stage grows to
+     the right only and hero-cat.js reads the offset back off the two boxes. */
+  .hero-cat {
+    width: 150px;
+    order: -1;
+    justify-self: start;
+    --cat-stage-l: -10%;
+    --cat-stage-r: -70%;
+  }
+  .hero-shot { margin-top: 40px; padding-bottom: 48px; }
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .asset { grid-template-columns: minmax(0, 1fr); }
+  .cta-cat { opacity: 0.06; right: -40px; }
+  .stack-row { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+}
+
+@media (max-width: 560px) {
+  :root { --gutter: 18px; }
+  .grid-3, .linkgrid, .steps, .footer-grid { grid-template-columns: minmax(0, 1fr); }
+  .btn { width: 100%; }
+  .hero-cta .btn { width: 100%; }
+  /* A wrapped pill reads better with a corner radius than a stadium. */
+  .hero-claim { border-radius: 14px; align-items: flex-start; }
+  .hero-claim .dot { margin-top: 7px; }
+  .selector-row > .label { width: 100%; }
+  .stack-row { padding: 20px; }
+}
+
+/* ---------- scroll progress ---------- */
+
+/* Sits on the bottom edge of the 60px nav row, so opening the mobile panel
+   below it does not drag the line down with it. */
+.scroll-progress {
+  position: absolute;
+  left: 0; right: 0;
+  top: 57px;
+  height: 3px;
+  pointer-events: none;
+}
+.scroll-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-bright) 100%);
+  box-shadow: 0 0 10px var(--accent-glow), 0 0 3px var(--accent-glow);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+
+/* ---------- picture / art-directed screenshots ---------- */
+
+.frame picture { display: block; }
+
+/* ---------- table shell ---------- */
+
+/* Wraps .table-scroll so the right-edge fade can be positioned against the
+   frame instead of scrolling away with the table. */
+.table-shell { position: relative; }
+.table-shell::after {
+  content: "";
+  position: absolute;
+  top: 1px; right: 1px; bottom: 1px;
+  width: 38px;
+  border-radius: 0 var(--r-card) var(--r-card) 0;
+  background: linear-gradient(to right, var(--surface-fade), var(--surface) 82%);
+  pointer-events: none;
+  display: none;
+}
+.table-shell[data-scrollable="true"]::after { display: block; }
+/* Without JS the hint is shown across the width band where these tables
+   (min-width 620px) cannot fit their container. */
+@media (min-width: 601px) and (max-width: 700px) {
+  :root:not([data-js]) .table-shell::after { display: block; }
+}
+
+/* ---------- disclosure inside a table cell ---------- */
+
+/* Open by default, so the third column reads as an ordinary cell on wide
+   screens and stays fully readable with JS off. Below 600px the script
+   closes it and the summary becomes the toggle. */
+.cell-detail > summary { display: none; }
+.cell-detail > summary::-webkit-details-marker { display: none; }
+.cell-detail > p { color: inherit; }
+
+/* ---------- below the fold ---------- */
+
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 900px;
+}
+
+/* ---------- download page: mobile notice, copy link, QR ---------- */
+
+.dl-notice { display: none; }
+@media (max-width: 640px) {
+  .dl-notice {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 20px;
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-card);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 14.5px;
+    line-height: 1.65;
+  }
+  .dl-notice .icon { color: var(--accent); margin-top: 3px; }
+}
+
+:root[data-js] .needs-js-inline { display: inline-flex; }
+.needs-js-inline { display: none; }
+
+.asset-actions .btn { justify-content: center; }
+
+.qr-card {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 24px;
+  align-items: center;
+  margin-top: 22px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.qr-frame {
+  width: 200px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--qr-plate);
+}
+.qr-svg { display: block; width: 100%; height: auto; }
+.qr-plate { fill: var(--qr-plate); }
+.qr-dots {
+  fill: none;
+  stroke: var(--qr-ink);
+  stroke-linecap: round;
+}
+.qr-finder, .qr-align { fill: var(--qr-ink); }
+.qr-body h3 { font-size: 18px; margin-bottom: 8px; }
+.qr-body p { color: var(--muted); font-size: 14.5px; }
+.qr-file {
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--muted);
+  word-break: break-all;
+  line-height: 1.55;
+}
+.qr-body .btn { margin-top: 16px; }
+
+/* Border light sweep. The travelling highlight lives on a pseudo-element
+   ring so the card's own border stays put; the animation itself is declared
+   in the motion block at the foot of this file. */
+.qr-card { position: relative; }
+.qr-card::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--r-card);
+  padding: 1px;
+  background: conic-gradient(from var(--qr-sweep, 0deg),
+    transparent 0deg, transparent 300deg,
+    var(--accent-bright) 340deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 620px) {
+  .qr-card { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; gap: 20px; }
+  .qr-body .btn { width: 100%; }
+}
+
+/* ---------- shadow diagram: stacked divider ---------- */
+
+.shadow-divider-arrow { display: none; }
+
+/* ---------- narrow-screen layout ---------- */
+
+@media (max-width: 780px) {
+  /* Stacked, the two screens read top-to-bottom, so the divider becomes a
+     downward arrow instead of two horizontal rules. */
+  .shadow-divider-line { display: none; }
+  .shadow-divider-arrow {
+    display: block;
+    width: 22px; height: 22px;
+    color: var(--muted);
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+}
+
+@media (max-width: 700px) {
+  .shadow-diagram { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 600px) {
+  /* Hero: mascot centred and large, screenshot switched to a portrait
+     detail crop by <picture> rather than shrunk until the UI is unreadable. */
+  /* Large and centred, but after the headline: the H1 is the LCP element
+     and stays the first thing painted. */
+  .hero-cat {
+    width: 55vw;
+    max-width: 260px;
+    justify-self: center;
+    order: 0;
+    margin-top: 4px;
+    /* Centred again, so the stage spreads evenly and stays inside the
+       viewport at 360px. */
+    --cat-stage-l: -40%;
+    --cat-stage-r: -40%;
+  }
+
+  /* Comparison table becomes one card per row: the decision columns stay
+     visible, the plain-Linux column collapses into a disclosure. */
+  .table-compare { min-width: 0; }
+  .table-compare thead { display: none; }
+  .table-compare tbody tr {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .table-compare tbody tr:last-child { border-bottom: 0; }
+  .table-compare th,
+  .table-compare td {
+    display: block;
+    padding: 0;
+    border-bottom: 0;
+    white-space: normal;
+  }
+  .table-compare th[scope="row"] {
+    order: 1;
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .table-compare td.col-new { order: 2; font-size: 15px; }
+  .table-compare td.col-old { order: 3; }
+
+  .cell-detail > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-btn);
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 13.5px;
+    font-weight: 600;
+    list-style: none;
+    cursor: pointer;
+  }
+  .cell-detail[open] > summary { margin-bottom: 10px; }
+  .cell-detail > p {
+    padding-inline: 2px;
+    color: var(--muted);
+    font-size: 14.5px;
+  }
+
+  /* Hardware tables become cards with a colour chip per row. */
+  .table-cards { min-width: 0; }
+  .table-cards thead { display: none; }
+  .table-cards tbody tr {
+    display: block;
+    padding: 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .table-cards tbody tr:last-child { border-bottom: 0; }
+  .table-cards th[scope="row"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 5px 13px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    font-size: 13px;
+    white-space: normal;
+  }
+  .table-cards th[scope="row"]::before {
+    content: "";
+    flex: none;
+    width: 8px; height: 8px;
+    border-radius: var(--r-pill);
+    background: var(--chip, var(--muted));
+  }
+  .table-cards tbody tr:nth-child(1) th[scope="row"] { --chip: var(--subtle); }
+  .table-cards tbody tr:nth-child(2) th[scope="row"] { --chip: var(--accent); }
+  .table-cards tbody tr:nth-child(3) th[scope="row"] { --chip: var(--success); }
+  .table-cards td {
+    display: flex;
+    gap: 10px;
+    padding: 5px 0;
+    border-bottom: 0;
+    color: var(--muted);
+    font-size: 14.5px;
+  }
+  .table-cards td::before {
+    content: attr(data-label);
+    flex: none;
+    width: 5em;
+    color: var(--subtle);
+    font-size: 13px;
+    font-weight: 600;
+  }
+}
+
+/* ---------- safe area ---------- */
+
+/* viewport-fit=cover lets the page run under the notch, so the sticky nav
+   and the panel it opens pad themselves back out of it. */
+.nav-inner {
+  padding-inline:
+    max(var(--gutter), env(safe-area-inset-left))
+    max(var(--gutter), env(safe-area-inset-right));
+}
+@media (max-width: 860px) {
+  .nav-panel {
+    padding-inline:
+      max(var(--gutter), env(safe-area-inset-left))
+      max(var(--gutter), env(safe-area-inset-right));
+  }
+  .nav-panel[data-open="true"] {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+}
+
+/* ---------- touch targets ---------- */
+
+@media (pointer: coarse) {
+  .icon-btn { width: 44px; height: 44px; }
+  .btn { min-height: 44px; }
+  .btn-sm { min-height: 44px; padding-block: 10px; }
+  .chip { min-height: 44px; padding-block: 11px; }
+  .tablist button { min-height: 44px; }
+  .copy-btn { min-height: 44px; padding-inline: 14px; }
+  .nav-panel a { padding-block: 13px; }
+  .asset-sub a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding-inline: 2px;
+  }
+  .release-band a { padding-block: 6px; }
+}
+
+/* ---------- motion ---------- */
+
+/* Every animation and every motion transition on this site lives inside this
+   block, so `prefers-reduced-motion: reduce` switches the whole site to a
+   still page by declaring none of it. Nothing here changes layout: transform,
+   opacity, and paint-only properties (colour, box-shadow, filter). */
+
+/* The QR sweep animates a custom property, so it has to be registered.
+   Where @property is unsupported the animation simply never runs and the
+   ring keeps its keyframe-declared opacity of 0 — no broken state. */
+@property --qr-sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  @keyframes scroll-progress {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+  @keyframes cat-unfold {
+    from { opacity: 0; transform: translate(0, 7px) rotate(-5deg) scale(0.94); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes cat-base-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  /* Assembles out of depth rather than sliding up: the row starts 140px
+     behind the plane, 70px low and pitched 10deg away from the reader. */
+  @keyframes layer-rise {
+    from {
+      opacity: 0.2;
+      transform: translateZ(-140px) translateY(70px) rotateX(10deg);
+    }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes connector-charge {
+    from { transform: scaleY(0); }
+    to { transform: scaleY(1); }
+  }
+  /* Each badge lights as the trace reaches its row. */
+  @keyframes stack-badge-on {
+    0% {
+      border-color: var(--border);
+      color: var(--muted);
+      box-shadow: 0 0 0 0 var(--accent-soft);
+    }
+    55% {
+      border-color: var(--accent);
+      color: var(--accent);
+      box-shadow: 0 0 0 6px var(--accent-soft), 0 0 20px var(--accent-glow);
+    }
+    100% {
+      border-color: var(--accent-line);
+      color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft), 0 0 10px var(--accent-glow);
+    }
+  }
+  @keyframes hint-pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 4px 14px var(--accent-glow); }
+    50% { transform: scale(1.06); box-shadow: 0 6px 22px var(--accent-glow); }
+  }
+  /* Two 200ms pulses on the amber ring, then it holds. */
+  @keyframes freeze-flash {
+    0% { outline-color: var(--warning); }
+    25% { outline-color: transparent; }
+    50% { outline-color: var(--warning); }
+    75% { outline-color: transparent; }
+    100% { outline-color: var(--warning); }
+  }
+  @keyframes tag-pop {
+    from { opacity: 0; transform: translateY(7px) scale(0.8); }
+    62% { opacity: 1; transform: translateY(0) scale(1.1); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes qr-sweep {
+    0% { --qr-sweep: 0deg; opacity: 0; }
+    12% { opacity: 0.95; }
+    88% { opacity: 0.95; }
+    100% { --qr-sweep: 360deg; opacity: 0; }
+  }
+
+  :root[data-js] .reveal {
+    transition: opacity 500ms var(--ease), transform 500ms var(--ease);
+  }
+
+  .hero-cat-float { animation: float 6s ease-in-out infinite; }
+  /* The 3D mascot runs its own breathe/float/sway, so the CSS float would
+     double up on the canvas that now fills this box. */
+  .hero-cat[data-cat3d="on"] .hero-cat-float { animation: none; }
+
+  @supports (animation-timeline: scroll()) {
+    .scroll-progress span {
+      animation: scroll-progress linear both;
+      animation-timeline: scroll(root);
+    }
+  }
+
+  /* Hero circles: pointer drift plus a light scroll parallax, both written
+     as custom properties from one rAF loop. The no-WebGL route also drifts
+     the three circles on their own slow orbits, so a visitor without WebGL2
+     still sees the background move. */
+  .hero { --mx: 0px; --my: 0px; --par: 0px; }
+  .hero-bg .c1 {
+    transform: translate3d(var(--mx), calc(var(--my) + var(--par)), 0);
+    animation: hero-orbit-a 11s linear infinite;
+  }
+  .hero-bg .c2 {
+    transform: translate3d(calc(var(--mx) * -0.6), calc(var(--my) * -0.6 + var(--par) * 0.55), 0);
+    animation: hero-orbit-b 8.5s linear infinite;
+  }
+  .hero-bg .c3 {
+    animation: hero-orbit-c 13s linear infinite;
+  }
+  /* Written as one composite transform per keyframe: a second animation on
+     the same property would replace, not add, the pointer drift above. */
+  @keyframes hero-orbit-a {
+    0% { transform: translate3d(calc(var(--mx) + 0px), calc(var(--my) + var(--par)), 0); }
+    25% { transform: translate3d(calc(var(--mx) + 38px), calc(var(--my) + var(--par) + 26px), 0); }
+    50% { transform: translate3d(calc(var(--mx) + 0px), calc(var(--my) + var(--par) + 52px), 0); }
+    75% { transform: translate3d(calc(var(--mx) - 38px), calc(var(--my) + var(--par) + 26px), 0); }
+    100% { transform: translate3d(calc(var(--mx) + 0px), calc(var(--my) + var(--par)), 0); }
+  }
+  @keyframes hero-orbit-b {
+    0% { transform: translate3d(calc(var(--mx) * -0.6), calc(var(--my) * -0.6 + var(--par) * 0.55), 0); }
+    25% { transform: translate3d(calc(var(--mx) * -0.6 - 32px), calc(var(--my) * -0.6 + var(--par) * 0.55 + 22px), 0); }
+    50% { transform: translate3d(calc(var(--mx) * -0.6), calc(var(--my) * -0.6 + var(--par) * 0.55 + 44px), 0); }
+    75% { transform: translate3d(calc(var(--mx) * -0.6 + 32px), calc(var(--my) * -0.6 + var(--par) * 0.55 + 22px), 0); }
+    100% { transform: translate3d(calc(var(--mx) * -0.6), calc(var(--my) * -0.6 + var(--par) * 0.55), 0); }
+  }
+  @keyframes hero-orbit-c {
+    0% { transform: translate3d(0, 0, 0); }
+    25% { transform: translate3d(-46px, 30px, 0); }
+    50% { transform: translate3d(0, 60px, 0); }
+    75% { transform: translate3d(46px, 30px, 0); }
+    100% { transform: translate3d(0, 0, 0); }
+  }
+
+  /* Shader up: cross-fade the circles out over 400ms. Reversing the attribute
+     (context loss, teardown) cross-fades them straight back in. */
+  .hero-bg .c1,
+  .hero-bg .c2,
+  .hero-bg .c3,
+  .hero-gl { transition: opacity 400ms var(--ease); }
+  .hero-bg[data-gl="on"] .hero-gl { opacity: 1; }
+  .hero-bg[data-gl="on"] .c1,
+  .hero-bg[data-gl="on"] .c2,
+  .hero-bg[data-gl="on"] .c3 { opacity: 0; }
+
+  /* Your cursor tracks the real mouse while your frame holds the pointer, and
+     eases back to its resting spot when you leave. */
+  :root[data-js] .shadow-cursor-you {
+    transform: translate(var(--you-x, 0px), var(--you-y, 0px));
+    transition: transform 240ms var(--ease);
+  }
+  :root[data-js] .shadow-cursor-you[data-tracking="true"] { transition: none; }
+
+  /* The standing invitation breathes until the first freeze retires it. */
+  .shadow-hint-chip {
+    animation: hint-pulse 2.2s ease-in-out infinite;
+    transition: opacity 420ms var(--ease);
+  }
+  .shadow-hint-chip[data-seen="true"] { animation: none; }
+  .shadow-screen[data-frozen="true"] { animation: freeze-flash 400ms steps(1, end) 1; }
+  .shadow-freeze-tag { animation: tag-pop 260ms var(--ease) both; }
+
+  /* Mascot unfold: fires once when the hero scrolls into view. */
+  :root[data-js] .hero-cat-svg .cat-piece { opacity: 0; }
+  :root[data-js] .hero-cat-svg .cat-base { opacity: 0; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-base {
+    animation: cat-base-in 260ms var(--ease) both;
+  }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece {
+    animation: cat-unfold 440ms var(--ease) both;
+    transform-box: fill-box;
+    transform-origin: 50% 62%;
+  }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(2) { animation-delay: 60ms; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(3) { animation-delay: 120ms; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(4) { animation-delay: 180ms; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(5) { animation-delay: 240ms; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(6) { animation-delay: 300ms; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(7) { animation-delay: 360ms; }
+  :root[data-js] .hero-cat-svg.is-unfolded .cat-piece:nth-child(8) { animation-delay: 420ms; }
+
+  /* With the 3D mascot up the SVG animations are redundant work on an
+     invisible element, and the module owns the unfold and the tilt. The
+     :root[data-js] prefix is not decoration: without it these lose on
+     specificity to the .is-unfolded rules above. */
+  :root[data-js] .hero-cat[data-cat3d="on"] .hero-cat-svg .cat-base,
+  :root[data-js] .hero-cat[data-cat3d="on"] .hero-cat-svg .cat-piece {
+    animation: none;
+    opacity: 1;
+  }
+
+  /* Layer stack: rows assemble out of depth, the connector charges downward
+     and lights each badge as it passes. */
+  .stack { perspective: 1000px; perspective-origin: 50% 40%; }
+  :root[data-js] .stack-row {
+    opacity: 0.2;
+    transform: translateZ(-140px) translateY(70px) rotateX(10deg);
+    transition: opacity 560ms var(--ease), transform 560ms var(--ease);
+  }
+  :root[data-js] .stack-row.is-in { opacity: 1; transform: none; }
+  :root[data-js] .stack::before {
+    transform: scaleY(0);
+    transform-origin: 50% 0;
+    transition: transform 900ms var(--ease);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  :root[data-js] .stack.is-charged::before { transform: scaleY(1); }
+  :root[data-js] .stack-icon {
+    transition: border-color 420ms var(--ease), color 420ms var(--ease),
+                box-shadow 420ms var(--ease);
+  }
+  :root[data-js] .stack-row.is-in .stack-icon {
+    border-color: var(--accent-line);
+    color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 10px var(--accent-glow);
+  }
+
+  @supports (animation-timeline: view()) {
+    :root[data-js] .stack-row {
+      transition: none;
+      animation: layer-rise linear both;
+      animation-timeline: view();
+      /* Long enough that two neighbouring rows are in flight at once: that
+         overlap is what reads as a stack assembling rather than four
+         independent fades. */
+      animation-range: entry 4% cover 46%;
+    }
+    :root[data-js] .stack::before {
+      transition: none;
+      animation: connector-charge linear both;
+      animation-timeline: view();
+      animation-range: entry 10% cover 55%;
+    }
+    /* Its own view() timeline, so the four badges light in document order as
+       each row crosses the fold rather than all at once. */
+    :root[data-js] .stack-row .stack-icon {
+      transition: none;
+      animation: stack-badge-on linear both;
+      animation-timeline: view();
+      animation-range: entry 25% cover 45%;
+    }
+  }
+
+  .qr-card::after { animation: qr-sweep 8s linear infinite; }
+
+  @media (hover: hover) and (pointer: fine) {
+    .frame,
+    .shadow-screen,
+    .card,
+    .linkcard,
+    .edition,
+    .asset,
+    .qr-card {
+      transition: transform 220ms var(--ease), box-shadow 220ms var(--ease),
+                  border-color 220ms var(--ease);
+    }
+    .frame:hover,
+    .shadow-screen:hover,
+    .card:hover,
+    .linkcard:hover,
+    .edition:hover,
+    .asset:hover,
+    .qr-card:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 0 0 1px var(--accent-line), 0 18px 50px var(--accent-glow),
+                  var(--shadow-lift);
+    }
+
+    /* The screenshot frames pick up a small pointer-following pitch on top of
+       the lift. site.js writes --tilt-x / --tilt-y; both default to 0deg, so
+       a frame that is never hovered is byte-identical to the rule above. */
+    .frame {
+      transform: perspective(900px)
+                 rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+    }
+    .frame:hover {
+      transform: perspective(900px) translateY(-6px)
+                 rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+      transition: transform 90ms linear, box-shadow 220ms var(--ease);
+    }
+
+    .btn[data-magnetic] {
+      transform: translate(var(--mag-x, 0px), var(--mag-y, 0px));
+      transition: transform 160ms var(--ease), background var(--dur) var(--ease),
+                  box-shadow 200ms var(--ease);
+    }
+    .btn[data-magnetic]:hover {
+      box-shadow: 0 0 0 4px var(--accent-soft), 0 10px 30px var(--accent-glow);
+    }
+
+    .hero-cat-svg {
+      transform: rotateX(var(--cat-rx, 0deg)) rotateY(var(--cat-ry, 0deg));
+      transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .hero-cat[data-cat3d="on"] .hero-cat-svg {
+      transform: none;
+      transition: none;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  :root[data-js] .reveal { opacity: 1; transform: none; }
+}
+
+@media print {
+  .nav, .cta, .selector { display: none; }
+}

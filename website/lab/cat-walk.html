@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>摺紙貓走路 · 實驗頁 - DuDuClaw OS</title>
+<link rel="icon" href="../assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --ground: #f3f3f3; --surface: #ffffff; --surface-2: #fafafa;
+  --border: #e4e4e7; --border-strong: #d4d4d8;
+  --text: #09090b; --muted: #71717b; --subtle: #9f9fa9;
+  --accent: #2171cc; --accent-soft: rgba(33,113,204,.09); --accent-line: rgba(33,113,204,.28);
+  --crimson: #e5484d;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.05);
+  --r-card: 12px; --r-btn: 10px; --r-pill: 999px;
+  --font-sans: "Inter","Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --font-mono: "JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  --dur: 180ms; --ease: cubic-bezier(.22,.61,.36,1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0c0c0e; --surface: #1e1e21; --surface-2: #17171a;
+    --border: #27272a; --border-strong: #3a3a3e;
+    --text: #fafafa; --muted: #9f9fa9; --subtle: #71717b;
+    --accent: #4390ee; --accent-soft: rgba(67,144,238,.14); --accent-line: rgba(67,144,238,.36);
+    --shadow-card: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0c0c0e; --surface: #1e1e21; --surface-2: #17171a;
+  --border: #27272a; --border-strong: #3a3a3e;
+  --text: #fafafa; --muted: #9f9fa9; --subtle: #71717b;
+  --accent: #4390ee; --accent-soft: rgba(67,144,238,.14); --accent-line: rgba(67,144,238,.36);
+  --shadow-card: 0 1px 2px rgba(0,0,0,.4);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--ground); color: var(--text);
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 36px 24px 72px; }
+header { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; }
+h1 { font-size: 1.5rem; line-height: 1.3; margin: 0 0 4px; letter-spacing: -.01em; }
+.sub { color: var(--muted); font-size: .9rem; margin: 0; max-width: 62ch; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  font: inherit; font-size: .875rem; font-weight: 500; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--r-btn); padding: 9px 16px; min-height: 44px; cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+button:hover { background: var(--surface-2); border-color: var(--accent-line); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+
+.stage-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 16px;
+  margin-top: 28px;
+  align-items: stretch;
+}
+@media (max-width: 640px) {
+  .stage-row { grid-template-columns: 1fr; }
+}
+.ref {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-card); padding: 10px 10px 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.ref img { width: 72px; height: auto; display: block; }
+.ref span { font-size: .7rem; color: var(--muted); text-align: center; line-height: 1.35; }
+
+.stage-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+#stage {
+  position: relative;
+  height: 420px;
+  width: 100%;
+  background: #f3f3f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #stage { background: #0c0c0e; }
+}
+:root[data-theme="dark"] #stage { background: #0c0c0e; }
+:root[data-theme="light"] #stage { background: #f3f3f3; }
+
+#hud {
+  position: absolute; top: 12px; right: 12px; z-index: 2;
+  font-family: var(--font-mono); font-size: .75rem; line-height: 1.45;
+  color: var(--muted); background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  pointer-events: none; min-width: 148px;
+}
+#hud b { color: var(--text); font-weight: 500; }
+.fallback {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  color: var(--muted); font-size: .9rem; padding: 24px; text-align: center;
+}
+
+.note {
+  margin-top: 28px; background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: var(--r-card); padding: 18px 22px;
+}
+.note h2 { margin: 0 0 12px; font-size: .9375rem; }
+.states { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; margin: 0; padding: 0; list-style: none; }
+@media (max-width: 720px) { .states { grid-template-columns: 1fr; } }
+.states li { font-size: .9375rem; }
+.states strong { font-weight: 600; }
+.states code { font-family: var(--font-mono); font-size: .85em; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+.hint { margin: 14px 0 0; color: var(--muted); font-size: .875rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>摺紙貓走路 · 實驗頁</h1>
+    <p class="sub">獨立實驗室，還沒接回首頁。左邊是品牌吉祥物，右邊是同一隻貓的低面數 3D 版：會走、會潛行、會撲上去抓紙老鼠。</p>
+  </div>
+  <div class="actions">
+    <button id="reset" type="button">重置</button>
+    <button id="theme" type="button">切換主題</button>
+    <button id="touch" type="button" aria-pressed="false">模擬觸控</button>
+  </div>
+</header>
+
+<div class="stage-row">
+  <aside class="ref">
+    <img src="../assets/brand/cat-512.png" alt="DuDuClaw 摺紙貓品牌圖，站姿、無眼睛、緋紅色">
+    <span>品牌圖<br>風格對照</span>
+  </aside>
+  <section class="stage-card">
+    <div id="hud">state <b id="st">…</b><br>speed <b id="sp">0.00</b><br>dist <b id="ds">0.00</b></div>
+    <div id="stage">
+      <p class="fallback" id="fallback">需要 WebGL，且系統不能開著「減少動態效果」。</p>
+    </div>
+  </section>
+</div>
+
+<div class="note">
+  <h2>六個狀態與觸發條件</h2>
+  <ul class="states">
+    <li><strong>坐 idle</strong>：自然貓坐。後腿摺疊、臀貼地、前腿直立撐著、脊柱約 65°，尾巴繞到身側末端上翹。呼吸與尾巴慢擺，偶爾轉頭。老鼠進到 0.35 內就停在這裡。</li>
+    <li><strong>跟隨 follow</strong>：老鼠距離超過 0.35 就起身走過去。先轉身（最快 240°/s），再對角步態。步頻 1.4 到 2.4 Hz 跟速度走，速度 0.6 到 1.6 單位/s。走到 0.35 內回到坐。</li>
+    <li><strong>潛行 stalk</strong>：老鼠在 0.35 到 1.2 單位內，且靜止滿 1.2 秒。臀部下降約四成，左右扭三下（0.8 秒），尾尖發抖。</li>
+    <li><strong>撲擊 pounce</strong>：潛行結束後跳向老鼠，拋物線 0.45 秒，落點就是老鼠所在。前腿前伸、後腿蹬直、尾巴拉直。</li>
+    <li><strong>抓住 catch</strong>：落地兩前爪蓋住老鼠，停 1.0 秒，尾巴得意地大擺一下。這期間老鼠若移動超過 0.2 單位就逃走。</li>
+    <li><strong>逃走 flee</strong>：抓住失敗。老鼠從爪子下滑走，貓立刻改回跟隨。抓住成功則老鼠從地板線側邊重新跑出來，貓坐下。</li>
+  </ul>
+  <p class="hint">游標在舞台上移動，紙老鼠會跟著跑（約 120 ms 延遲）。游標離開畫布，老鼠躲到邊緣。沒有游標的裝置按「模擬觸控」後，點一下舞台就能放老鼠；或用 <code>?autoplay=1</code> 讓老鼠自己跑。<code>?pose=idle|enter|walk|stalk|pounce|catch</code> 會把貓釘在該姿勢，方便截圖。<code>enterFrom</code> / <code>leaveTo</code> 給首頁把平面剪影切成 3D（或切回去）。</p>
+</div>
+
+</div>
+
+<script type="module">
+import { mountCatWalk } from '../assets/js/catwalk/catwalk.mjs';
+
+const root = document.documentElement;
+const stage = document.getElementById('stage');
+const fallback = document.getElementById('fallback');
+const st = document.getElementById('st');
+const sp = document.getElementById('sp');
+const ds = document.getElementById('ds');
+const touchBtn = document.getElementById('touch');
+
+const q = new URLSearchParams(location.search);
+const qTheme = q.get('theme');
+const darkPref = matchMedia('(prefers-color-scheme: dark)').matches;
+const stored = (() => { try { return localStorage.getItem('duduclaw-os-theme'); } catch { return null; } })();
+if (qTheme === 'light' || qTheme === 'dark') root.setAttribute('data-theme', qTheme);
+else if (stored === 'light' || stored === 'dark') root.setAttribute('data-theme', stored);
+
+const initialTheme = root.getAttribute('data-theme')
+  || (darkPref ? 'dark' : 'light');
+
+let api = false;
+try {
+  api = mountCatWalk(stage, {
+    theme: initialTheme,
+    targetMode: matchMedia('(pointer: coarse)').matches ? 'tap' : 'pointer',
+  });
+} catch (err) {
+  fallback.textContent = '掛載失敗：' + (err && err.message ? err.message : err);
+  api = false;
+}
+
+if (!api) {
+  fallback.hidden = false;
+} else {
+  fallback.remove();
+  const seq = [];
+  let lastState = '';
+  const logEl = document.createElement('pre');
+  logEl.id = 'statelog';
+  logEl.hidden = true;
+  document.body.appendChild(logEl);
+  api.onState((s) => {
+    st.textContent = s.state;
+    sp.textContent = s.speed.toFixed(2);
+    ds.textContent = s.dist.toFixed(2);
+    if (s.state !== lastState) {
+      lastState = s.state;
+      seq.push(s.state);
+      const line = seq.join('>');
+      logEl.textContent = line;
+      document.title = 'SEQ ' + line;
+      if (q.get('autoplay') === '1') {
+        fetch('/__catseq__/' + encodeURIComponent(line)).catch(function () {});
+      }
+    }
+  });
+}
+
+document.getElementById('theme').addEventListener('click', () => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = root.getAttribute('data-theme') || (dark ? 'dark' : 'light');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('duduclaw-os-theme', next); } catch {}
+  if (api) api.setTheme(next);
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  if (api && api.reset) api.reset();
+});
+
+let tap = matchMedia('(pointer: coarse)').matches;
+touchBtn.setAttribute('aria-pressed', tap ? 'true' : 'false');
+touchBtn.addEventListener('click', () => {
+  tap = !tap;
+  touchBtn.setAttribute('aria-pressed', tap ? 'true' : 'false');
+  if (api && api.setTargetMode) api.setTargetMode(tap ? 'tap' : 'pointer');
+});
+</script>
+</body>
+</html>

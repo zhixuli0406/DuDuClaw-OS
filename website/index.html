@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DuDuClaw OS · 把一台電腦變成一整個 AI 團隊</title>
+<meta name="description" content="DuDuClaw OS 是為 AI 操作電腦而打造的 Linux：agent 做進自家 Wayland compositor，有專屬輸入 seat 與影子工作區，人一碰鍵盤滑鼠就凍結。v0.2.0 為 pre-GA bring-up 版本。">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="DuDuClaw OS">
+<meta property="og:locale" content="zh_TW">
+<meta property="og:title" content="DuDuClaw OS · 把一台電腦變成一整個 AI 團隊">
+<meta property="og:description" content="DuDuClaw OS 是為 AI 操作電腦而打造的 Linux：agent 做進自家 Wayland compositor，有專屬輸入 seat 與影子工作區，人一碰鍵盤滑鼠就凍結。v0.2.0 為 pre-GA bring-up 版本。">
+<meta property="og:image" content="https://os.duduclaw.dudustudio.monster/assets/screens/home-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="DuDuClaw OS · 把一台電腦變成一整個 AI 團隊">
+<meta name="twitter:description" content="AI agent 為原生住民的 Linux 作業系統。v0.2.0 pre-GA bring-up。">
+<meta name="twitter:image" content="https://os.duduclaw.dudustudio.monster/assets/screens/home-dark.png">
+
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/brand/mark-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="assets/brand/mark-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="assets/brand/mark-512.png">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c0c0e" media="(prefers-color-scheme: dark)">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/site.css">
+<script>
+/* Applies the stored theme before first paint and marks JS as available. */
+(function () {
+  var r = document.documentElement;
+  r.setAttribute('data-js', '');
+  try {
+    var t = localStorage.getItem('duduclaw-os-theme');
+    if (t === 'light' || t === 'dark') r.setAttribute('data-theme', t);
+  } catch (e) { /* storage blocked */ }
+}());
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">跳到主要內容</a>
+
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+  <defs>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 4v16M6 14l6 6 6-6"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3.5" y="11" width="17" height="10" rx="2"/><path d="M7.5 11V7a4.5 4.5 0 0 1 9 0v4"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8 21h8M12 16.5V21"/></symbol>
+    <symbol id="i-command" viewBox="0 0 24 24"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 0-6z"/></symbol>
+    <symbol id="i-columns" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 24 24"><path d="M22 12H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01M10 16h.01"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2"/><path d="M11.39 11.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78z"/><path d="M11.39 11.61L19 4l3 3-3.5 3.5-3-3"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/></symbol>
+    <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="2.5" y="3" width="19" height="7" rx="2"/><rect x="2.5" y="14" width="19" height="7" rx="2"/><path d="M6.5 6.5h.01M6.5 17.5h.01"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></symbol>
+    <symbol id="i-shadow-out" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="9" rx="2"/><path d="M17 9V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5"/></symbol>
+    <symbol id="i-pip" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="2"/><rect x="12" y="12" width="7" height="6" rx="1"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24"><path d="M9 11.5v-6a1.5 1.5 0 0 1 3 0v6"/><path d="M12 11.5v-7a1.5 1.5 0 0 1 3 0v7"/><path d="M15 11.5v-5a1.5 1.5 0 0 1 3 0V14"/><path d="M9 11.5v-1a1.5 1.5 0 0 0-3 0V16a6 6 0 0 0 6 6h1a5 5 0 0 0 5-5v-3"/></symbol>
+  </defs>
+</svg>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html">
+      <img src="assets/brand/duduclaw-mark-circle.svg" alt="" width="28" height="28">
+      <span>DuDuClaw OS</span>
+    </a>
+    <nav class="nav-links" aria-label="主要導覽">
+      <a href="#layers">特色</a>
+      <a href="#desktop">桌面</a>
+      <a href="#hardware">硬體</a>
+      <a href="download.html">下載</a>
+      <a href="docs/">文件</a>
+    </nav>
+    <div class="nav-tools">
+      <a class="icon-btn" href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener" aria-label="在 GitHub 上檢視 DuDuClaw OS">
+        <svg class="icon" aria-hidden="true"><use href="#i-github"></use></svg>
+      </a>
+      <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="切換主題">
+        <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun"></use></svg>
+        <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon"></use></svg>
+      </button>
+      <button class="icon-btn nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="nav-panel" aria-label="開啟導覽選單">
+        <svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>
+      </button>
+    </div>
+  </div>
+  <div class="scroll-progress" aria-hidden="true"><span></span></div>
+  <div class="nav-panel" id="nav-panel" data-open="false">
+    <a href="#layers">特色</a>
+    <a href="#desktop">桌面</a>
+    <a href="#hardware">硬體</a>
+    <a href="download.html">下載</a>
+    <a href="docs/">文件</a>
+    <a href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<div class="release-band">
+  <div class="wrap">
+    <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.2.0" rel="noopener">
+      <span class="dot" aria-hidden="true"></span>
+      <strong>v0.2.0</strong>
+      <span>2026-09-09</span>
+      <span>內嵌平台 1.63.0</span>
+      <span>Linux 6.18</span>
+      <span>pre-GA bring-up</span>
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-arrow"></use></svg>
+    </a>
+  </div>
+</div>
+
+<main id="main">
+
+  <!-- hero -->
+  <section class="hero">
+    <div class="hero-bg" aria-hidden="true"><span class="c1"></span><span class="c2"></span><span class="c3"></span></div>
+    <div class="wrap">
+      <div class="hero-grid">
+        <div>
+          <span class="eyebrow">為 AI 操作電腦而打造的 Linux</span>
+          <h1>把一台電腦<br>變成一整個 <span class="hl">AI 團隊</span></h1>
+          <p class="hero-sub">一般作法是在現成的 Linux 上外掛一個 agent，靠模擬你的滑鼠去搶桌面，系統沒有任何一層知道該在什麼時候擋它。</p>
+          <p class="hero-sub">DuDuClaw OS 反過來做：compositor、桌面殼、系統服務與信任邊界都圍著 gateway 設計，AI 操作這台電腦是作業系統原生的行為，煞車也長在系統裡。</p>
+          <a class="hero-claim" href="#first-claim">
+            <span class="dot" aria-hidden="true"></span>
+            <span>據我們查到的範圍：第一套把 agent 做進自家 compositor 的通用 Linux</span>
+          </a>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="download.html" data-magnetic>
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+              下載 v0.2.0
+            </a>
+            <a class="btn btn-ghost" href="#desktop">看看桌面</a>
+          </div>
+          <p class="hero-meta">x86-64 · UEFI · Apache-2.0</p>
+        </div>
+        <div class="hero-cat">
+          <div class="hero-cat-float">
+            <!-- Inlined from assets/brand/duduclaw-cat.svg so each folded
+                 panel is animatable. Colours are unchanged; the ids carry a
+                 cat- prefix to stay unique inside the page. -->
+            <svg class="hero-cat-svg" viewBox="0 0 135 262" width="135" height="262" role="img" aria-label="DuDuClaw 摺紙風格緋紅貓吉祥物，舉起一隻前爪" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <clipPath id="cat-cut">
+                  <path d="M 113.9 138.17C 110.55 126.74 104.42 97.47 105.39 81.07C 105.54 78.47 107.89 68.62 109.11 65.17C 110.25 61.94 117.64 55.44 114.64 47.29C 114.48 46.86 114.1 46.54 113.65 46.45C 108.35 45.38 101.12 53.97 97.45 52.05C 91.58 49.15 87.03 48.37 83.08 48.54C 80.48 49.22 77.44 50.08 74.89 50.09C 72.36 50.81 69.87 51.57 67.13 51.93C 66.36 52.03 65.63 52.39 65.12 52.98C 58.02 61.28 67.34 72.49 61.94 74.64C 61.94 74.64 50.11 75.09 49.21 72.09C 48.32 69.1 44.12 56.22 44.72 46.94C 45.32 37.65 46.45 35.26 47.04 32.34C 47.64 29.42 46.22 27.25 45.39 27.17C 44.57 27.1 49.29 18.41 47.12 16.84C 44.95 15.27 43 17.22 43 17.22C 43 17.22 43.6 9.73 39.63 10.48C 35.66 11.23 35.74 15.64 35.74 15.64C 35.74 15.64 33.27 11.97 31.02 13.1C 28.77 14.22 29.52 19.99 29.52 19.99C 29.52 19.99 26.38 18.79 25.25 20.44C 24.13 22.08 26.75 22.16 29.3 27.92C 31.84 33.69 24.46 75.49 29.52 86.17C 30.99 89.79 38.49 104.84 45.23 121.08C 49.39 120.36 53.57 119.8 55.34 119.77C 59.23 119.69 71.39 123.67 80.37 123.53L 80.32 123.63C 71.34 123.78 59.67 120.84 55.77 120.91C 51.88 120.99 36.7 123.45 35.58 124.72C 34.46 125.99 32.96 128.86 32.8 130.65C 32.66 132.45 33.11 132.81 33.11 132.81C 33.57 134.79 35.69 134.31 35.69 134.31C 37.48 136.66 40.22 136.17 41.5 135.78C 44.74 140.83 47.36 132.62 62.12 136.56C 75.34 140.08 79.7 153.01 93.33 149.87C 99.47 148.52 104.34 143.45 104.34 143.45C 104.34 143.45 102.86 148.55 93.06 151.29C 79.43 154.43 74.73 141.66 61.52 138.14C 57.21 136.99 53.95 136.88 51.39 137.17C 55.55 149.28 58.12 159.98 57.8 162.63C 56.9 169.92 49.34 182.1 48.21 187.29C 47.45 190.8 44.5 204.1 42.89 217.65C 41.52 229.18 41.97 240.59 42.23 242.79C 43.02 249.68 46.42 252.27 50.81 252.17C 54.85 252.08 57.8 251.03 58.05 241.09C 58.05 241.09 64.93 242.65 73.41 240.86C 74.09 240.71 74.78 240.9 75.26 241.4C 76.54 242.7 79.76 245.28 86.15 246.58C 86.15 246.58 89.94 250.58 97.93 249.58C 105.91 248.58 104.12 245.98 103.71 244.19C 102.52 239.6 118.89 231.01 121.88 214.44C 125.28 194.67 117.69 151.15 113.9 138.17ZM 40.31 225.47C 40.44 222.72 40.59 219.99 40.9 217.48C 30.87 213.8 9.72 216.99 13.67 226.15C 16.37 232.44 31.1 224.46 40.13 230.35C 40.17 228.71 40.23 227.06 40.31 225.47ZM 80.55 47.82C 79.75 46.79 78.72 45.59 78.34 45.59C 77.94 45.59 77.31 47.22 76.86 48.56C 78.06 48.22 79.32 47.97 80.55 47.82Z"/>
+                </clipPath>
+                <linearGradient id="cat-arm" x1="25%" y1="0%" x2="85%" y2="100%">
+                  <stop offset="0%" stop-color="#ff7a7e"/>
+                  <stop offset="100%" stop-color="#d63d42"/>
+                </linearGradient>
+                <linearGradient id="cat-torso" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#e85055"/>
+                  <stop offset="100%" stop-color="#c6353a"/>
+                </linearGradient>
+                <linearGradient id="cat-shade" x1="15%" y1="0%" x2="100%" y2="90%">
+                  <stop offset="0%" stop-color="#c6353a"/>
+                  <stop offset="100%" stop-color="#b02e33"/>
+                </linearGradient>
+              </defs>
+              <g clip-path="url(#cat-cut)">
+                <rect class="cat-base" width="135" height="262" fill="url(#cat-torso)"/>
+                <polygon class="cat-piece" fill="url(#cat-arm)" points="16,0 55,0 57,126 18,132"/>
+                <polygon class="cat-piece" fill="#ff7a7e" points="18,0 55,0 53,38 20,42"/>
+                <polygon class="cat-piece" fill="#f2565b" points="53,28 124,20 126,90 48,98"/>
+                <polygon class="cat-piece" fill="#ff7a7e" points="90,26 124,20 118,68"/>
+                <polygon class="cat-piece" fill="#ff7a7e" points="8,112 90,114 88,160 6,164"/>
+                <polygon class="cat-piece" fill="url(#cat-shade)" points="22,158 134,132 136,262 14,262"/>
+                <polygon class="cat-piece" fill="#b02e33" points="0,208 47,210 49,238 0,238"/>
+              </g>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-shot">
+        <div class="frame">
+          <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i></div>
+          <!-- Below 600px the full desktop shot is replaced by a portrait
+               detail crop of the composer bar, task cards and dock, so the
+               UI text stays readable instead of shrinking into noise. -->
+          <picture class="shot-light">
+            <source media="(max-width: 600px)" type="image/avif" srcset="assets/screens/home-desktop-mobile.avif" width="640" height="670">
+            <source media="(max-width: 600px)" type="image/webp" srcset="assets/screens/home-desktop-mobile.webp" width="640" height="670">
+            <source media="(max-width: 600px)" srcset="assets/screens/home-desktop-mobile.png" width="640" height="670">
+            <source type="image/avif" srcset="assets/screens/home-desktop.avif" width="1280" height="800">
+            <source type="image/webp" srcset="assets/screens/home-desktop.webp" width="1280" height="800">
+            <img src="assets/screens/home-desktop.png" alt="DuDuClaw OS 淺色主題首頁：頂端選單列與待核准提示，中央是「交辦一件事給你的 AI 團隊」輸入框與三個常用交辦建議，畫面下方是緋紅貓與 Dock" width="1280" height="800" loading="eager" fetchpriority="high" decoding="async">
+          </picture>
+          <picture class="shot-dark">
+            <source media="(max-width: 600px)" type="image/avif" srcset="assets/screens/home-dark-mobile.avif" width="640" height="670">
+            <source media="(max-width: 600px)" type="image/webp" srcset="assets/screens/home-dark-mobile.webp" width="640" height="670">
+            <source media="(max-width: 600px)" srcset="assets/screens/home-dark-mobile.png" width="640" height="670">
+            <source type="image/avif" srcset="assets/screens/home-dark.avif" width="1280" height="800">
+            <source type="image/webp" srcset="assets/screens/home-dark.webp" width="1280" height="800">
+            <img src="assets/screens/home-dark.png" alt="DuDuClaw OS 深色主題首頁：交辦輸入框下方排著三張任務卡，分別顯示等你決定、進行中與已完成的狀態" width="1280" height="800" loading="eager" fetchpriority="high" decoding="async">
+          </picture>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- honest status -->
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="notice reveal">
+        <h2>這還不是正式版</h2>
+        <ul>
+          <li><strong>0.2.0 屬於 bring-up 階段</strong>，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動。</li>
+          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 只做過設定稽核。</li>
+          <li><strong>發布映像沒有啟用 Secure Boot 簽章、dm-verity 與 TPM</strong>。相關 layer 已經接好，由建置 overlay 開啟；用官方映像開機前請在韌體裡關閉 Secure Boot。</li>
+          <li><strong>共駕功能已經編譯進映像，但預設關閉</strong>，每個 agent 要各自開啟。凍結、交還、急停與影子工作區已用真實輸入事件在容器與 QEMU 驗證過；真實 DRM 硬體與雙螢幕還沒驗。</li>
+          <li><strong>v0.1.0 仍留在 Releases</strong>，需要回滾隨時可以退回去。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- layer stack: the thesis -->
+  <section class="section" id="layers">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">差別在底層</span>
+        <h2>為什麼不是隨便一台 Linux 裝 gateway</h2>
+        <p>gateway 裝在哪裡都跑得起來。差別是一般 Linux 不認識 agent：它只是一支使用者程式，要操作桌面就得模擬你的滑鼠、跟你搶焦點，權限要嘛太大、要嘛做不到。DuDuClaw OS 從桌面殼到 root 服務，每一層都為 gateway 留了位子。</p>
+      </div>
+
+      <!-- The claim we can defend, plus everyone who used the name first. -->
+      <div class="claim reveal" id="first-claim">
+        <h3 class="claim-title">
+          <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"></use></svg>
+          我們敢講的第一與誰比我們早
+        </h3>
+        <p><strong>據我們查到的範圍，DuDuClaw OS 是第一套把 AI agent 做進自家 Wayland compositor 的通用 Linux 發行版</strong>：agent 有專屬的輸入 seat 與影子輸出，人優先凍結與急停由 compositor 強制執行。Omarchy 把 agent 放在現成的 Hyprland 上面，差別就在這一層。</p>
+        <p>「Agent-first OS」這個名字已經有人先用。阿里雲 Alibaba Cloud Linux 4 Agentic Edition（2026 年 5 月）自稱 first Agent-first operating system，它是無頭伺服器版，沒有視窗系統；釘釘 Agent OS、階躍 Step AOS 與 Warmwind OS 各自宣稱過「全球首個」，分別是協作平台、Android 中介層與雲端虛擬桌面。所以我們只講上面那一句，範圍窄，但每個字都查得到。</p>
+        <p class="claim-sources">查證來源：<a href="https://help.aliyun.com/en/alinux/agentic-os" target="_blank" rel="noopener">Alibaba Cloud Linux Agentic Edition</a> · <a href="https://omarchy.org/" target="_blank" rel="noopener">Omarchy</a> · <a href="https://about.warmwind.com/warmwind-os-building-the-ai-operating-system-for-everyone/" target="_blank" rel="noopener">Warmwind OS</a> · <a href="https://www.163.com/dy/article/L1PTHIHL05118HA4.html" target="_blank" rel="noopener">Step AOS 報導</a></p>
+      </div>
+
+      <div class="stack">
+        <div class="stack-row">
+          <div class="stack-id">
+            <span class="stack-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-layout"></use></svg></span>
+            <h3>桌面殼 <code>duduclaw-shell</code></h3>
+            <p class="stack-role">agent 的前門</p>
+          </div>
+          <div class="stack-do">
+            <h4 class="stack-label">DuDuClaw OS 怎麼做</h4>
+            <ul>
+              <li>Cmd+K 交辦列在任何 app 上叫得出來，直接進 goal loop，跟聊天通道用同一套機制。</li>
+              <li>menu bar 中央是審批 ticker，通知中心把審批放第一位，首頁就是任務板。</li>
+            </ul>
+          </div>
+          <div class="stack-vs">
+            <h4 class="stack-label">一般 Linux 裝 gateway</h4>
+            <p class="stack-vs-line">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-minus"></use></svg>
+              <span>agent 沒有桌面入口，只能躲在一個聊天視窗裡。</span>
+            </p>
+          </div>
+        </div>
+
+        <div class="stack-row">
+          <div class="stack-id">
+            <span class="stack-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-layers"></use></svg></span>
+            <h3>compositor <code>duduclaw-comp</code></h3>
+            <p class="stack-role">認得 agent 的視窗系統</p>
+          </div>
+          <div class="stack-do">
+            <h4 class="stack-label">DuDuClaw OS 怎麼做</h4>
+            <ul>
+              <li>agent 有自己的輸入 seat（<code>duduclaw-agent</code>），游標形狀顏色都跟你的不同，每個事件都能歸屬稽核。</li>
+              <li>GUI 任務預設在影子輸出（<code>duduclaw-shadow-0</code>）跑，你的視窗、焦點、游標不受影響，想看就開子母畫面。</li>
+              <li>你一碰鍵盤滑鼠，agent 的 seat 在 3 至 4 ms 內凍結，指令直接丟棄不排隊。Super+Enter 交還、Super+Esc 急停都由 compositor 持有，agent 行程碰不到。</li>
+              <li>操作第三方 app 優先走原生 API、CLI、D-Bus 與 accessibility tree，這一版不做截圖式操作。</li>
+            </ul>
+          </div>
+          <div class="stack-vs">
+            <h4 class="stack-label">一般 Linux 裝 gateway</h4>
+            <p class="stack-vs-line">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-minus"></use></svg>
+              <span>用 <code>xdotool</code> 之類模擬你的滑鼠，跟你搶同一個游標，系統層沒有煞車。</span>
+            </p>
+          </div>
+        </div>
+
+        <div class="stack-row">
+          <div class="stack-id">
+            <span class="stack-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-server"></use></svg></span>
+            <h3>系統服務</h3>
+            <p class="stack-role">gateway 是一等公民</p>
+          </div>
+          <div class="stack-do">
+            <h4 class="stack-label">DuDuClaw OS 怎麼做</h4>
+            <ul>
+              <li>gateway 是 systemd 服務，首次開機自動 provision，區網公告 <code>duduclaw.local</code>。</li>
+              <li>OS 更新由 gateway 自己下載、驗簽、寫進另一個 A/B 槽；一份 manifest 一把簽章，開不起來自動回滾。</li>
+              <li>需要 root 的六件事（重開機、關機、套用更新、恢復原廠設定等）交給獨立小 daemon <code>duduclaw-sysd</code>，Unix socket 加 peer-credential 驗證，只認六個固定指令。</li>
+              <li>gateway 與 compositor 跑在不同使用者底下；<code>/data/duduclaw</code> 是 gateway 真正的家，十套 CLI 的憑證與本機模型都在那裡，更新不洗掉。</li>
+            </ul>
+          </div>
+          <div class="stack-vs">
+            <h4 class="stack-label">一般 Linux 裝 gateway</h4>
+            <p class="stack-vs-line">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-minus"></use></svg>
+              <span>agent 要 sudo 才能碰系統，權限要嘛整包給、要嘛什麼都做不了。</span>
+            </p>
+          </div>
+        </div>
+
+        <div class="stack-row">
+          <div class="stack-id">
+            <span class="stack-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+            <h3>信任邊界</h3>
+            <p class="stack-role">為「AI 是操作者」畫的線</p>
+          </div>
+          <div class="stack-do">
+            <h4 class="stack-label">DuDuClaw OS 怎麼做</h4>
+            <ul>
+              <li>唯讀 root，預設所有連入連接埠關閉，SSH 出廠關閉。</li>
+              <li>共駕是每個 agent 各自的 capability，預設關閉、fail-closed。</li>
+              <li>發送、購買、刪除、授權先開審批卡；登入、密碼、付款 agent 主動把桌面交還給人，網路銀行與 CAPTCHA 在拒絕清單上。</li>
+              <li>從螢幕或 accessibility tree 讀到的文字一律先當資料處理，密碼欄位不讀；每個事件落 JSONL 稽核。</li>
+            </ul>
+          </div>
+          <div class="stack-vs">
+            <h4 class="stack-label">一般 Linux 裝 gateway</h4>
+            <p class="stack-vs-line">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-minus"></use></svg>
+              <span>agent 跑在你的帳號底下，能做的就是你能做的全部。</span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <p class="stack-foot reveal">這四層都在 v0.2.0 映像裡；共駕預設關閉，真機驗證見上方狀態卡。</p>
+    </div>
+  </section>
+
+  <!-- shadow workspace -->
+  <section class="section" id="shadow">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">一台機器 兩個工作區</span>
+        <h2>你的遊戲照打 agent 的事照做</h2>
+        <p>agent 的 GUI 工作預設不在你的螢幕上發生。它有自己的影子輸出，你的視窗、焦點與游標都不受影響；想看就開一個小小的子母畫面，看影片、打遊戲、開會都照常。</p>
+      </div>
+
+      <figure class="shadow-fig reveal">
+        <div class="shadow-diagram">
+
+          <!-- Left: the human's screen. Wireframes only, no product UI. -->
+          <div class="shadow-screen" data-screen="you">
+            <p class="shadow-screen-title">你的螢幕</p>
+            <div class="shadow-stage">
+              <div class="shadow-window">
+                <div class="shadow-window-bar">
+                  <span class="shadow-tab">Steam</span>
+                  <span class="shadow-tab">影片</span>
+                  <span class="shadow-tab">瀏覽器</span>
+                </div>
+                <div class="shadow-window-body" aria-hidden="true">
+                  <span class="shadow-bar"></span>
+                  <span class="shadow-bar"></span>
+                  <span class="shadow-bar"></span>
+                </div>
+                <svg class="shadow-cursor shadow-cursor-you" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 3l13.4 8.2-6 1.4-2.5 5.9z"/></svg>
+              </div>
+              <div class="shadow-pip-row">
+                <span class="shadow-pip-label">子母畫面：影子工作區預覽</span>
+                <span class="shadow-pip" aria-hidden="true">
+                  <span class="shadow-bar"></span>
+                  <span class="shadow-bar"></span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- The compositor sits between the two outputs and owns the brake. -->
+          <div class="shadow-divider">
+            <span class="shadow-divider-line" aria-hidden="true"></span>
+            <span class="shadow-chip"><code>duduclaw-comp</code></span>
+            <p class="shadow-divider-note">你一碰鍵盤滑鼠，agent 的 seat 在 3 至 4 ms 內凍結</p>
+            <span class="shadow-divider-line" aria-hidden="true"></span>
+            <svg class="shadow-divider-arrow" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
+          </div>
+
+          <!-- Right: the headless shadow output the agent works on. -->
+          <div class="shadow-screen" data-screen="agent">
+            <p class="shadow-screen-title">影子輸出 <code>duduclaw-shadow-0</code></p>
+            <div class="shadow-stage">
+              <div class="shadow-browser" aria-hidden="true">
+                <span class="shadow-browser-bar"></span>
+                <span class="shadow-form">
+                  <span class="shadow-field"></span>
+                  <span class="shadow-field"></span>
+                  <span class="shadow-field"></span>
+                  <span class="shadow-button">
+                    <svg class="shadow-cursor shadow-cursor-agent" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 7.5v9M7.5 12h9"/></svg>
+                  </span>
+                </span>
+              </div>
+              <span class="shadow-tag">agent 在這裡工作</span>
+            </div>
+          </div>
+
+        </div>
+        <figcaption class="sr-only">示意圖：左邊是你的螢幕，一個開著 Steam、影片與瀏覽器的大視窗，右下角有一個小小的子母畫面預覽，你的游標是藍色箭頭；右邊是影子輸出 duduclaw-shadow-0，agent 用黃色方形游標在一個瀏覽器表單上工作；兩者之間是 compositor duduclaw-comp 的分隔線。</figcaption>
+      </figure>
+
+      <div class="grid grid-3 shadow-points reveal">
+        <article class="card">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-shadow-out"></use></svg></span>
+          <h3>影子輸出</h3>
+          <p>GUI 任務預設落在無頭的第二輸出。聊天回覆、目標迴圈、排程工作與型別化工具更是連桌面都不碰。</p>
+        </article>
+        <article class="card">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-pip"></use></svg></span>
+          <h3>子母畫面旁觀</h3>
+          <p>想盯著就把預覽拉出來；把它拉到前台就進入共駕，螢幕會出現琥珀色邊框，接手時轉成暗紅色。</p>
+        </article>
+        <article class="card">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-hand"></use></svg></span>
+          <h3>人永遠優先</h3>
+          <p>實體鍵盤滑鼠的任何事件都先讓 agent 的 seat 凍結，指令直接丟棄不排隊。Super+Enter 交還，Super+Esc 急停，兩者都由 compositor 持有。</p>
+        </article>
+      </div>
+
+      <p class="shadow-foot reveal">影子工作區與共駕已編譯進 v0.2.0，預設關閉，每個 agent 各自開啟；凍結、交還、急停已用真實輸入事件在容器與 QEMU 驗證，真機尚未。Steam、Chromium、LibreOffice 以 Flatpak 預載；桌面目前走 llvmpipe 軟體渲染，GPU 加速尚未接上，重度 3D 遊戲請等硬體加速那一版。</p>
+    </div>
+  </section>
+
+  <!-- why -->
+  <section class="section section-alt" id="why">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">日常維運</span>
+        <h2>自己裝一套 Linux 再裝 duduclaw 當然可以</h2>
+        <p>底層的差別講完了，這一段講維運：放在櫃台後面當值班機、或交給沒有工程師的客戶，更新、回滾、防竄改與首次設定就全得自己處理。DuDuClaw OS 把這些做進映像。</p>
+      </div>
+      <div class="table-shell reveal">
+        <div class="table-scroll">
+        <table class="table-compare">
+          <caption class="sr-only">自己裝 Linux 加 duduclaw 與 DuDuClaw OS 的六項對照</caption>
+          <thead>
+            <tr><th scope="col">需求</th><th scope="col">自己裝 Linux ＋ duduclaw</th><th scope="col">DuDuClaw OS</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">首次設定</th>
+              <td class="col-old">
+                <details class="cell-detail" open>
+                  <summary>自己裝 Linux ＋ duduclaw</summary>
+                  <p>SSH 進去手動改設定</p>
+                </details>
+              </td>
+              <td class="col-new">首次開機自動 provision，管理後台直接出現在區網</td>
+            </tr>
+            <tr>
+              <th scope="row">系統更新</th>
+              <td class="col-old">
+                <details class="cell-detail" open>
+                  <summary>自己裝 Linux ＋ duduclaw</summary>
+                  <p>套件管理器，失敗要自己救</p>
+                </details>
+              </td>
+              <td class="col-new">A/B 雙槽原子更新，開機失敗自動回滾</td>
+            </tr>
+            <tr>
+              <th scope="row">防竄改</th>
+              <td class="col-old">
+                <details class="cell-detail" open>
+                  <summary>自己裝 Linux ＋ duduclaw</summary>
+                  <p>自行設定</p>
+                </details>
+              </td>
+              <td class="col-new">唯讀 root（桌面版出貨預設）；dm-verity 逐塊驗證已接好，由建置 overlay 啟用，v0.2.0 未啟用</td>
+            </tr>
+            <tr>
+              <th scope="row">人與 AI 共用一台機器</th>
+              <td class="col-old">
+                <details class="cell-detail" open>
+                  <summary>自己裝 Linux ＋ duduclaw</summary>
+                  <p>各開各的視窗，互不知情</p>
+                </details>
+              </td>
+              <td class="col-new">桌面殼內建交辦列（Cmd+K）；agent 的 GUI 工作預設在影子工作區跑，不碰你的視窗與游標；你一動鍵盤滑鼠，正在你桌面上操作的 agent 立刻凍結</td>
+            </tr>
+            <tr>
+              <th scope="row">AI 工具鏈</th>
+              <td class="col-old">
+                <details class="cell-detail" open>
+                  <summary>自己裝 Linux ＋ duduclaw</summary>
+                  <p>一家一家 <code>npm install -g</code>，換機重來</p>
+                </details>
+              </td>
+              <td class="col-new">十套廠商 CLI 直接在映像裡，開機即可用；憑證存在 <code>/data</code>，系統更新不會被洗掉</td>
+            </tr>
+            <tr>
+              <th scope="row">離線推理</th>
+              <td class="col-old">
+                <details class="cell-detail" open>
+                  <summary>自己裝 Linux ＋ duduclaw</summary>
+                  <p>自己編 llama.cpp、自己寫 service</p>
+                </details>
+              </td>
+              <td class="col-new">內建 llama.cpp <code>llama-server</code>；模型從管理後台一鍵下載到 <code>/data/duduclaw/models</code>，斷網也能交辦</td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- features -->
+  <section class="section cv-auto" id="features">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">映像裡有什麼</span>
+        <h2>出廠就備好的九件事</h2>
+        <p>基座是 Yocto Project 6.0 「wrynose」LTS 與 Linux 6.18，只針對 x86-64（x86-64-v3）建置。</p>
+      </div>
+      <div class="grid grid-3">
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-refresh"></use></svg></span>
+          <h3>A/B 原子更新與回滾</h3>
+          <p>系統有兩個槽，更新寫進沒在用的那一槽，重開機才切換。新槽開不起來就自動切回舊槽，不會停在半更新的狀態。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-lock"></use></svg></span>
+          <h3>唯讀 root</h3>
+          <p>桌面版出貨預設把系統分割區掛成唯讀，你的資料、設定與 AI 憑證寫在獨立的 <code>/data</code>，系統更新不會清掉。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-monitor"></use></svg></span>
+          <h3>自家 compositor 與桌面殼</h3>
+          <p>Wayland compositor <code>duduclaw-comp</code> 加上桌面殼 <code>duduclaw-shell</code>：首頁、視窗切換、鎖定畫面、控制中心、通知中心。搭配 PipeWire 與 XWayland。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-command"></use></svg></span>
+          <h3>Cmd+K 交辦列</h3>
+          <p>在任何 app 上按下去（OS 殼上顯示為 Super）都能叫出交辦列，第一個結果永遠是交辦給 AI 員工，進度回到首頁看。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-columns"></use></svg></span>
+          <h3>影子工作區與人優先</h3>
+          <p>agent 有自己的輸入 seat，GUI 任務預設在影子工作區跑；你一碰鍵盤滑鼠，compositor 層立刻凍結它。細節見上方「你的遊戲照打 agent 的事照做」。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
+          <h3>十套 AI CLI 內建</h3>
+          <p><code>claude</code>、<code>codex</code>、<code>gemini</code>、<code>qwen</code>、<code>kimi</code>、<code>copilot</code>、<code>grok</code>、<code>agent</code>（Cursor）、<code>opencode</code>、<code>vibe</code> 都在映像裡，登入即用。憑證統一存在 <code>/data/duduclaw</code>。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
+          <h3>本機推理 llama.cpp</h3>
+          <p>內建 <code>llama-server</code>，權重不進映像，由管理後台下載到 <code>/data/duduclaw/models</code>。斷網的時候也能交辦。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-package"></use></svg></span>
+          <h3>Flatpak 離線倉庫與注音</h3>
+          <p>Chromium 與 LibreOffice 從 Launcher 一鍵安裝，不需要網路；其他軟體走 Flathub。輸入法是 fcitx5 注音。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-grid"></use></svg></span>
+          <h3>app 相容層</h3>
+          <p>Bottles 跑 Windows 桌面程式，KVM 虛擬機加 RDP 跑完整 Windows，Waydroid 跑 Android（不含 GApps）。macOS 程式不在支援範圍。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- desktop -->
+  <section class="section section-alt cv-auto" id="desktop">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">桌面</span>
+        <h2>這台機器長什麼樣子</h2>
+        <p>以下六張都是 DuDuClaw OS v0.2.0 在 QEMU 上的實際畫面。</p>
+      </div>
+
+      <div class="tablist" role="tablist" aria-label="桌面畫面">
+        <button role="tab" id="tab-home-light" aria-controls="panel-home-light" aria-selected="true" type="button">首頁（淺色）</button>
+        <button role="tab" id="tab-home-dark" aria-controls="panel-home-dark" aria-selected="false" type="button">首頁（深色）</button>
+        <button role="tab" id="tab-launcher" aria-controls="panel-launcher" aria-selected="false" type="button">Launcher</button>
+        <button role="tab" id="tab-lock" aria-controls="panel-lock" aria-selected="false" type="button">鎖定畫面</button>
+        <button role="tab" id="tab-oobe" aria-controls="panel-oobe" aria-selected="false" type="button">AI Runtime 授權</button>
+        <button role="tab" id="tab-installer" aria-controls="panel-installer" aria-selected="false" type="button">安裝精靈</button>
+      </div>
+
+      <div class="tabpanel" id="panel-home-light" role="tabpanel" aria-labelledby="tab-home-light" tabindex="0">
+        <div class="frame">
+          <picture>
+            <source type="image/avif" srcset="assets/screens/home-desktop.avif">
+            <source type="image/webp" srcset="assets/screens/home-desktop.webp">
+            <img src="assets/screens/home-desktop.png" alt="淺色主題的 DuDuClaw OS 首頁，頂端選單列寫著「目前沒有待你核准的項目」，中央是交辦輸入框與整理 Q3 報表、清理收件匣、排明天的行程三個建議，底部是 Dock" width="1280" height="800" loading="lazy" decoding="async">
+          </picture>
+        </div>
+        <p class="caption">開機第一眼就是交辦列。上面是待核准提示，中間是輸入框與常用交辦，下面是進行中的任務與 Dock。</p>
+      </div>
+
+      <div class="tabpanel" id="panel-home-dark" role="tabpanel" aria-labelledby="tab-home-dark" tabindex="0" hidden>
+        <div class="frame">
+          <picture>
+            <source type="image/avif" srcset="assets/screens/home-dark.avif">
+            <source type="image/webp" srcset="assets/screens/home-dark.webp">
+            <img src="assets/screens/home-dark.png" alt="深色主題的 DuDuClaw OS 首頁，交辦輸入框下方三張任務卡分別標示等你決定、進行中、已完成，最下方一列今日摘要" width="1280" height="800" loading="lazy" decoding="async">
+          </picture>
+        </div>
+        <p class="caption">同一個首頁的深色主題。任務卡顯示每件事跑到第幾輪、由哪位 AI 員工負責、目前狀態，最下面一列是今日摘要。</p>
+      </div>
+
+      <div class="tabpanel" id="panel-launcher" role="tabpanel" aria-labelledby="tab-launcher" tabindex="0" hidden>
+        <div class="frame">
+          <picture>
+            <source type="image/avif" srcset="assets/screens/launcher.avif">
+            <source type="image/webp" srcset="assets/screens/launcher.webp">
+            <img src="assets/screens/launcher.png" alt="Launcher 搜尋面板，第一組結果是「交辦給 總管助理」，下面依序列出應用程式、可安裝的瀏覽器與 Bottles、以及檔案分類" width="1280" height="800" loading="lazy" decoding="async">
+          </picture>
+        </div>
+        <p class="caption">按 Super+K 叫出來，第一個結果永遠是交辦給 AI 員工，往下才是應用程式、可安裝項目與檔案。</p>
+      </div>
+
+      <div class="tabpanel" id="panel-lock" role="tabpanel" aria-labelledby="tab-lock" tabindex="0" hidden>
+        <div class="frame">
+          <picture>
+            <source type="image/avif" srcset="assets/screens/lock-screen.avif">
+            <source type="image/webp" srcset="assets/screens/lock-screen.webp">
+            <img src="assets/screens/lock-screen.png" alt="鎖定畫面，大時鐘與日期下方一張摘要卡寫著「你離開的 2 分鐘」與「目前沒有待你核准的項目」，再往下是解鎖圖示與密碼欄" width="1280" height="800" loading="lazy" decoding="async">
+          </picture>
+        </div>
+        <p class="caption">鎖著的時候也看得到值班摘要：你離開多久、有沒有待你核准的項目。</p>
+      </div>
+
+      <div class="tabpanel" id="panel-oobe" role="tabpanel" aria-labelledby="tab-oobe" tabindex="0" hidden>
+        <div class="frame">
+          <picture>
+            <source type="image/avif" srcset="assets/screens/oobe-ai-runtimes.avif">
+            <source type="image/webp" srcset="assets/screens/oobe-ai-runtimes.webp">
+            <img src="assets/screens/oobe-ai-runtimes.png" alt="首次設定精靈的 AI Runtime 授權頁，逐列列出 Claude Code、Codex、Gemini CLI、Grok、Qwen Code，每列都有輸入 API 金鑰與登入帳號按鈕" width="1280" height="800" loading="lazy" decoding="async">
+          </picture>
+        </div>
+        <p class="caption">首次設定精靈的其中一步。登入既有帳號或貼上 API 金鑰都可以，一家都不設也能先略過，之後在管理後台補。</p>
+      </div>
+
+      <div class="tabpanel" id="panel-installer" role="tabpanel" aria-labelledby="tab-installer" tabindex="0" hidden>
+        <div class="frame">
+          <picture>
+            <source type="image/avif" srcset="assets/screens/installer-language.avif">
+            <source type="image/webp" srcset="assets/screens/installer-language.webp">
+            <img src="assets/screens/installer-language.png" alt="安裝精靈的語言選擇頁，標題以繁體中文、English、日本語三種語言並列，下方三個語言選項卡片與底部的繼續按鈕" width="1280" height="800" loading="lazy" decoding="async">
+          </picture>
+        </div>
+        <p class="caption">安裝器 ISO 開機後的第一步。安裝精靈提供繁體中文、English、日本語三種顯示語言。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- timeline -->
+  <section class="section cv-auto" id="start">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">從開機到上工</span>
+        <h2>四個步驟</h2>
+        <p><span class="pill pill-accent">安裝 8 分鐘</span> 從插上 USB 到交辦第一件事，中間不需要開終端機。</p>
+      </div>
+      <div class="steps">
+        <div class="step reveal">
+          <h3>燒錄</h3>
+          <p>下載安裝器 ISO 或整碟映像，用 minisign 與 SHA-256 驗簽之後寫進 USB 或硬碟。</p>
+        </div>
+        <div class="step reveal">
+          <h3>首次設定精靈</h3>
+          <p>語言、帳號、主題、Wi-Fi 在圖形精靈裡一路點完，不必開終端機。</p>
+        </div>
+        <div class="step reveal">
+          <h3>登入 AI 廠商</h3>
+          <p>在 AI Runtime 授權頁登入既有帳號或貼上 API 金鑰。憑證存在 <code>/data/duduclaw</code>，系統更新不會清掉。</p>
+        </div>
+        <div class="step reveal">
+          <h3>交辦第一件事</h3>
+          <p>按 Super+K 叫出交辦列，描述你要的事，AI 員工排隊接手，進度回到首頁看。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- hardware -->
+  <section class="section section-alt cv-auto" id="hardware">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">硬體</span>
+        <h2>我的機器能跑嗎</h2>
+        <p>三個硬性條件都符合才裝得起來。DuDuClaw OS 只建置 x86-64（x86-64-v3 tune）。</p>
+      </div>
+
+      <div class="grid grid-3">
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
+          <h3>x86-64 CPU 且支援 AVX2</h3>
+          <p>Intel Haswell（2013 年）以後、Intel N100 / N200 / N305、AMD Excavator（2015 年）以後與 Zen 全系都符合。</p>
+          <p style="margin-top:10px"><span class="pill pill-warn">不支援 arm64</span></p>
+          <p style="margin-top:10px">Apple Silicon、樹莓派與 ARM 迷你主機都不能用。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-power"></use></svg></span>
+          <h3>UEFI 開機</h3>
+          <p>純 legacy BIOS 的機器不在支援範圍。v0.2.0 映像未簽章，開機前要在韌體裡關閉 Secure Boot。</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-disk"></use></svg></span>
+          <h3>SSD</h3>
+          <p>A/B 雙槽佈局會同時放兩份系統，機械硬碟的隨機讀寫撐不住日常使用。</p>
+        </article>
+      </div>
+
+      <div class="table-shell reveal" style="margin-top:28px">
+        <div class="table-scroll">
+        <table class="table-cards">
+          <caption>三種配置的建議規格</caption>
+          <thead>
+            <tr><th scope="col">配置</th><th scope="col">CPU</th><th scope="col">記憶體</th><th scope="col">硬碟</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">最低</th><td data-label="CPU">支援 AVX2 的 x86-64</td><td data-label="記憶體">4 GB</td><td data-label="硬碟">64 GB SSD</td></tr>
+            <tr><th scope="row">建議</th><td data-label="CPU">Intel N100 / N305 或 Ryzen 5</td><td data-label="記憶體">8 GB</td><td data-label="硬碟">128 GB SSD</td></tr>
+            <tr><th scope="row">舒適（遊戲、本機 LLM）</th><td data-label="CPU">Ryzen 7 8845HS</td><td data-label="記憶體">16 GB 以上</td><td data-label="硬碟">256 GB SSD 以上</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+      <p class="caption" style="margin-top:12px;color:var(--muted);font-size:14.5px">不需要獨立顯示卡，目前的桌面走 llvmpipe 軟體渲染。</p>
+
+      <div class="table-shell reveal" style="margin-top:28px">
+        <div class="table-scroll">
+        <table class="table-cards">
+          <caption>推薦機型</caption>
+          <thead>
+            <tr><th scope="col">定位</th><th scope="col">機型</th><th scope="col">備註</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">入門</th><td data-label="機型">Intel N100 迷你主機（Beelink、GMKtec）</td><td data-label="備註">約 NT$4,000 至 6,000，無風扇</td></tr>
+            <tr><th scope="row">均衡</th><td data-label="機型">Beelink SER 系列（Ryzen）、Intel NUC</td><td data-label="備註">日常使用與多開都夠</td></tr>
+            <tr><th scope="row">目標機</th><td data-label="機型">Intel N305 或 AMD Ryzen 7 8845HS 迷你主機</td><td data-label="備註">專案的參考機種</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      <p style="margin-top:24px">
+        <a class="btn btn-ghost" href="docs/guides/hardware-requirements/">
+          硬體需求指南
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-arrow"></use></svg>
+        </a>
+      </p>
+    </div>
+  </section>
+
+  <!-- trust chain -->
+  <section class="section cv-auto" id="trust">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">信任鏈</span>
+        <h2>出貨即有與尚未啟用</h2>
+        <p>這一段照實列。v0.2.0 出貨的映像有哪些保護、哪些只是接好了程式碼但沒啟用，分開講。</p>
+      </div>
+      <div class="grid grid-2">
+        <article class="card reveal">
+          <h3 style="display:flex;align-items:center;gap:8px">
+            <svg class="icon" style="color:var(--success)" aria-hidden="true"><use href="#i-shield"></use></svg>
+            出貨即有
+          </h3>
+          <ul class="checklist" style="margin-top:12px">
+            <li>
+              <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
+              <span><strong>A/B 原子更新與自動回滾</strong>更新寫進另一槽，開機失敗自動切回舊槽。</span>
+            </li>
+            <li>
+              <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
+              <span><strong>唯讀 root（桌面版）</strong>系統分割區掛成唯讀，資料寫在獨立的 <code>/data</code>。</span>
+            </li>
+            <li>
+              <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
+              <span><strong>發布產物 minisign 簽章</strong>六個資產同一把公鑰，燒錄前可以自己驗。</span>
+            </li>
+          </ul>
+        </article>
+        <article class="card reveal">
+          <h3 style="display:flex;align-items:center;gap:8px">
+            <svg class="icon" style="color:var(--warning)" aria-hidden="true"><use href="#i-clock"></use></svg>
+            已接好但 v0.2.0 未啟用
+          </h3>
+          <ul class="checklist" style="margin-top:12px">
+            <li>
+              <svg class="icon pending" aria-hidden="true"><use href="#i-clock"></use></svg>
+              <span><strong>Secure Boot 自簽與雙簽 UKI</strong>由建置 overlay 啟用；官方映像未簽章，開機需關閉 Secure Boot。</span>
+            </li>
+            <li>
+              <svg class="icon pending" aria-hidden="true"><use href="#i-clock"></use></svg>
+              <span><strong>dm-verity 逐塊驗證</strong>程式碼路徑已完成，由建置 overlay 啟用。</span>
+            </li>
+            <li>
+              <svg class="icon pending" aria-hidden="true"><use href="#i-clock"></use></svg>
+              <span><strong>TPM2 加 LUKS 磁碟金鑰</strong>部分完成，屬於建置 overlay 選項。</span>
+            </li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="card reveal" style="margin-top:20px">
+        <h3 style="display:flex;align-items:center;gap:8px">
+          <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
+          minisign 公鑰
+        </h3>
+        <p style="margin-bottom:14px">所有 v0.2.0 資產都用這一把簽。公鑰釘死在這裡，換版本不會換。</p>
+        <div class="code key-block">
+          <button class="copy-btn" type="button" data-copy="minisign-key">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
+            <span data-copy-label>複製</span>
+          </button>
+          <pre><code id="minisign-key">RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- download teaser -->
+  <section class="section section-alt cv-auto" id="editions">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">下載</span>
+        <h2>兩種版本</h2>
+        <p>兩種都提供圖形安裝精靈的 ISO；桌面版另外提供可以直接寫進整碟的映像。</p>
+      </div>
+      <div class="grid grid-2">
+        <article class="card edition reveal">
+          <div>
+            <h3>桌面版</h3>
+            <p class="persona">日常主力機，人和 AI 共用</p>
+          </div>
+          <ul>
+            <li>A/B 更新鏈與桌面殼</li>
+            <li>Chromium、LibreOffice、Steam 的 Flatpak 預載</li>
+            <li>注音輸入法與 app 相容層</li>
+            <li>唯讀 root 與防火牆</li>
+            <li>十套 AI CLI 與 llama.cpp</li>
+          </ul>
+          <a class="btn btn-primary btn-block" href="download.html#assets">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+            看桌面版資產
+          </a>
+        </article>
+        <article class="card edition reveal">
+          <div>
+            <h3>基礎版</h3>
+            <p class="persona">無頭 gateway 值班機，接不接螢幕都行</p>
+          </div>
+          <ul>
+            <li>同樣的 A/B 佈局與桌面殼</li>
+            <li>gateway 管理後台</li>
+            <li>沒有應用層與 app 相容層</li>
+            <li>沒有唯讀 root 與防火牆</li>
+            <li>屬於 bring-up 產物</li>
+          </ul>
+          <a class="btn btn-ghost btn-block" href="download.html#assets">看基礎版資產</a>
+        </article>
+      </div>
+      <p style="margin-top:20px;color:var(--muted)">管理後台由 gateway 提供，接不接螢幕都能從區網的瀏覽器操作 <code>http://duduclaw.local</code>。</p>
+    </div>
+  </section>
+
+  <!-- docs -->
+  <section class="section cv-auto" id="docs">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">文件與回報</span>
+        <h2>想再深入一點</h2>
+        <p>OS 本身的說明在 DuDuClaw-OS repo，平台功能的說明在 DuDuClaw repo。</p>
+      </div>
+      <div class="linkgrid reveal">
+        <a class="linkcard" href="docs/os/readme/">
+          <svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>
+          <span><b>OS README</b><small>專案總覽、映像內容與建置方式</small></span>
+        </a>
+        <a class="linkcard" href="docs/">
+          <svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>
+          <span><b>文件索引</b><small>OS repo 的文件導覽頁</small></span>
+        </a>
+        <a class="linkcard" href="docs/os/changelog/">
+          <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
+          <span><b>CHANGELOG</b><small>每個版本改了什麼</small></span>
+        </a>
+        <a class="linkcard" href="docs/os/guides/ai-runtimes/">
+          <svg class="icon" aria-hidden="true"><use href="#i-terminal"></use></svg>
+          <span><b>AI runtimes 指南</b><small>十套 CLI 怎麼打包、哪些沒內建</small></span>
+        </a>
+        <a class="linkcard" href="docs/features/50-duduclaw-os-appliance/">
+          <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
+          <span><b>值班機說明</b><small>平台文件 50</small></span>
+        </a>
+        <a class="linkcard" href="docs/features/51-os-keyboard-shortcuts/">
+          <svg class="icon" aria-hidden="true"><use href="#i-command"></use></svg>
+          <span><b>鍵盤快捷鍵</b><small>平台文件 51</small></span>
+        </a>
+        <a class="linkcard" href="docs/features/52-desktop-edition/">
+          <svg class="icon" aria-hidden="true"><use href="#i-monitor"></use></svg>
+          <span><b>桌面版說明</b><small>平台文件 52</small></span>
+        </a>
+        <a class="linkcard" href="docs/features/53-local-models/">
+          <svg class="icon" aria-hidden="true"><use href="#i-cpu"></use></svg>
+          <span><b>本機模型</b><small>平台文件 53</small></span>
+        </a>
+        <a class="linkcard" href="docs/guides/hardware-requirements/">
+          <svg class="icon" aria-hidden="true"><use href="#i-disk"></use></svg>
+          <span><b>硬體需求</b><small>能不能跑、買哪一台</small></span>
+        </a>
+        <a class="linkcard" href="docs/guides/app-compat/">
+          <svg class="icon" aria-hidden="true"><use href="#i-grid"></use></svg>
+          <span><b>app 相容層</b><small>Windows、Android 程式怎麼跑</small></span>
+        </a>
+        <a class="linkcard" href="https://github.com/zhixuli0406/DuDuClaw-OS/issues" rel="noopener">
+          <svg class="icon" aria-hidden="true"><use href="#i-github"></use></svg>
+          <span><b>GitHub Issues</b><small>回報問題與追蹤進度</small></span>
+        </a>
+        <a class="linkcard" href="docs/os/security/">
+          <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+          <span><b>SECURITY.md</b><small>安全性問題的回報方式</small></span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- cta -->
+  <section class="cta">
+    <img class="cta-cat" src="assets/brand/duduclaw-cat.svg" alt="" aria-hidden="true" width="135" height="262">
+    <div class="wrap cta-inner">
+      <h2>AI 員工的值班機</h2>
+      <p>十套 AI CLI 內建，登入即用。離線也能想：內建 llama.cpp，模型一鍵下載。</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="download.html">
+          <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+          下載 v0.2.0
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener">
+          <svg class="icon" aria-hidden="true"><use href="#i-github"></use></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer cv-auto">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="index.html">
+          <img src="assets/brand/duduclaw-mark-circle.svg" alt="" width="28" height="28">
+          <span>DuDuClaw OS</span>
+        </a>
+        <p>AI agent 為原生住民的 Linux 作業系統，基座是 Yocto Project 6.0 「wrynose」。</p>
+      </div>
+      <div>
+        <h4>專案</h4>
+        <ul>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases" rel="noopener">Releases</a></li>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw-OS/blob/main/CHANGELOG.md" rel="noopener">CHANGELOG</a></li>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw-OS/blob/main/LICENSE" rel="noopener">Apache-2.0 授權</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>文件</h4>
+        <ul>
+          <li><a href="docs/os/readme/">OS README</a></li>
+          <li><a href="docs/">文件索引</a></li>
+          <li><a href="docs/os/guides/ai-runtimes/">AI runtimes 指南</a></li>
+          <li><a href="docs/os/security/">SECURITY.md</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>平台</h4>
+        <ul>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw" rel="noopener">DuDuClaw</a></li>
+          <li><a href="docs/guides/hardware-requirements/">硬體需求</a></li>
+          <li><a href="docs/guides/app-compat/">app 相容層</a></li>
+          <li><a href="download.html">下載</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="footer-legal">© 2026 嘟嘟數位科技有限公司 · DuDuClaw OS 以 Apache License 2.0 釋出 · Linux® 是 Linus Torvalds 的註冊商標</p>
+  </div>
+</footer>
+
+<script src="assets/js/site.js"></script>
+<script src="assets/js/hero-shader.js" defer></script>
+<script src="assets/js/freeze-demo.js" defer></script>
+<!-- The mascot is two WebGL modules over the inline SVG, never instead of
+     it: the SVG is what no-JS, no-WebGL and reduced-motion visitors keep.
+     hero-cat.js owns both and hands the box from one to the other. -->
+<script type="module" src="assets/js/hero-cat.js"></script>
+</body>
+</html>

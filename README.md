@@ -121,7 +121,7 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 前置需求：
 
 - Docker。Yocto 建置在 `duduclaw-yocto-builder` 容器裡跑（macOS 沒有原生 bitbake）。
-- 平台 repo 的 sibling checkout。只有要重整 vendored 快照時才需要（整套對齊用 `scripts/sync-platform.sh <平台版本>`，見 `docs/guides/platform-sync.md`；單一 recipe 用 `meta-duduclaw/recipes-duduclaw/duduclaw-cli/refresh-src.sh`，路徑可用 `DUDUCLAW_CLI_SRC_ROOT` 覆寫）。
+- 平台 repo 的 sibling checkout。只有要重整 vendored 快照時才需要（整套對齊用 `scripts/sync-platform.sh <平台版本>`，見 `docs/guides/platform-sync.md`；單一 recipe 用 `meta-duduclaw/recipes-duduclaw/duduclaw-cli/refresh-src.sh`，路徑可用 `DUDUCLAW_CLI_SRC_ROOT` 覆寫）。`duduclaw-comp`／`duduclaw-shell` 的快照來源是本 repo 的 `crates/`，不需要平台 checkout。
 - `minisign` 與 `gh`，簽章與發布用。
 
 ```bash
@@ -141,6 +141,7 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 | 路徑 | 內容 |
 |---|---|
 | `meta-duduclaw/` | Yocto layer（distro、machine、image、`duduclaw-*` recipe、kas 設定） |
+| `crates/` | OS 自有的 Rust crate：`duduclaw-comp`（smithay compositor）、`duduclaw-shell`（gpui 殼）、`duduclaw-native-gui`（shell 的 path 依賴）。2026-09-29 自平台 repo 搬入（它們本來就是平台 workspace `exclude` 的獨立 crate），各自 detached `Cargo.lock`，recipe 以 `refresh-src.sh` 從這裡快照 |
 | `scripts/release-os.sh` | `build → smoke → package → publish` 產線 |
 | `VERSION` | OS 的獨立 release 版號 |
 | `docs/` | 公開文件，依類型分子目錄，索引在 `docs/README.md` |

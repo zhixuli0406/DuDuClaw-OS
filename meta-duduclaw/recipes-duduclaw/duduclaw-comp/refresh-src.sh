@@ -7,23 +7,25 @@
 # Straight copy + Cargo.lock prune only.
 set -euo pipefail
 
-# Cross-repo source resolution (2026-09-05, same contract as duduclaw-cli's
-# refresh-src.sh): the Rust workspace lives in the DuDuClaw platform repo,
-# not here. DUDUCLAW_CLI_SRC_ROOT overrides; otherwise try the monorepo
-# layout (this script three levels below a checkout that has crates/) and
-# fall back to a sibling checkout named DuDuClaw next to this OS repo.
+# Source resolution (rewritten 2026-09-29): the three gpui/smithay crates
+# (duduclaw-comp among them) moved OUT of the DuDuClaw platform repo into this OS
+# repo's own crates/ (2026-09-29 feature audit, S16-B) -- they were always
+# `[workspace] exclude`d standalone cargo projects with their own Cargo.lock,
+# and nothing in the platform workspace depends on them. So REPO_ROOT is now
+# THIS repo (three levels above this script), not a sibling platform
+# checkout. DUDUCLAW_OS_SRC_ROOT overrides for a non-standard layout
+# (deliberately NOT DUDUCLAW_CLI_SRC_ROOT: sync-platform.sh exports that one
+# pointing at the PLATFORM checkout, which no longer holds these crates).
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${DUDUCLAW_CLI_SRC_ROOT:-}" ]]; then
-    REPO_ROOT="$DUDUCLAW_CLI_SRC_ROOT"
-elif [[ -d "$_SCRIPT_DIR/../../../crates" ]]; then
-    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." && pwd)"          # monorepo
+if [[ -n "${DUDUCLAW_OS_SRC_ROOT:-}" ]]; then
+    REPO_ROOT="$DUDUCLAW_OS_SRC_ROOT"
 else
-    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)/DuDuClaw"  # split: sibling checkout
+    REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." && pwd)"
 fi
-if [[ ! -d "$REPO_ROOT/crates" ]]; then
-    echo "refresh-src: platform workspace not found at $REPO_ROOT/crates" >&2
-    echo "  Check out github.com/zhixuli0406/DuDuClaw as 'DuDuClaw' next to this OS repo," >&2
-    echo "  or set DUDUCLAW_CLI_SRC_ROOT to its path. Refusing to touch the snapshot." >&2
+if [[ ! -f "$REPO_ROOT/crates/duduclaw-comp/Cargo.toml" ]]; then
+    echo "refresh-src: duduclaw-comp source not found at $REPO_ROOT/crates/duduclaw-comp" >&2
+    echo "  Since 2026-09-29 it lives in this OS repo's crates/ directory; set" >&2
+    echo "  DUDUCLAW_OS_SRC_ROOT only for a non-standard checkout. Refusing to touch the snapshot." >&2
     exit 1
 fi
 SRC_CRATE="$REPO_ROOT/crates/duduclaw-comp"

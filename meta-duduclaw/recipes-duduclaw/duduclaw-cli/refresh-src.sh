@@ -45,13 +45,17 @@ set -euo pipefail
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "${DUDUCLAW_CLI_SRC_ROOT:-}" ]]; then
     REPO_ROOT="$DUDUCLAW_CLI_SRC_ROOT"
-elif [[ -d "$_SCRIPT_DIR/../../../crates" ]]; then
+elif [[ -f "$_SCRIPT_DIR/../../../crates/duduclaw-cli/Cargo.toml" ]]; then
+    # Anchored on duduclaw-cli's manifest, not on crates/ existing: since
+    # 2026-09-29 this OS repo has its own crates/ (the gpui/smithay shell
+    # crates moved here), which must never be mistaken for the platform
+    # workspace this script vendors.
     REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." && pwd)"          # monorepo
 else
     REPO_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)/DuDuClaw"  # split: sibling checkout
 fi
-if [[ ! -d "$REPO_ROOT/crates" ]]; then
-    echo "ERROR: DuDuClaw platform source not found at $REPO_ROOT/crates" >&2
+if [[ ! -f "$REPO_ROOT/crates/duduclaw-cli/Cargo.toml" ]]; then
+    echo "ERROR: DuDuClaw platform source not found at $REPO_ROOT/crates/duduclaw-cli" >&2
     echo "  This OS repo vendors a snapshot of the DuDuClaw platform's Cargo" >&2
     echo "  workspace, which lives in a SEPARATE repo since the 2026-09 split." >&2
     echo "  Fix: check out the DuDuClaw platform repo as a sibling named" >&2

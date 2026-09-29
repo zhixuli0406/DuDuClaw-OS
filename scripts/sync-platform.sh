@@ -5,12 +5,16 @@
 #
 # What "one platform release" means here (決策 B, 2026-09-08 — same release
 # cadence as the platform, the OS keeps its own 0.x VERSION until GA):
-#   1. the four vendored snapshots (duduclaw-cli / -comp / -sysd / -shell,
-#      each recipe's own refresh-src.sh) are regenerated from a platform
-#      checkout that is AT that version;
+#   1. the two PLATFORM-vendored snapshots (duduclaw-cli / -sysd, each
+#      recipe's own refresh-src.sh) are regenerated from a platform checkout
+#      that is AT that version. duduclaw-comp / -shell are refreshed in the
+#      same pass but from THIS repo's own crates/ (the gpui/smithay crates
+#      moved here on 2026-09-29, platform feature audit S16-B) — they no
+#      longer follow the platform version;
 #   2. meta-duduclaw/conf/distro/include/duduclaw-platform-version.inc is
-#      bumped, and the four recipes are renamed <name>_<ver>.bb (PV) with the
-#      comments that cite those filenames updated;
+#      bumped, and the two platform recipes are renamed <name>_<ver>.bb (PV)
+#      with the comments that cite those filenames updated (comp / shell keep
+#      their own PV);
 #   3. CHANGELOG.md [Unreleased] gets a "### Changed" stub listing the platform
 #      commits that came along.
 #
@@ -63,11 +67,13 @@ if [[ ! -d "$SRC_ROOT/crates" || ! -f "$SRC_ROOT/Cargo.toml" ]]; then
     echo "  Check out github.com/zhixuli0406/DuDuClaw as 'DuDuClaw' next to this repo, or pass --src-root." >&2
     exit 1
 fi
-export DUDUCLAW_CLI_SRC_ROOT="$SRC_ROOT"   # every refresh-src.sh honours this
+export DUDUCLAW_CLI_SRC_ROOT="$SRC_ROOT"   # duduclaw-cli / -sysd refresh-src.sh honour this
+# duduclaw-comp / -shell read DUDUCLAW_OS_SRC_ROOT (default: this repo) — never the platform root.
 
 INC="$OS_ROOT/meta-duduclaw/conf/distro/include/duduclaw-platform-version.inc"
 RECIPES_DIR="$OS_ROOT/meta-duduclaw/recipes-duduclaw"
-RECIPES=(duduclaw-cli duduclaw-comp duduclaw-sysd duduclaw-shell)
+RECIPES=(duduclaw-cli duduclaw-sysd)               # vendored from the platform checkout
+OS_LOCAL_RECIPES=(duduclaw-comp duduclaw-shell)    # vendored from $OS_ROOT/crates/ (since 2026-09-29)
 OLD="$(sed -n 's/^DUDUCLAW_PLATFORM_VERSION = "\(.*\)"/\1/p' "$INC")"
 [[ -n "$OLD" ]] || { echo "sync-platform: cannot read DUDUCLAW_PLATFORM_VERSION from $INC" >&2; exit 1; }
 
@@ -100,13 +106,14 @@ fi
 lock_ver() { awk -v n="$2" '$0 == "name = \"" n "\"" { getline; sub(/^version = "/, ""); sub(/"$/, ""); print; exit }' "$1"; }
 manifest_ver() { awk '/^\[/{s=$0} (s=="[package]" || s=="[workspace.package]") && /^version = "/{gsub(/"/,"",$3); print $3; exit}' "$1"; }
 g3=0
+# These three crates live in THIS repo since 2026-09-29 (OS_ROOT, not SRC_ROOT).
 for c in duduclaw-shell duduclaw-comp duduclaw-native-gui; do
-    lock="$SRC_ROOT/crates/$c/Cargo.lock"; [[ -f "$lock" ]] || continue
-    for entry in duduclaw-shell duduclaw-comp duduclaw-native-gui duduclaw-core; do
+    lock="$OS_ROOT/crates/$c/Cargo.lock"; [[ -f "$lock" ]] || continue
+    for entry in duduclaw-shell duduclaw-comp duduclaw-native-gui; do
         lv="$(lock_ver "$lock" "$entry")"; [[ -n "$lv" ]] || continue
-        mv_="$(manifest_ver "$SRC_ROOT/crates/$entry/Cargo.toml")"
+        mv_="$(manifest_ver "$OS_ROOT/crates/$entry/Cargo.toml")"
         if [[ "$lv" != "$mv_" ]]; then
-            bad "crates/$c/Cargo.lock has $entry $lv but crates/$entry/Cargo.toml says $mv_ — run: (cd $SRC_ROOT/crates/$c && cargo metadata --offline --format-version 1 >/dev/null) and commit"; g3=1
+            bad "crates/$c/Cargo.lock has $entry $lv but crates/$entry/Cargo.toml says $mv_ — run: (cd $OS_ROOT/crates/$c && cargo metadata --offline --format-version 1 >/dev/null) and commit"; g3=1
         fi
     done
 done
@@ -141,15 +148,15 @@ fi
 if [[ $fail -ne 0 ]]; then echo "sync-platform: guards failed — nothing changed." >&2; exit 1; fi
 if [[ $CHECK -eq 1 ]]; then say "check: all guards pass for $OLD → $NEW (nothing changed)"; exit 0; fi
 
-# ── 1. Refresh the four snapshots ─────────────────────────────────────────
-for r in "${RECIPES[@]}"; do
+# ── 1. Refresh the snapshots (platform-vendored + OS-local) ───────────────
+for r in "${RECIPES[@]}" "${OS_LOCAL_RECIPES[@]}"; do
     say "==> refresh $r"
     bash "$RECIPES_DIR/$r/refresh-src.sh" 2>&1 | grep -E '^(Wrote|refresh-src:)' || true
 done
 
 # ── 2. crates.io dependency sets vs HEAD (→ *-crates.inc regeneration?) ───
 NEED_INC=()
-for r in "${RECIPES[@]}"; do
+for r in "${RECIPES[@]}" "${OS_LOCAL_RECIPES[@]}"; do
     lock="meta-duduclaw/recipes-duduclaw/$r/files/$r-src/Cargo.lock"
     diff_out="$(cd "$OS_ROOT" && python3 - "$lock" <<'PY'
 import subprocess, sys
@@ -183,9 +190,10 @@ if [[ "$OLD" != "$NEW" ]]; then
         fi
     done
     # comments that cite the recipe filenames / the DISTRO_VERSION example
+    # (only the two platform recipes: comp / shell keep their own PV)
     while IFS= read -r f; do
-        sed -i.bak -E "s/(duduclaw-(cli|comp|sysd|shell))_${OLD//./\\.}\.bb/\1_$NEW.bb/g; s/${OLD//./\\.}-y1-bringup/$NEW-y1-bringup/g" "$f" && rm -f "$f.bak"
-    done < <(grep -rlE "duduclaw-(cli|comp|sysd|shell)_${OLD//./\\.}\.bb|${OLD//./\\.}-y1-bringup" "$OS_ROOT/meta-duduclaw" "$OS_ROOT/scripts" 2>/dev/null | grep -v "/files/" || true)
+        sed -i.bak -E "s/(duduclaw-(cli|sysd))_${OLD//./\\.}\.bb/\1_$NEW.bb/g; s/${OLD//./\\.}-y1-bringup/$NEW-y1-bringup/g" "$f" && rm -f "$f.bak"
+    done < <(grep -rlE "duduclaw-(cli|sysd)_${OLD//./\\.}\.bb|${OLD//./\\.}-y1-bringup" "$OS_ROOT/meta-duduclaw" "$OS_ROOT/scripts" 2>/dev/null | grep -v "/files/" || true)
     sed -i.bak -E "s/e\.g\. \"${OLD//./\\.}\" — the vendored/e.g. \"$NEW\" — the vendored/" "$OS_ROOT/scripts/release-os.sh" && rm -f "$OS_ROOT/scripts/release-os.sh.bak"
     left="$(grep -rnE "\b${OLD//./\\.}\b" "$OS_ROOT/meta-duduclaw" "$OS_ROOT/scripts" --include='*.bb' --include='*.inc' --include='*.conf' --include='*.bbappend' --include='*.bbclass' --include='*.sh' 2>/dev/null | grep -v "/files/" || true)"
     [[ -z "$left" ]] && ok "no '$OLD' left in the layer outside snapshots" || { say "warn  '$OLD' still mentioned (review by hand):"; printf '        %s\n' "$left" | cut -c1-140; }
@@ -199,15 +207,15 @@ if grep -qE "同步到 v$NEW" "$CL"; then
     ok "CHANGELOG already mentions the v$NEW sync"
 else
     commits="$(git -C "$SRC_ROOT" log --format='%h %s' "v$OLD..v$NEW" 2>/dev/null | head -15 | sed 's/^/    - /' || true)"
-    inc_note="四份快照的 crates.io 依賴集合與 $OLD 相同，\`*-crates.inc\` 未動"
+    inc_note="快照的 crates.io 依賴集合與 $OLD 相同，\`*-crates.inc\` 未動"
     [[ ${#NEED_INC[@]} -eq 0 ]] || inc_note="crates.io 依賴集合有變（${NEED_INC[*]}），\`*-crates.inc\` 已重生"
     python3 - "$CL" "$OLD" "$NEW" "$inc_note" "$commits" <<'PY'
 import sys
 p,old,new,inc_note,commits=sys.argv[1:6]
 s=open(p).read()
 head,sep,rest=s.partition("## [Unreleased]")
-line=(f"- **平台快照同步到 v{new}（{old}→{new}，`scripts/sync-platform.sh`）**：`duduclaw-cli`／`duduclaw-comp`／`duduclaw-sysd`／`duduclaw-shell` 快照重新 vendor，"
-      f"`duduclaw-platform-version.inc` {old}→{new}（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名、A/B loader 項），四個 recipe 改名 `_{new}.bb`。{inc_note}。OS 自己的 release 版本（`VERSION`）不受影響。"
+line=(f"- **平台快照同步到 v{new}（{old}→{new}，`scripts/sync-platform.sh`）**：`duduclaw-cli`／`duduclaw-sysd` 快照自平台重新 vendor（`duduclaw-comp`／`duduclaw-shell` 自本 repo `crates/` 重新快照），"
+      f"`duduclaw-platform-version.inc` {old}→{new}（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名、A/B loader 項），兩個平台 recipe 改名 `_{new}.bb`。{inc_note}。OS 自己的 release 版本（`VERSION`）不受影響。"
       + ("\n  帶進的平台 commit：\n"+commits if commits.strip() else "") + "\n")
 if "### Changed\n" in rest.split("\n## [",1)[0]:
     i=rest.index("### Changed\n")+len("### Changed\n"); rest=rest[:i]+line+rest[i:]

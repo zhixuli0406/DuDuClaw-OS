@@ -64,3 +64,7 @@ docs-site/.astro/
 
 # --- Cloud Run staging copy of _site/ (scripts/deploy-cloudrun.sh) ---
 deploy/cloudrun/_site/
+
+# Rust build output of the OS-owned crates (crates/ since 2026-09-29): never
+# vendored, never committed — the recipes snapshot source only.
+crates/*/target/

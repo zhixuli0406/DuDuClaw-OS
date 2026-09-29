@@ -45,7 +45,21 @@ CARGO_SRC_DIR = "crates/duduclaw-cli"
 # Appliance convention (container/Dockerfile.server's rust-builder stage):
 # dashboard on, desktop off -- desktop pulls enigo/xcap, which on Linux pull
 # wayland/pipewire/gbm this recipe has no business depending on.
+# `app-compat` (2026-09-29, platform feature audit S15): the `duduclaw compat`
+# subcommand family (compat.d runner registry + `windows-vm` RemoteApp
+# bootstrap) is OS-only, so the platform binary no longer compiles it by
+# default. This image DOES need it -- duduclaw-shell spawns
+# `duduclaw compat windows-vm app ...` and compat.d/windows-vm.toml names it
+# as its entrypoint -- hence the feature must be turned on here.
+#
+# NOT YET: the vendored duduclaw-cli-src snapshot predates the feature (its
+# Cargo.toml has no `app-compat`), and cargo hard-fails on an unknown
+# feature. When `scripts/sync-platform.sh` brings the snapshot to a platform
+# version that carries it (the first release after 2026-09-29), swap the two
+# lines below. Until then the snapshot still compiles `duduclaw compat`
+# unconditionally, so the image is unaffected.
 CARGO_BUILD_FLAGS:append = " --no-default-features --features duduclaw-gateway/dashboard"
+# CARGO_BUILD_FLAGS:append = " --no-default-features --features duduclaw-gateway/dashboard,app-compat"
 # 2026-09-08 (fix14 bake, twice in a row): cargo.bbclass's CARGO_BUILD_FLAGS
 # carries no `-j`, so cargo spawns nproc rustc jobs regardless of
 # PARALLEL_MAKE / BB_NUMBER_THREADS (neither reaches cargo). The

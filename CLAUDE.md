@@ -84,7 +84,7 @@ as an ADR/RFC under `docs/` deliberately.
 
 Docs here legitimately cite three trees that are not in this repo:
 
-- `crates/...` — the platform repo's Rust workspace (public, `zhixuli0406/DuDuClaw`)
+- `crates/...` — the platform repo's Rust workspace (public, `zhixuli0406/DuDuClaw`) — EXCEPT `crates/duduclaw-comp`, `crates/duduclaw-shell` and `crates/duduclaw-native-gui`, which live in THIS repo's `crates/` since 2026-09-29 (platform feature audit S16-B; they were always workspace-`exclude`d standalone crates). A relative link to those three is legitimate here.
 - `commercial/docs/...` and `research/...` — the maintainers' private design tree (not published)
 
 Write such pointers as plain code spans, never as relative Markdown links,
@@ -97,7 +97,9 @@ this repo.
 Any `.md` under a `*-src/` snapshot (`duduclaw-cli-src/docs/README.md`,
 `duduclaw-comp-src/BUILD.md`, `duduclaw-shell-src/BUILD-LINUX.md`, template
 `SOUL.md` files, builtin `SKILL.md` files) is a vendored copy. Do not edit it
-here — fix it in the platform repo and re-run the recipe's `refresh-src.sh`.
+here — fix it at the source and re-run the recipe's `refresh-src.sh` (the
+platform repo for `duduclaw-cli-src` / `duduclaw-sysd-src`; this repo's own
+`crates/` for `duduclaw-comp-src` / `duduclaw-shell-src` / `duduclaw-native-gui`).
 `appliance/skills/duduclaw-os/SKILL.md` is a shipped artifact, not a doc.
 
 ### When in doubt

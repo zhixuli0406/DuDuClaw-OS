@@ -358,7 +358,7 @@ check_builder_idle() {
 
 # --- audit: OS-side version detail, read-only -------------------------------
 run_os_audit() {
-    local os_v platform_v distro_line distro_v
+    local os_v platform_v distro_line distro_expr distro_v
     # OS release version — this repo's own line (VERSION). Independent of the
     # embedded platform version below since the 2026-09 split; there is no
     # top-level Cargo.toml in the OS repo to read anymore.
@@ -369,7 +369,7 @@ run_os_audit() {
     # in the separate DuDuClaw repo now) — so the recipe-PV drift check below
     # measures against this file, not a Cargo.toml.
     platform_v="$(grep -m1 -E "^DUDUCLAW_PLATFORM_VERSION = \"$SEMVER\"" "$PLATFORM_VERSION_INC" 2>/dev/null \
-        | sed -E "s/.*\"($SEMVER)\".*/\1/")"
+        | sed -E "s/.*\"($SEMVER)\".*/\1/" || true)"
     echo "DuDuClaw OS version audit"
     echo "------------------------------------------------------------------"
     printf "  %-60s %-12s\n" "OS release version (VERSION)" "$os_v"
@@ -381,17 +381,24 @@ run_os_audit() {
 
     if [[ -f "$DISTRO_CONF" ]]; then
         distro_line="$(grep -m1 '^DISTRO_VERSION = ' "$DISTRO_CONF" || true)"
-        distro_v="$(echo "$distro_line" | sed -E 's/^DISTRO_VERSION = "(.*)"$/\1/')"
-        echo "  DISTRO_VERSION (full, incl. milestone suffix): ${distro_v:-?}"
-        if [[ "$distro_v" != "\${DUDUCLAW_PLATFORM_VERSION}"* ]]; then
-            echo "    NOTE: not composed from \${DUDUCLAW_PLATFORM_VERSION} — either"
-            echo "    this file predates the Y3-3 wiring or was hand-edited back to a"
-            echo "    literal. See that file's own comment for the intended form."
+        distro_expr="$(echo "$distro_line" | sed -E 's/^DISTRO_VERSION = "(.*)"$/\1/')"
+        if [[ "$distro_expr" == "\${DUDUCLAW_PLATFORM_VERSION}"* && -n "$platform_v" ]]; then
+            distro_v="$platform_v${distro_expr#'${DUDUCLAW_PLATFORM_VERSION}'}"
+            echo "  DISTRO_VERSION (full, incl. milestone suffix): $distro_v"
+        else
+            echo "  DISTRO_VERSION: ${distro_expr:-?} (cannot resolve embedded platform version)"
+            echo "    NOTE: the include or the distro expression needs attention."
         fi
+    else
+        echo "  $DISTRO_CONF: MISSING"
     fi
 
+    # Only the two PLATFORM-vendored recipes track the embedded platform
+    # version. duduclaw-comp / duduclaw-shell are built from this repo's own
+    # crates/ since 2026-09-29 (platform feature audit S16-B) and keep their
+    # own PV — see the crates block below.
     local pn bb_path bb_v
-    for pn in duduclaw-cli duduclaw-sysd duduclaw-comp; do
+    for pn in duduclaw-cli duduclaw-sysd; do
         bb_path="$(find "meta-duduclaw/recipes-duduclaw/$pn" -maxdepth 1 -name "${pn}_*.bb" 2>/dev/null | head -1)"
         if [[ -z "$bb_path" ]]; then
             printf "  %-60s %-12s MISSING (no recipe found)\n" "$pn" "-"
@@ -405,9 +412,39 @@ run_os_audit() {
         fi
     done
 
+    # OS-owned Rust crates (crates/, moved in from the platform repo on
+    # 2026-09-29). Policy: they keep their OWN version line, bumped by hand
+    # when their code actually changes — this script never bumps anything
+    # (same doctrine as the VERSION file). What IS checked is the one thing
+    # that breaks a bake: a detached Cargo.lock whose self/sibling entries no
+    # longer agree with the manifests (`cargo build --frozen` cannot re-sync
+    # and dies trying to fetch the zed git source offline).
+    echo "  OS-owned crates (crates/, own version line — hand-bumped, never by this script):"
+    local crate lock manifest_v lock_v entry sibling_v crate_status
+    for crate in duduclaw-comp duduclaw-shell duduclaw-native-gui; do
+        if [[ ! -f "crates/$crate/Cargo.toml" ]]; then
+            printf "    %-58s %-12s MISSING (crates/%s not found)\n" "$crate" "-" "$crate"
+            continue
+        fi
+        manifest_v="$(awk '/^\[/{s=$0} (s=="[package]") && /^version = "/{gsub(/"/,"",$3); print $3; exit}' "crates/$crate/Cargo.toml")"
+        crate_status="OK"
+        lock="crates/$crate/Cargo.lock"
+        if [[ -f "$lock" ]]; then
+            for entry in duduclaw-comp duduclaw-shell duduclaw-native-gui; do
+                lock_v="$(awk -v n="$entry" '$0 == "name = \"" n "\"" { getline; sub(/^version = "/, ""); sub(/"$/, ""); print; exit }' "$lock")"
+                [[ -n "$lock_v" ]] || continue
+                sibling_v="$(awk '/^\[/{s=$0} (s=="[package]") && /^version = "/{gsub(/"/,"",$3); print $3; exit}' "crates/$entry/Cargo.toml" 2>/dev/null)"
+                if [[ "$lock_v" != "$sibling_v" ]]; then
+                    crate_status="LOCK DRIFT ($entry $lock_v vs manifest ${sibling_v:-?}; run: cd crates/$crate && cargo metadata --offline --format-version 1 >/dev/null)"
+                fi
+            done
+        else
+            crate_status="no Cargo.lock (resolved through duduclaw-shell's lock)"
+        fi
+        printf "    %-58s %-12s %s\n" "crates/$crate" "${manifest_v:-?}" "$crate_status"
+    done
+
     echo "------------------------------------------------------------------"
-    echo "duduclaw-cli-worker / duduclaw-shell have no Yocto recipe yet (Y2-1"
-    echo "handoff, zero work item) — not audited here, nothing to drift."
     echo ""
     echo "Kernel version (linux-yocto_6.18.bbappend) tracks Yocto LTS"
     echo "independently of the platform version — NOT part of this audit by"

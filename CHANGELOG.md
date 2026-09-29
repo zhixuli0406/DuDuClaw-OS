@@ -8,6 +8,8 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 ## [Unreleased]
 
 ### Added
+- **殼 crate 搬入本 repo `crates/`**（2026-09-29，平台功能盤點 S16-B）：`duduclaw-comp`（smithay compositor）、`duduclaw-shell`（gpui 殼）、`duduclaw-native-gui`（shell 的 sibling path 依賴）整組自平台 repo 搬入，維持各自的 detached `Cargo.lock` 與版本（1.65.1，暫不隨 OS `VERSION` 改，版本政策待定），**不**合併成一個 workspace——bitbake recipe 就是照「兩個 destsuffix 同層」快照的。`duduclaw-comp`／`duduclaw-shell` 的 `refresh-src.sh` 改從本 repo `crates/` 取源（覆寫變數 `DUDUCLAW_OS_SRC_ROOT`，不再吃 `DUDUCLAW_CLI_SRC_ROOT`）；`duduclaw-cli` 的 `refresh-src.sh` 偵測改錨定 `crates/duduclaw-cli/Cargo.toml`，避免把本 repo 新的 `crates/` 誤認成平台 workspace；`scripts/sync-platform.sh` 拆成平台 recipe（cli／sysd，改名跟平台版本）與 OS 自有 recipe（comp／shell，只重新快照、PV 不動）兩組，`docs/guides/platform-sync.md` 同步。連帶搬入 `.github/workflows/native-gui-desktop-release.yml`（tag `native-gui-v*`，平台 repo 從未打過此 tag）與 `scripts/desktop/bundle-native-gui-macos.sh`／`sign-notarize-macos.sh`。`.gitignore` 加 `crates/*/target/`。**版本政策（2026-09-29 拍板）**：三個 crate 維持自己的版本線（目前 1.65.1），只在程式碼真的變動時手動 bump，`release-os.sh` 一律不 bump（與 `VERSION` 檔同一套教義）；`release-os.sh audit` 新增「OS-owned crates」區塊，列出三個 crate 的 manifest 版本並檢查 detached `Cargo.lock` 的自身／sibling 項是否與 manifest 一致（不一致會讓 `cargo build --frozen` 的 bake 死掉），平台 PV 漂移檢查則只剩 `duduclaw-cli`／`duduclaw-sysd` 兩個平台 recipe。已知殘留：`crates/duduclaw-native-gui/src/screens/governance.rs` 仍呼叫平台同日移除的 `governance.list` RPC、`screens/security.rs` 仍渲染已移除的 `credential_proxy`／`mount_guard` 欄位（缺欄位退成零值不 panic）；本機缺 Xcode Metal Toolchain 無法編譯驗證，未盲改，列為待辦。
+- **App 相容層文件搬入**：`docs/guides/app-compat.md`（en／zh-TW／ja-JP）自平台 repo 搬入。平台的 `duduclaw compat` 子命令族同日改為 Cargo feature `app-compat`（平台二進位預設不含），本 image 需要它：`duduclaw-shell` 會 spawn `duduclaw compat windows-vm app`，`compat.d/windows-vm.toml` 也以它為 `entrypoint`，所以 `duduclaw-cli_1.63.0.bb` 的 `CARGO_BUILD_FLAGS` 準備了 `--features app-compat` 的替換行（**先註解掉**：目前 vendored 的 cli 快照還沒有這個 feature，開了會死在 unknown feature；快照仍無條件編出 compat，image 不受影響）。**下次 `sync-platform.sh` 對齊到含此 feature 的平台版本時必須換成帶 `app-compat` 的那行**，否則對齊後的 image 會少掉 `duduclaw compat`。
 - **正式站部署到 Cloud Run**：`deploy/cloudrun/`（nginx 靜態容器：CSP、快取標頭、`mjs`／`avif`／`wasm` MIME）與
   `scripts/deploy-cloudrun.sh`（建置 `_site/` 後以 deployer SA `gcloud run deploy --source`）；服務 `duduclaw-os-site`
   （`louis-460302`／`asia-east1`），網域 `os.duduclaw.dudustudio.monster`（domain mapping＋Cloud DNS CNAME 一次性設定）。
@@ -46,6 +48,10 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   目前預設只疊加 `kas/serial1.yml`（release overlay，不含 `sb-signing.yml`／`tpm-luks.yml`）
   這個先前沒寫清楚的細節。`meta-duduclaw/README.md` 的映像角色表格與 Status 一節同步更新，
   不再把仍持續適用的敘述（安裝器 ISO 的角色、三種產物形式）錯釘在 v0.1.0 單一版本上。
+- **OS 版號說明與稽核對齊拆 repo 後流程**：`duduclaw-platform-version.inc` 和 distro 註解
+  改指向 `scripts/sync-platform.sh`；`release-os.sh audit` 納入已存在的 `duduclaw-shell` recipe，
+  不再錯稱它尚無 Yocto recipe，且顯示已展開的完整 `DISTRO_VERSION`。
+  OS `VERSION` 仍獨立於內嵌平台版號。
 
 ### Fixed
 - **`SECURITY.md`「Release Artifact Security」敘述漏掉第三種發布產物、且誤植兩種 ISO 都有

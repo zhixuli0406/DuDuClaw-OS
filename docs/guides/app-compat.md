@@ -38,10 +38,13 @@ Third parties can hook their own compatibility layer components into the
 same rules (a community-maintained Proton alternative, for example) —
 DuDuClaw doesn't need to add any extra support for that.
 
-> This release (CP-1) only does "registration and health checks":
-> `duduclaw compat list` tells you which components exist and what tools
-> are missing, but it doesn't yet launch an app for you with one click —
-> that's later-release work.
+> `duduclaw compat list` only does registration and health checks: it
+> tells you which components exist and what tools are missing. Installing
+> and launching apps goes through the Launcher and the pinned-app paths
+> described below. How far each component has been verified differs: on
+> DuDuClaw OS under QEMU, Bottles ran Notepad, the Windows VM has not been
+> booted (it needs real-hardware KVM), and Waydroid reached its
+> initialization window only.
 
 ## Seeing what compatibility layer components you have
 

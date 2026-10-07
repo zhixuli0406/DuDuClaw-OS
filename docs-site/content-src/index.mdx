@@ -36,7 +36,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="桌面版"
     href={base + 'features/52-desktop-edition/'}
-    description="桌面環境長什麼樣、影子工作區怎麼讓位給人、鎖定畫面與首次設定。"
+    description="桌面環境長什麼樣、agent 怎麼在影子工作區做事、人一碰鍵盤滑鼠怎麼凍結它、鎖定畫面與首次設定。"
   />
   <LinkCard
     title="硬體需求"
@@ -45,7 +45,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   />
   <LinkCard
     title="app 相容層"
-    href={base + 'guides/app-compat/'}
+    href={base + 'os/guides/app-compat/'}
     description="compat.d runner、Bottles 跑 Windows 程式、Waydroid 跑 Android，以及哪些事不保證。"
   />
   <LinkCard
@@ -61,7 +61,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="本機模型"
     href={base + 'features/53-local-models/'}
-    description="用 llama.cpp 在機器上跑模型：離線推論、路由與硬體門檻。"
+    description="用映像內建的 llama.cpp llama-server 在機器上跑模型：離線推論、路由與硬體門檻。"
   />
   <LinkCard
     title="建置 OS"
@@ -81,7 +81,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="功能"
     href={base + 'features/50-duduclaw-os-appliance/'}
-    description="從使用者角度看每一項能力：目標迴圈、記憶、通道、演化引擎。"
+    description="從使用者角度看每一項能力，從值班機開始；目標迴圈、記憶、通道與演化引擎都在這一區。"
   />
   <LinkCard
     title="指南"
@@ -107,4 +107,4 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
 
 ---
 
-<p class="back-to-site"><a href={home}>&#8592; 回到 DuDuClaw OS 官網</a></p>
+<p class="back-to-site"><a href={home}>&#8592; 回到 DuDuClaw OS 官網</a> · <a href="https://duduclaw.dudustudio.monster/">DuDuClaw 平台網站</a> · <a href="https://github.com/zhixuli0406/DuDuClaw-OS">GitHub</a></p>

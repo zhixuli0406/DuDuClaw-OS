@@ -36,7 +36,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="Desktop edition"
     href={base + 'features/52-desktop-edition/'}
-    description="What the desktop looks like, how the shadow workspace yields to a human, lock screen and first-run setup."
+    description="What the desktop looks like, how the agent works on its shadow workspace and freezes the moment a human touches the keyboard or mouse, lock screen and first-run setup."
   />
   <LinkCard
     title="Hardware requirements"
@@ -45,7 +45,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   />
   <LinkCard
     title="App compatibility"
-    href={base + 'guides/app-compat/'}
+    href={base + 'os/guides/app-compat/'}
     description="compat.d runners, Windows apps through Bottles, Android through Waydroid — and what is not promised."
   />
   <LinkCard
@@ -61,7 +61,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="Local models"
     href={base + 'features/53-local-models/'}
-    description="Running a model on the box with llama.cpp: offline inference, routing, hardware floor."
+    description="Running a model on the box with the bundled llama.cpp llama-server: offline inference, routing, hardware floor."
   />
   <LinkCard
     title="Building the OS"
@@ -81,7 +81,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="Features"
     href={base + 'features/50-duduclaw-os-appliance/'}
-    description="Every capability from the user's side: goal loop, memory, channels, evolution engine."
+    description="Every capability from the user's side, starting with the appliance; goal loop, memory, channels and the evolution engine live in this section."
   />
   <LinkCard
     title="Guides"
@@ -107,4 +107,4 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
 
 ---
 
-<p class="back-to-site"><a href={home}>&#8592; Back to the DuDuClaw OS site</a></p>
+<p class="back-to-site"><a href={home}>&#8592; Back to the DuDuClaw OS site</a> · <a href="https://duduclaw.dudustudio.monster/">DuDuClaw platform site</a> · <a href="https://github.com/zhixuli0406/DuDuClaw-OS">GitHub</a></p>

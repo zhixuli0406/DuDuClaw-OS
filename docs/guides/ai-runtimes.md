@@ -6,6 +6,12 @@ be handed an API key and put to work without installing anything: `claude`,
 `opencode` and `vibe` are all on `PATH` at first boot, and `llama-server`
 is there for running a model locally with no network at all.
 
+The list matches the platform release the image embeds (1.63.0 in v0.2.0).
+The platform deprecated its Gemini CLI runtime in v1.67.0 and plans to
+remove it in v1.71.0; the Gemini API provider is not affected. `gemini`
+stays in this image until the OS syncs to a platform release without that
+runtime.
+
 This guide covers where that payload comes from, how to refresh it, where
 credentials are stored, and what the image deliberately does *not* carry.
 For the product-side view of multi-runtime task delegation, see

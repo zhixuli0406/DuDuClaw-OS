@@ -36,7 +36,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="デスクトップ版"
     href={base + 'features/52-desktop-edition/'}
-    description="デスクトップの見た目、シャドウワークスペースが人に席を譲る仕組み、ロック画面と初回セットアップ。"
+    description="デスクトップの見た目、エージェントがシャドウワークスペースで作業する仕組みと、人がキーボードやマウスに触れた瞬間に止まる仕組み、ロック画面と初回セットアップ。"
   />
   <LinkCard
     title="ハードウェア要件"
@@ -45,7 +45,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   />
   <LinkCard
     title="アプリ互換レイヤ"
-    href={base + 'guides/app-compat/'}
+    href={base + 'os/guides/app-compat/'}
     description="compat.d ランナー、Bottles による Windows アプリ、Waydroid による Android、そして保証しないこと。"
   />
   <LinkCard
@@ -61,7 +61,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="ローカルモデル"
     href={base + 'features/53-local-models/'}
-    description="llama.cpp でモデルを手元で動かす。オフライン推論、ルーティング、必要なハードウェア。"
+    description="イメージに同梱の llama.cpp llama-server でモデルを手元で動かす。オフライン推論、ルーティング、必要なハードウェア。"
   />
   <LinkCard
     title="OS のビルド"
@@ -81,7 +81,7 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
   <LinkCard
     title="機能"
     href={base + 'features/50-duduclaw-os-appliance/'}
-    description="ユーザー視点で見た各機能。ゴールループ、メモリ、チャネル、進化エンジン。"
+    description="ユーザー視点で見た各機能。アプライアンスから始まり、ゴールループ、メモリ、チャネル、進化エンジンもこのセクションにあります。"
   />
   <LinkCard
     title="ガイド"
@@ -107,4 +107,4 @@ export const home = import.meta.env.BASE_URL.replace(/\/?$/, '/').replace(/[^/]+
 
 ---
 
-<p class="back-to-site"><a href={home}>&#8592; DuDuClaw OS の公式サイトへ</a></p>
+<p class="back-to-site"><a href={home}>&#8592; DuDuClaw OS の公式サイトへ</a> · <a href="https://duduclaw.dudustudio.monster/">DuDuClaw プラットフォーム</a> · <a href="https://github.com/zhixuli0406/DuDuClaw-OS">GitHub</a></p>

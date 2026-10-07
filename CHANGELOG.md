@@ -18,7 +18,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   `docs/**` 與根目錄 `README.md`／`README.en.md`／`CHANGELOG.md`／`SECURITY.md`，加上平台 repo
   的公開白名單（`docs/` 底下的 `features`／`guides`／`architecture`／`spec`／`api`，其餘如
   `todo`／`rfc`／`adr` 一律不讀），組成 zh-TW（預設）／en／ja 三語系的靜態站，搜尋用
-  Pagefind。**站內任何位置都不連 GitHub**：關掉 editLink、header 不放 GitHub 圖示、內文指向
+  Pagefind。**站內任何位置都不連 GitHub**（2026-10 起頁首例外放 OS repo 的 GitHub 圖示，見 Fixed）：關掉 editLink、內文指向
   非公開檔案的連結一律降級成純文字（不留 GitHub 備援連結），只有指向 Releases 的連結保留。
   主題以 CSS 變數對接 `website/assets/css/site.css` 的既有 token（`#f3f3f3`／`#0c0c0e` 底、
   MDS 藍 `#2171cc`／`#4390ee`、Inter＋Noto Sans TC、JetBrains Mono、10–12px 圓角），緋紅
@@ -54,6 +54,21 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   OS `VERSION` 仍獨立於內嵌平台版號。
 
 ### Fixed
+- **官網與文件站事實查核（2026-10）**：對照 GitHub Release、layer 原始碼與 `wiki/` 證據修正首頁與下載頁。
+  安裝器 ISO 不再標「QEMU 實開機驗證」（v0.2.0 只有整碟映像跑過開機測試）；Steam 不在離線倉庫，改說走 Flathub；
+  管理後台在 18789 埠（`duduclaw.local` 沒有任何元件提供）；防火牆開 18789 與 mDNS、映像內有 dropbear SSH
+  （桌面版被防火牆擋、基礎版可連），不再寫「所有連入埠關閉、SSH 出廠關閉」；`duduclaw-sysd` 是 15 個固定指令不是 6 個；
+  gateway 仍以 root 執行；自動回滾只在早期 Debian 線做過故障注入，這套映像實測的是套用與手動回滾；
+  首頁六張桌面截圖改用 v0.2.0 發布映像在 QEMU 上重拍（2026-10-07，映像核對過 Release 的 SHA-256 與 minisign 簽章；示範帳號「Demo」、未設定 AI 授權，原本深色首頁那張的示範任務卡因此拿掉，說明文字同步）；拿掉「安裝 8 分鐘」與硬體售價。
+  首頁與下載頁頁首、頁尾加上平台網站 <https://duduclaw.dudustudio.monster/> 連結，文件站頁首加上平台網站文字連結與 OS repo 的 GitHub 圖示按鈕（和主站頁首同一個單線圖示）。
+- **文件站 app 相容層連結斷掉**：指南 2026-09-29 搬進本 repo 後，`/docs/guides/app-compat/` 已無來源；
+  首頁、下載頁、三個語言的文件站首頁、入門側欄、`README*.md` 與 `docs/README.md` 改指 `/docs/os/guides/app-compat/`。
+  `sync-docs.mjs` 補上本 repo `docs/<dir>/zh-TW/`、`ja-JP/` 的語系對應（先前譯文被當成獨立頁面掛在 `os/guides/zh-TW/…`），
+  並保留 `SECURITY.md` 的 Security Advisories 連結（先前被轉成純文字，私下回報的首選管道在文件站上沒有網址）。
+- **README／指南內容**：`README.en.md` 誤寫 Steam 預載（中文版正確）、兩份 README「兩式產物」改為三個；
+  補上平台 Gemini CLI runtime 棄用（預定平台 v1.71.0 移除）的說明；app 相容層指南拿掉過時的 CP-1 註記並寫明各元件驗證程度，
+  日文版「ランダムに出荷」誤譯與中文版簡體字一併修正。本檔 0.2.0／0.1.0 段落內互相矛盾的「無頭」「Secure Boot 已有」敘述加註更正，
+  誤歸在 Removed 底下的發布產線變更移到 Changed。
 - **`SECURITY.md`「Release Artifact Security」敘述漏掉第三種發布產物、且誤植兩種 ISO 都有
   `.manifest.json`**：改為正確描述每機型三種產物（wic 桌面版、installer 基礎版 ISO、
   installer-desktop 桌面版 ISO），三者皆附 `.sha256`／`.minisig`，但 `.manifest.json` 只有
@@ -100,7 +115,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   存在哪裡、本機模型怎麼開、bundle 怎麼重新產生、root 槽預算。
 
 ### Changed
-- **平台快照全面同步到 v1.63.0（gateway 跟主 repo 對齊）**：`duduclaw-cli`／`duduclaw-comp`／`duduclaw-sysd` 快照重新 vendor（shell 已於 73ab67b 更新），`duduclaw-platform-version.inc` 1.62.0→1.63.0（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名 `duduclaw-os_1.63.0-y1-bringup.efi`、A/B loader 項），四個 recipe 檔名改為 `_1.63.0.bb`；dashboard `dist/` 依平台 111d748b 重建後才 vendor。帶進的平台變更：帳號憑證硬化（真探測取代 auth status 假陽性、auth-dead 退避、壞憑證載入排除、寫入前驗證、認證失效告警，b787c48a）、dashboard 帳號卡憑證狀態徽章＋新增帳號對話框顯示伺服器真實錯誤（111d748b）、Launcher 頁腳「⌘K 隨時喚起」（50b5acc0）。四份快照的 crates.io 依賴集合與 1.62.0 相同，`*-crates.inc` 未動。OS 自己的 release 版本（`VERSION` 0.1.0）不受影響。
+- **平台快照全面同步到 v1.63.0（gateway 跟主 repo 對齊）**：`duduclaw-cli`／`duduclaw-comp`／`duduclaw-sysd` 快照重新 vendor（shell 已於 73ab67b 更新），`duduclaw-platform-version.inc` 1.62.0→1.63.0（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名 `duduclaw-os_1.63.0-y1-bringup.efi`、A/B loader 項），四個 recipe 檔名改為 `_1.63.0.bb`；dashboard `dist/` 依平台 111d748b 重建後才 vendor。帶進的平台變更：帳號憑證硬化（真探測取代 auth status 假陽性、auth-dead 退避、壞憑證載入排除、寫入前驗證、認證失效告警，b787c48a）、dashboard 帳號卡憑證狀態徽章＋新增帳號對話框顯示伺服器真實錯誤（111d748b）、Launcher 頁腳「⌘K 隨時喚起」（50b5acc0）。四份快照的 crates.io 依賴集合與 1.62.0 相同，`*-crates.inc` 未動。OS 自己的 release 版本（`VERSION` 檔）不隨平台同步改動。
 - **root A/B 槽 7168 → 8192 MiB**（`duduclaw-image-appliance.bb`）：容納上述 AI
   payload。8192 是天花板不是階梯——它等於平台 repo `os_update.rs` 的
   `MAX_ROOT_BYTES`，該常數在同一波（WP-B）升到 9 GiB；在那之前對本映像做
@@ -150,14 +165,14 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **README 改以繁體中文為主**（英文版移至 `README.en.md`），章節對齊平台 repo：
   目錄／為什麼／映像裡有什麼／信任鏈／快速開始／建置／repo 結構／文件／授權。
   補上兩式產物的差異（`.wic.zst`＝`duduclaw-image-appliance` 完整桌面；`.iso`＝
-  live 安裝器，寫入無頭的 `duduclaw-image-ab`）、v0.1.0 的驗簽與燒錄步驟，以及
+  live 安裝器，寫入 `duduclaw-image-ab`；當時寫成「無頭」，同版下方「README／SECURITY 修正信任鏈與版本敘述」一條已更正：基礎版有同一個桌面殼）、v0.1.0 的驗簽與燒錄步驟，以及
   「真機尚未開機驗證」的狀態。
 - **`meta-duduclaw/README.md` 改寫為精簡的 layer 參考**（layout、各 image 的角色、
   builder 容器與 `kas build`、QEMU 開機、machine 別名陷阱）；原本 482 行的
   bring-up 敘事原文不動搬到 `wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md`。
 - **重新歸檔 L2 文件**：`meta-duduclaw/REAL-HW-CHECKLIST.md` →
   `wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md`（加註前提已過時：
-  IME 自 Y7 起已在 image、v0.1.0 已有 A/B＋唯讀 root＋Secure Boot＋安裝器 ISO）；
+  IME 自 Y7 起已在 image、v0.1.0 已有 A/B＋唯讀 root＋安裝器 ISO；Secure Boot 只在 layer 接好，發布映像未啟用）；
   layer 根目錄的五份 QEMU／bitbake 證據 log → `wiki/reports/bring-up-evidence/`。
   recipe、kas 設定與 `duduclaw-kiosk.service` 內的註解指標同步改指新路徑。
 - `appliance/README.md` 頂部加註「已凍結」與跨 repo 指標說明（`crates/` 指平台
@@ -169,7 +184,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   「layer 已接好、v0.1.0 發布映像未啟用」，快速開始改為「Secure Boot 關閉」開機。
   另修正安裝器 ISO 的敘述：v0.1.0 寫入的 `duduclaw-image-ab` 並非無頭，它有同一個
   桌面殼與 gateway，只是沒有應用層、app 相容層、唯讀 root 與防火牆（基礎版）。
-- **README 補上桌面環境**：先前把整個 OS 寫成無頭值班機，漏掉自家 compositor／殼（首頁、視窗切換、鎖定畫面、控制中心、Cmd+K 交辦列）、首次設定精靈、IME／音訊／XWayland、app 相容層（Flatpak／Bottles／Windows VM／Waydroid）。首段改為「AI 原生住民的桌面作業系統，另有無頭版」，新增「桌面環境」一節，並標清兩式產物的差別：整碟 `.wic.zst`＝桌面版、安裝器 `.iso`＝無頭版；桌面版無螢幕時的行為尚未在真機定義。
+- **README 補上桌面環境**：先前把整個 OS 寫成無頭值班機，漏掉自家 compositor／殼（首頁、視窗切換、鎖定畫面、控制中心、Cmd+K 交辦列）、首次設定精靈、IME／音訊／XWayland、app 相容層（Flatpak／Bottles／Windows VM／Waydroid）。首段改為「AI 原生住民的桌面作業系統，另有無頭版」，新增「桌面環境」一節，並標清兩式產物的差別：整碟 `.wic.zst`＝桌面版、安裝器 `.iso`＝基礎版（此處原寫「無頭版」，已由上方「README／SECURITY 修正信任鏈與版本敘述」一條更正）；桌面版無螢幕時的行為尚未在真機定義。
 
 
 ### Fixed
@@ -217,9 +232,11 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 ### Removed
 - `meta-duduclaw/recipes-duduclaw/duduclaw-sysd/PLAN.md`：Y1-2 時期的「尚未實作」
   占位文件，但同目錄的 `duduclaw-sysd_1.62.0.bb` 早已建置驗證通過，內容與事實相反。
+
+### Changed（發布產線；原誤歸在 Removed 底下，2026-10 移到這裡）
 - **live 安裝 ISO 載荷壓縮改 `zstd -19 --long=27`**（`DUDUCLAW_INSTALL_PAYLOAD_ZSTD` 可調）：desktop 版 ISO 在舊的 -3 下達 2.66GB，超過 GitHub 單資產 2GiB 上限；改後 qemu 1.996GB／generic 2.006GB，兩機的 desktop ISO 照常隨 0.2.0 出貨。`--long=27` 為 zstd 解壓端預設視窗上限，安裝程式不需改。
 - **`release-os.sh build/smoke/package` 預設串 release overlay `serial1.yml`**：先前只吃機型 kas 設定，deploy/spdx 被清後開烤即死於 `do_create_recipe_spdx`；現由 `kas_cfg_chain` 統一串上（`DUDUCLAW_OS_KAS_OVERLAY=` 可關）。
-- **wic.zst 壓縮改 `zstd -19 --long=27`＋2GiB 資產上限硬檢查**：level 3 壓出 2.38GB 撞 GitHub 422；同一顆 wic 以 -19 為 1.72GB。package 壓完先量、超限拒簽，publish 上傳前再查；manifest 加 `decompress_hint`，解壓需 `zstd -d --long=27`。
+- **wic.zst 壓縮改 `zstd -19 --long=27`＋2GiB 資產上限硬檢查**：level 3 壓出 2.38GB 撞 GitHub 422；同一顆 wic 以 -19 為 1.72GB。package 壓完先量、超限拒簽，publish 上傳前再查；manifest 加 `decompress_hint`（`zstd -d --long=27`）。`--long=27` 等於 zstd 解壓端的預設視窗上限，新版 zstd 直接 `zstd -d` 即可，舊版提示視窗不足時才補參數。
 
 ## [0.1.0] - 2026-09-04 — 首個 tagged bring-up release
 
@@ -235,9 +252,10 @@ DuDuClaw OS 成為獨立 repo 後的第一個版本。標記 bring-up 里程碑�
   `qemux86-64` 版已 QEMU 開機驗證，`genericx86-64` 版為真機目標。修正 live root
   的 squashfs 掛載：`CONFIG_SQUASHFS` 改經由 oe-core 正規的 `cfg/fs/squashfs.scc`
   kernel feature 開啟（先前的裸 `.cfg` 片段沒有生效）。
-- **安全信任鏈**：自簽 Secure Boot（每槽雙簽 UKI）、唯讀 root＋dm-verity 區塊
+- **安全信任鏈（layer 層）**：自簽 Secure Boot（每槽雙簽 UKI）、唯讀 root＋dm-verity 區塊
   完整性、TPM2/LUKS PCR 7+11 金鑰密封（fail-open 路徑可用；自動 enroll 為待解
-  缺陷，需真機 TPM）。
+  缺陷，需真機 TPM）。發布映像只用基本 kas 設定，Secure Boot、dm-verity 與 TPM
+  都未啟用（0.2.0 Changed 有拆開發布 wic 的查證）。
 - machine-id 與 entropy seed 在唯讀 root 下跨開機持久化。
 - **OS 獨立 release 版號**：repo 根 `VERSION` 檔是 release 產物名與 GitHub Release
   tag 的唯一來源，與內嵌平台版號脫鉤。

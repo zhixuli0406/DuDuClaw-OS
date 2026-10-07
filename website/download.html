@@ -75,6 +75,7 @@
       <a href="index.html#hardware">硬體</a>
       <a href="download.html" aria-current="page">下載</a>
       <a href="docs/">文件</a>
+      <a href="https://duduclaw.dudustudio.monster/" rel="noopener">DuDuClaw 平台</a>
     </nav>
     <div class="nav-tools">
       <a class="icon-btn" href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener" aria-label="在 GitHub 上檢視 DuDuClaw OS">
@@ -96,6 +97,7 @@
     <a href="index.html#hardware">硬體</a>
     <a href="download.html">下載</a>
     <a href="docs/">文件</a>
+    <a href="https://duduclaw.dudustudio.monster/" rel="noopener">DuDuClaw 平台</a>
     <a href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener">GitHub</a>
   </div>
 </header>
@@ -136,7 +138,7 @@
         <h2>下載前先知道這幾件事</h2>
         <ul>
           <li><strong>0.2.0 是 bring-up 版本</strong>，1.0.0 才是第一個 GA。拿來當生產環境的唯一一台機器並不合適。</li>
-          <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 只做過設定稽核。</li>
+          <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 只做過設定稽核。這一版發布前跑過 QEMU 開機測試的只有整碟映像，兩種安裝器 ISO 沒有重跑開機；發布後 QEMU 版的桌面版安裝器在 QEMU 開到安裝精靈第一頁，沒有跑完安裝。</li>
           <li><strong>映像未簽章</strong>，安裝前要在韌體裡關閉 Secure Boot。dm-verity 與 TPM 也還沒啟用。</li>
           <li><strong>目標機需要 UEFI</strong>、支援 AVX2 的 x86-64 CPU 與一顆 SSD。arm64 機器（Apple Silicon、樹莓派）不能用。</li>
         </ul>
@@ -220,7 +222,7 @@
             <div class="badge-row">
               <span class="pill pill-accent">桌面版</span>
               <span class="pill">安裝器 ISO</span>
-              <span class="pill pill-ok">QEMU 實開機驗證</span>
+              <span class="pill pill-warn">QEMU 開到安裝精靈，未跑完安裝</span>
             </div>
             <p class="asset-name">duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso</p>
             <p class="asset-sub">
@@ -274,7 +276,7 @@
             <div class="badge-row">
               <span class="pill pill-accent">桌面版</span>
               <span class="pill">整碟映像</span>
-              <span class="pill pill-ok">QEMU 實開機驗證</span>
+              <span class="pill pill-ok">QEMU 開機測試通過</span>
             </div>
             <p class="asset-name">duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst</p>
             <p class="asset-sub">
@@ -328,7 +330,7 @@
             <div class="badge-row">
               <span class="pill">基礎版</span>
               <span class="pill">安裝器 ISO</span>
-              <span class="pill pill-ok">QEMU 實開機驗證</span>
+              <span class="pill pill-warn">QEMU 目標，本版未重跑開機</span>
             </div>
             <p class="asset-name">duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso</p>
             <p class="asset-sub">
@@ -388,8 +390,8 @@
         </svg>
         </div>
         <div class="qr-body">
-          <h3 id="qr-title">掃描在電腦瀏覽器開啟</h3>
-          <p>手機掃這張碼，會在電腦的瀏覽器打開最推薦的那一個資產：桌面版安裝器 ISO、真實 x86-64 硬體目標。映像檔 1.87 GiB，寫進隨身碟再開機安裝。</p>
+          <h3 id="qr-title">用手機帶走下載連結</h3>
+          <p>這張碼是預設推薦資產的直連網址：桌面版安裝器 ISO、真實 x86-64 硬體目標。手機掃了可以先存起來，再到要燒錄隨身碟的那台電腦上打開；映像檔 1.87 GiB，不建議直接下載到手機。</p>
           <p class="qr-file">duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso</p>
           <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
@@ -417,15 +419,15 @@
           <p>選桌面版的安裝器 ISO（<code>installer-desktop</code>）。燒進 USB，開機跑圖形安裝精靈，選碟、確認、寫入、重開。</p>
         </article>
         <article class="card">
-          <h3>只要無頭的 gateway 值班機</h3>
-          <p>選基礎版的安裝器 ISO（<code>installer</code>）。同樣的 A/B 佈局與桌面殼加 gateway，沒有應用層。這是 bring-up 產物。</p>
+          <h3>只要 gateway 值班機</h3>
+          <p>選基礎版的安裝器 ISO（<code>installer</code>）。同樣的 A/B 佈局與桌面殼加 gateway，沒有應用層、AI CLI、唯讀 root 與防火牆。這是 bring-up 產物。</p>
         </article>
         <article class="card">
           <h3>想直接寫進整顆碟</h3>
           <p>選桌面版的整碟映像（<code>.wic.zst</code>）。解壓之後 <code>dd</code> 或 <code>bmaptool</code> 寫進目標硬碟，跳過安裝精靈。</p>
         </article>
       </div>
-      <p style="margin-top:20px;color:var(--muted)">機器維度也要選對：<code>duduclaw-qemux86-64</code> 是 QEMU bring-up 目標，兩種形式都實際開機驗證過；<code>duduclaw-genericx86-64</code> 是真實硬體目標，目前只做過設定稽核，在 QEMU 上開不起來。</p>
+      <p style="margin-top:20px;color:var(--muted)">機器維度也要選對：<code>duduclaw-qemux86-64</code> 是 QEMU bring-up 目標，v0.2.0 的整碟映像發布前在 QEMU 開機到登入畫面，安裝器 ISO 跑完安裝的 QEMU 紀錄停在 v0.1.0 與 2026-09-06 的開發版，v0.2.0 的桌面版安裝器只在發布後開到安裝精靈第一頁；<code>duduclaw-genericx86-64</code> 是真實硬體目標，目前只做過設定稽核，在 QEMU 上開不起來。</p>
     </div>
   </section>
 
@@ -443,7 +445,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
           minisign 公鑰
         </h3>
-        <p style="color:var(--muted);margin:8px 0 14px">六個資產同一把公鑰，這裡釘死。</p>
+        <p style="color:var(--muted);margin:8px 0 14px">六個資產同一把公鑰，v0.1.0 也是這一把。</p>
         <div class="code key-block">
           <button class="copy-btn" type="button" data-copy="minisign-key">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
@@ -564,7 +566,7 @@ dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
       <div class="grid grid-2">
         <article class="card">
           <h3>要回舊版</h3>
-          <p style="margin:8px 0 16px">v0.1.0（2026-09-04 發布）仍然留在 Releases，資產與驗簽方式相同。</p>
+          <p style="margin:8px 0 16px">v0.1.0（2026-09-04 發布，內嵌平台 1.62.0）仍然留在 Releases，資產與驗簽方式相同，重新下載安裝即可。</p>
           <a class="btn btn-ghost" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.1.0" rel="noopener">
             v0.1.0 Release
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"></use></svg>
@@ -615,9 +617,10 @@ dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
       <div>
         <h4>平台</h4>
         <ul>
-          <li><a href="https://github.com/zhixuli0406/DuDuClaw" rel="noopener">DuDuClaw</a></li>
+          <li><a href="https://duduclaw.dudustudio.monster/" rel="noopener">DuDuClaw 平台網站</a></li>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw" rel="noopener">平台 GitHub</a></li>
           <li><a href="docs/guides/hardware-requirements/">硬體需求</a></li>
-          <li><a href="docs/guides/app-compat/">app 相容層</a></li>
+          <li><a href="docs/os/guides/app-compat/">app 相容層</a></li>
           <li><a href="index.html">首頁</a></li>
         </ul>
       </div>

@@ -56,7 +56,7 @@ const START_SLUGS = [
   'guides/hardware-requirements',
   'features/50-duduclaw-os-appliance',
   'features/52-desktop-edition',
-  'guides/app-compat',
+  'os/guides/app-compat',
 ];
 
 /** Concatenation-friendly form of the site's base path; see ../base.mjs. */
@@ -249,7 +249,7 @@ function resolveLink(target, sourceFile, locale, pageIndex, currentId) {
   if (!trimmed) return { plain: true };
 
   if (/^https?:\/\/(www\.)?github\.com\//i.test(trimmed)) {
-    if (/\/releases(\/|$|\?|#)/i.test(trimmed)) {
+    if (/\/(releases|security\/advisories)(\/|$|\?|#)/i.test(trimmed)) {
       stats.links.keptGithubReleases += 1;
       return { href: trimmed };
     }
@@ -325,9 +325,9 @@ function transformLinks(body, { sourceFile, outFile, locale, pageIndex, currentI
   });
 
   // Bare GitHub URLs would be auto-linked by GFM; defuse them into code spans
-  // unless they point at a Releases page.
+  // unless they point at a Releases or Security Advisories page.
   text = text.replace(/(^|[\s(|>])(https:\/\/(?:www\.)?github\.com\/[^\s)|<>\]]+)/g, (m, lead, url) => {
-    if (/\/releases(\/|$|\?|#)/i.test(url)) return m;
+    if (/\/(releases|security\/advisories)(\/|$|\?|#)/i.test(url)) return m;
     stats.links.bareGithubDefused += 1;
     return `${lead}\`${url}\``;
   });
@@ -401,9 +401,9 @@ function collectPlatformPages() {
 }
 
 /**
- * The OS repo has no per-language directories — some of its documents are
- * written in Chinese, some in English. A page landing in the zh-TW root locale
- * with essentially no CJK in it is an English original and says so.
+ * Most OS documents have no per-language twin — some are written in Chinese,
+ * some in English. A page landing in the zh-TW root locale with essentially no
+ * CJK in it is an English original and says so.
  */
 function looksEnglish(file) {
   const text = fs.readFileSync(file, 'utf8');
@@ -436,11 +436,28 @@ function collectOsPages() {
     });
   }
 
+  // Since 2026-09-29 the OS repo also carries translated guides in the same
+  // layout as the platform repo (`<dir>/zh-TW/x.md`, `<dir>/ja-JP/x.md`, the
+  // English original at `<dir>/x.md`). Map those directories to locales the
+  // same way; without this the translations were published as separate
+  // pages at `os/guides/zh-TW/x` in the root locale.
   for (const abs of walk(OS_DOCS, isMarkdown)) {
     const rel = path.relative(OS_DOCS, abs);
     const dir = path.dirname(rel);
-    const id = ['os', ...(dir === '.' ? [] : dir.split(path.sep)), slugForBasename(abs)].join('/');
-    pages.push({ id, locale: 'root', source: abs, origin: 'os', enOnly: looksEnglish(abs) });
+    const parts = dir === '.' ? [] : dir.split(path.sep);
+    const last = parts[parts.length - 1];
+    if (last && Object.prototype.hasOwnProperty.call(LOCALE_DIRS, last)) {
+      const id = ['os', ...parts.slice(0, -1), slugForBasename(abs)].join('/');
+      pages.push({ id, locale: LOCALE_DIRS[last], source: abs, origin: 'os' });
+      continue;
+    }
+    const id = ['os', ...parts, slugForBasename(abs)].join('/');
+    const zhTwin = path.join(path.dirname(abs), 'zh-TW', path.basename(abs));
+    if (fs.existsSync(zhTwin)) {
+      pages.push({ id, locale: 'en', source: abs, origin: 'os' });
+    } else {
+      pages.push({ id, locale: 'root', source: abs, origin: 'os', enOnly: looksEnglish(abs) });
+    }
   }
   return pages;
 }

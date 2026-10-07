@@ -23,7 +23,7 @@ DuDuClaw OS 本身是一套 Linux 基底的作業系統，但很多人手上仍�
 
 第三方也能用同一套規則掛入自己的相容層元件（例如社群維護的 Proton 替代版本），不需要 DuDuClaw 額外支援。
 
-> 這一版（CP-1）只做「登記與健檢」：`duduclaw compat list` 會告訴你有哪些元件、缺什麼工具，但還不會幫你一鍵啟動應用程式本身——這是後續版本的工作。
+> `duduclaw compat list` 只做「登記與健檢」：告訴你有哪些元件、缺什麼工具。安裝與啟動應用程式走下面幾節說明的 Launcher 與釘選路徑。各元件的驗證程度不同：在 DuDuClaw OS 的 QEMU 環境裡，Bottles 跑過記事本，Windows 虛擬機還沒開機過（需要真機 KVM），Waydroid 只走到初始化畫面。
 
 ## 查看目前有哪些相容層元件
 
@@ -174,7 +174,7 @@ DuDuClaw OS **出廠不內建** Google 服務框架（GApps）與 ARM 應用程�
 
 這表示：
 
-1. 你需要自己完成 **Google Play 裝置認證**（每台裝置認證一次即可）——這是 Google 官方提供的自助流程，跟在一般 Android 裝置上刷機後认证的步驟相同，不是 DuDuClaw 特製的東西。
+1. 你需要自己完成 **Google Play 裝置認證**（每台裝置認證一次即可）——這是 Google 官方提供的自助流程，跟在一般 Android 裝置上刷機後認證的步驟相同，不是 DuDuClaw 特製的東西。
 2. 若你要跑的應用程式只有 x86/x86_64 沒有的 ARM 版本，需要自行加裝 ARM 轉譯元件；這類元件品質與相容性因來源而異，DuDuClaw 無法替你把關。
 
 `duduclaw compat list` 顯示 `waydroid` 缺件是正常現象，不是系統壞掉——它誠實反映「容器本體已登記，但底層依賴（`waydroid`／`lxc-start`）或你自己要補的認證/轉譯元件還沒到位」。

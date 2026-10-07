@@ -51,11 +51,11 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 
 - **Yocto Project 6.0 "wrynose"**（LTS），預設 kernel Linux 6.18。
 - 兩種 machine：`duduclaw-qemux86-64`（QEMU 可開機的 bring-up 目標）與 `duduclaw-genericx86-64`（真實 x86-64 硬體，x86-64-v3 tune）。
-- 每個 release、每種 machine 各有兩式產物，都附 `.sha256` 與 minisign `.minisig`：
+- 每個 release、每種 machine 各有三個產物，都附 `.sha256` 與 minisign `.minisig`：
 
 | 產物 | 內容 | 用途 |
 |---|---|---|
-| `duduclaw-os-<machine>-v<ver>.wic.zst` | **桌面版** `duduclaw-image-appliance`：A/B 更新鏈＋桌面殼＋Chromium／LibreOffice／Steam＋注音 IME＋app 相容層＋唯讀 root＋防火牆＋登入硬化 | 整碟燒錄，日常主力機 |
+| `duduclaw-os-<machine>-v<ver>.wic.zst` | **桌面版** `duduclaw-image-appliance`：A/B 更新鏈＋桌面殼＋Flatpak 離線倉庫（Chromium／LibreOffice）＋注音 IME＋app 相容層＋唯讀 root＋防火牆＋登入硬化 | 整碟燒錄，日常主力機 |
 | `duduclaw-os-installer-<machine>-v<ver>.iso` | `duduclaw-image-live`：squashfs live 環境＋圖形安裝精靈，寫入的是**基礎版** `duduclaw-image-ab`：同樣的 A/B 佈局、桌面殼與 gateway，但沒有應用層、app 相容層、唯讀 root 與防火牆，屬 bring-up 產物 | 燒成 USB 開機安裝 |
 | `duduclaw-os-installer-desktop-<machine>-v<ver>.iso` | `duduclaw-image-live-desktop`：同一個安裝精靈，寫入的是桌面版 `duduclaw-image-appliance`（v0.1.0／2026-09-04 首度隨版補上，之後每版持續提供） | 燒成 USB 開機安裝，得到與整碟映像相同的桌面版 |
 
@@ -69,8 +69,8 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 - **首次設定精靈**：語言、帳號、主題、Wi-Fi 在第一次開機的圖形精靈裡完成；安裝器 ISO 同樣是圖形精靈（選碟、確認、寫入進度、重開）。
 - **輸入與音訊**：fcitx5 注音輸入法、PipeWire／WirePlumber 音訊、XWayland 跑 X11 程式。
 - **人機共用，不影響日常使用**：agent 有自己的輸入 seat；GUI 任務預設在 headless 影子工作區執行（可開子母畫面旁觀），不碰你的視窗、焦點與游標；人輸入永遠優先，compositor 層強制凍結正在你桌面上操作的 agent（QEMU 實測 3–4 ms）；Super+Enter 交還、Super+Esc 急停；共駕能力預設關閉、後果性動作先審批、登入與付款一律交人。完整說明見文件站的 [桌面版](https://os.duduclaw.dudustudio.monster/docs/features/52-desktop-edition/)。
-- **AI 工具鏈內建**（桌面版）：十套廠商 coding CLI 打包在 `/opt/duduclaw/runtimes`，`/usr/bin` 直接有 `claude`、`codex`、`gemini`、`qwen`、`kimi`、`copilot`、`grok`、`agent`、`opencode`、`vibe`；憑證統一寫在 `/data/duduclaw`（0700），系統更新不會清掉。本機推理由 llama.cpp `llama-server` 負責，權重不進映像、由後台下載到 `/data/duduclaw/models`。哪些沒內建、為什麼、怎麼重新產生這包，見 [AI runtimes 指南](docs/guides/ai-runtimes.md)。
-- **應用程式**（桌面版）：映像內建 Flatpak 離線倉庫，Chromium、LibreOffice 在 Launcher 按「安裝」即從本機倉庫裝好，不需網路；其他 app 走 Flathub。app 相容層以 `compat.d` 宣告：Bottles 跑 Windows 桌面程式、KVM 虛擬機＋RDP 跑完整 Windows、Waydroid 跑 Android（不含 GApps，需自行設定）；macOS 程式不做本機執行。範圍與明確不承諾的項目見文件站的 [app 相容層指南](https://os.duduclaw.dudustudio.monster/docs/guides/app-compat/)。
+- **AI 工具鏈內建**（桌面版）：十套廠商 coding CLI 打包在 `/opt/duduclaw/runtimes`，`/usr/bin` 直接有 `claude`、`codex`、`gemini`、`qwen`、`kimi`、`copilot`、`grok`、`agent`、`opencode`、`vibe`；憑證統一寫在 `/data/duduclaw`（0700），系統更新不會清掉。平台自 v1.67.0 起把 Gemini CLI runtime 標為棄用、預定 v1.71.0 移除；v0.2.0 內嵌的是平台 1.63.0，不受影響，之後同步到移除後的平台版本時 `gemini` 會跟著退出這份清單。本機推理由 llama.cpp `llama-server` 負責，權重不進映像、由後台下載到 `/data/duduclaw/models`。哪些沒內建、為什麼、怎麼重新產生這包，見 [AI runtimes 指南](docs/guides/ai-runtimes.md)。
+- **應用程式**（桌面版）：映像內建 Flatpak 離線倉庫，Chromium、LibreOffice 在 Launcher 按「安裝」即從本機倉庫裝好，不需網路；其他 app 走 Flathub。app 相容層以 `compat.d` 宣告：Bottles 跑 Windows 桌面程式、KVM 虛擬機＋RDP 跑完整 Windows、Waydroid 跑 Android（不含 GApps，需自行設定）；macOS 程式不做本機執行。範圍與明確不承諾的項目見 [app 相容層指南](docs/guides/app-compat.md)（文件站：<https://os.duduclaw.dudustudio.monster/docs/os/guides/app-compat/>）。
 
 安裝器 ISO（`installer` 變體）寫進磁碟的基礎版 `duduclaw-image-ab` 有同一個桌面殼與 gateway，只是沒有應用層；管理後台由 gateway 提供，有沒有接螢幕都能從區網瀏覽器操作。沒接螢幕時桌面本身的行為（會不會自動退回純無頭）還沒在真機上定義，屬 bring-up 待辦。
 
@@ -112,7 +112,7 @@ zstd -d <wic.zst>
 dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 ```
 
-> QEMU 版（`duduclaw-qemux86-64`）兩式都已實際開機驗證。`duduclaw-genericx86-64` 是真機目標，QEMU 開不起來，截至 v0.2.0 只做過設定稽核；真機開機是目前最重要的待驗證項目。
+> QEMU 版（`duduclaw-qemux86-64`）的整碟映像在 v0.2.0 發布前跑過 QEMU 開機測試（到登入畫面）；安裝器 ISO 發布前沒有重跑開機，跑完安裝的 QEMU 紀錄停在 v0.1.0 與 2026-09-06 的開發版；發布後（2026-10-07）桌面版安裝器在 QEMU 開到安裝精靈第一頁，沒有跑完安裝。`duduclaw-genericx86-64` 是真機目標，QEMU 開不起來，截至 v0.2.0 只做過設定稽核；真機開機是目前最重要的待驗證項目。
 
 <a id="build"></a>
 
@@ -157,7 +157,7 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 - [`meta-duduclaw/README.md`](meta-duduclaw/README.md)：layer 參考，含 layout、各 image 用途、builder 容器與 `kas build`。
 - [`CHANGELOG.md`](CHANGELOG.md)：版本紀錄，依 Keep a Changelog。
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)、[`SECURITY.md`](SECURITY.md)：貢獻方式與漏洞回報。
-- 使用者視角的功能說明（原始碼在平台 repo，發佈在文件站）：[DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/features/50-duduclaw-os-appliance/)、[硬體需求與相容性](https://os.duduclaw.dudustudio.monster/docs/guides/hardware-requirements/)、[app 相容層](https://os.duduclaw.dudustudio.monster/docs/guides/app-compat/)。
+- 使用者視角的功能說明（原始碼在平台 repo，發佈在文件站）：[DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/features/50-duduclaw-os-appliance/)、[硬體需求與相容性](https://os.duduclaw.dudustudio.monster/docs/guides/hardware-requirements/)。[app 相容層指南](docs/guides/app-compat.md) 在本 repo。
 
 <a id="license"></a>
 

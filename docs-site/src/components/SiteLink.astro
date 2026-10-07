@@ -2,9 +2,12 @@
 /**
  * Replaces Starlight's SocialIcons slot in the header.
  *
- * The docs site deliberately links nowhere on GitHub — the only outbound link
- * in the chrome goes back to the main site, which is the parent of this
- * build's base path (`/docs/` -> `/`).
+ * Three links: back to the main DuDuClaw OS site (the parent of this build's
+ * base path, `/docs/` -> `/`), the DuDuClaw platform site, and the OS
+ * repository on GitHub as a monoline icon button (the same GitHub mark and
+ * 36px button the main site's header uses). Body text still never links to GitHub for content
+ * (see scripts/sync-docs.mjs); the repository link in the chrome is the only
+ * GitHub link, matching the header of the main site.
  */
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const mainSite = base.replace(/[^/]+\/$/, '') || '/';
@@ -13,10 +16,13 @@ const rest = Astro.url.pathname.startsWith(base) ? Astro.url.pathname.slice(base
 const locale = rest.startsWith('en/') ? 'en' : rest.startsWith('ja/') ? 'ja' : 'zh-TW';
 
 const labels = {
-  'zh-TW': '回到官網',
-  en: 'Main site',
-  ja: '公式サイト',
+  'zh-TW': { site: '回到官網', platform: 'DuDuClaw 平台', github: '在 GitHub 上檢視 DuDuClaw OS' },
+  en: { site: 'Main site', platform: 'DuDuClaw platform', github: 'View DuDuClaw OS on GitHub' },
+  ja: { site: '公式サイト', platform: 'DuDuClaw プラットフォーム', github: 'GitHub で DuDuClaw OS を見る' },
 };
+const l = labels[locale];
+const PLATFORM_SITE = 'https://duduclaw.dudustudio.monster/';
+const OS_REPO = 'https://github.com/zhixuli0406/DuDuClaw-OS';
 ---
 
 <a class="site-link" href={mainSite}>
@@ -28,7 +34,18 @@ const labels = {
       stroke-linecap="round"
       stroke-linejoin="round"></path>
   </svg>
-  <span>{labels[locale]}</span>
+  <span>{l.site}</span>
+</a>
+<a class="site-link site-link-plain" href={PLATFORM_SITE} rel="noopener">{l.platform}</a>
+<a class="site-icon" href={OS_REPO} rel="noopener" aria-label={l.github} title={l.github}>
+  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+    <path
+      d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"></path>
+  </svg>
 </a>
 
 <style>
@@ -54,6 +71,45 @@ const labels = {
     color: var(--sl-color-text-accent);
     border-color: var(--ddc-accent-line);
     background: var(--ddc-accent-soft);
+  }
+
+  .site-link-plain {
+    margin-inline-start: 0.4rem;
+  }
+
+  @media (max-width: 50rem) {
+    .site-link-plain {
+      display: none;
+    }
+  }
+
+  /* Same shape as the main site's header GitHub button (website/ .icon-btn):
+     a 36px square, monoline icon, no border, muted until hover. */
+  .site-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-inline-start: 0.3rem;
+    border-radius: var(--ddc-radius-btn);
+    color: var(--sl-color-gray-3);
+    transition: color 180ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      background-color 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .site-icon:hover {
+    color: var(--sl-color-white);
+    background: var(--sl-color-gray-6);
+  }
+
+  .site-icon:focus-visible {
+    outline: 2px solid var(--sl-color-text-accent);
+    outline-offset: 2px;
+  }
+
+  .site-icon svg {
+    flex: none;
   }
 
   .site-link svg {

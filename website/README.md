@@ -42,6 +42,14 @@ website/
 
 換截圖時三種格式都要重出，尺寸寫進 `width` / `height` 屬性避免版面跳動。
 
+目前這組截圖是 2026-10-07 用 v0.2.0 發布映像在 QEMU（TCG、q35、預設 bochs 顯示卡，
+解析度就是 1280×800）上重拍的：`installer-language` 來自 QEMU 版桌面安裝器 ISO，其餘來自
+QEMU 版整碟映像的首次開機（示範帳號「Demo」、不設定任何 AI 授權、套用 Express 板模；深色那張
+是在精靈的外觀步驟選暗色後重開一次拍的）。畫面用 QMP `screendump` 取得，滑鼠與鍵盤用 QMP
+`input-send-event`／`send-key` 送；重拍前先用 Release 上的 `.sha256` 與 `.minisig` 核對映像。
+手機版裁切固定取 1280×800 原圖的 `(320, 130)–(960, 800)`。WebP 用 `cwebp -q 82 -m 6`，
+AVIF 用 `avifenc -q 60 -s 4`。
+
 ## 互動模組
 
 六個模組彼此獨立，各自偵測能力、各自降級，關掉任何一個其他照常運作。

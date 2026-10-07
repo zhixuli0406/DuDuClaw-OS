@@ -40,7 +40,7 @@ Installing Linux yourself and then `duduclaw` on top works fine. Putting that bo
 | Tamper resistance | Roll your own | Read-only root (desktop edition default); dm-verity block verification wired, enabled by a build overlay (still not enabled as of v0.2.0) |
 | Boot trust | Secure Boot usually turned off | Self-signed Secure Boot, a dual-signed UKI per slot, first-boot key enrollment — wired, enabled by a build overlay (images remain unsigned through v0.2.0; boot with Secure Boot off) |
 | Disk keys | Manual LUKS | TPM2 PCR 7+11 sealing (build overlay option, partial, still not enabled as of v0.2.0) |
-| Desktop and apps | Install one by one | Own compositor/shell, Flatpak offline preload (Chromium, LibreOffice, Steam), Chinese IME |
+| Desktop and apps | Install one by one | Own compositor/shell, Flatpak offline repo (Chromium and LibreOffice install from the Launcher with no network), Chinese IME |
 | One machine shared by a person and the AI | Separate windows, unaware of each other | Built-in delegation bar (Cmd+K); the agent's GUI work runs in a shadow workspace by default and never touches your windows or cursor; any input from you freezes an agent driving on your desktop |
 | AI toolchain | `npm install -g` one vendor at a time, redone on every machine | Ten vendor CLIs in the image: `claude`, `codex`, `gemini`, `qwen`, `kimi`, `copilot`, `grok`, `agent` (Cursor), `opencode`, `vibe` — working at first boot, credentials on `/data` so an update never wipes them |
 | Offline inference | Build llama.cpp yourself, write your own unit | llama.cpp `llama-server` in the image; weights downloaded from the dashboard into `/data/duduclaw/models`, so delegation keeps working with no network |
@@ -51,11 +51,11 @@ Installing Linux yourself and then `duduclaw` on top works fine. Putting that bo
 
 - **Yocto Project 6.0 "wrynose"** (LTS), default kernel Linux 6.18.
 - Two machines: `duduclaw-qemux86-64` (the QEMU-bootable bring-up target) and `duduclaw-genericx86-64` (real x86-64 hardware, x86-64-v3 tune).
-- Each release publishes two artifact forms per machine, each with a `.sha256` and a minisign `.minisig`:
+- Each release publishes three artifacts per machine, each with a `.sha256` and a minisign `.minisig`:
 
 | Artifact | Contents | Use |
 |---|---|---|
-| `duduclaw-os-<machine>-v<ver>.wic.zst` | **Desktop edition** `duduclaw-image-appliance`: A/B update chain + desktop shell + Chromium / LibreOffice / Steam + IME + app compatibility layer + read-only root + firewall + login hardening | Whole-disk flash; the daily driver |
+| `duduclaw-os-<machine>-v<ver>.wic.zst` | **Desktop edition** `duduclaw-image-appliance`: A/B update chain + desktop shell + offline Flatpak repo (Chromium / LibreOffice) + IME + app compatibility layer + read-only root + firewall + login hardening | Whole-disk flash; the daily driver |
 | `duduclaw-os-installer-<machine>-v<ver>.iso` | `duduclaw-image-live`: squashfs live environment + graphical installer. It writes the **base image** `duduclaw-image-ab`: the same A/B layout, desktop shell and gateway, without the app layer, compatibility layer, read-only root or firewall — a bring-up artifact | Flash to USB, boot, install |
 | `duduclaw-os-installer-desktop-<machine>-v<ver>.iso` | `duduclaw-image-live-desktop`: the same installer, writing the desktop edition `duduclaw-image-appliance` (added on 2026-09-04, alongside v0.1.0, and shipped with every release since) | Flash to USB, boot, install; yields the same desktop edition as the whole-disk image |
 
@@ -69,8 +69,8 @@ Every DuDuClaw OS image boots straight into its own desktop, fully operable from
 - **First-run wizard** — language, account, theme and Wi-Fi are set in a graphical wizard on first boot; the installer ISO is a graphical wizard too (pick disk, confirm, write progress, reboot).
 - **Input and audio** — fcitx5 Chinese IME, PipeWire / WirePlumber audio, XWayland for X11 apps.
 - **Shared without getting in your way** — the agent has its own input seat; GUI tasks run on a headless shadow output by default (with an optional picture-in-picture preview) and never touch your windows, focus or cursor; human input always wins, with the compositor freezing an agent driving on your desktop (3–4 ms measured under QEMU); Super+Enter hands back, Super+Esc is the emergency stop; co-driving is off by default, consequential actions are approved first, and logins / payments are always handed to you. Full write-up on the docs site: [Desktop edition](https://os.duduclaw.dudustudio.monster/docs/en/features/52-desktop-edition/).
-- **AI toolchain in the image** (desktop edition) — ten vendor coding CLIs bundled under `/opt/duduclaw/runtimes`, with `claude`, `codex`, `gemini`, `qwen`, `kimi`, `copilot`, `grok`, `agent`, `opencode` and `vibe` on `PATH` at first boot. Credentials all land in `/data/duduclaw` (mode 0700), so a system update never wipes them. Local inference runs on llama.cpp's `llama-server`; no model weights ship in the image — the dashboard downloads one into `/data/duduclaw/models`. What is deliberately *not* bundled, and how to regenerate the payload: [AI runtimes guide](docs/guides/ai-runtimes.md).
-- **Apps** (desktop edition) — Flatpak offline preload of Chromium, LibreOffice and Steam. The app compatibility layer is declared through `compat.d`: Bottles for Windows desktop apps, a KVM virtual machine + RDP for full Windows, Waydroid for Android (no GApps, self-setup); macOS apps are not run locally. Scope and the explicit non-promises are in the [app compatibility guide](https://os.duduclaw.dudustudio.monster/docs/en/guides/app-compat/) on the docs site.
+- **AI toolchain in the image** (desktop edition) — ten vendor coding CLIs bundled under `/opt/duduclaw/runtimes`, with `claude`, `codex`, `gemini`, `qwen`, `kimi`, `copilot`, `grok`, `agent`, `opencode` and `vibe` on `PATH` at first boot. Credentials all land in `/data/duduclaw` (mode 0700), so a system update never wipes them. The platform deprecated its Gemini CLI runtime in v1.67.0 and plans to remove it in v1.71.0; v0.2.0 embeds platform 1.63.0 and is unaffected, and `gemini` leaves this list once the OS syncs to a platform release without it. Local inference runs on llama.cpp's `llama-server`; no model weights ship in the image — the dashboard downloads one into `/data/duduclaw/models`. What is deliberately *not* bundled, and how to regenerate the payload: [AI runtimes guide](docs/guides/ai-runtimes.md).
+- **Apps** (desktop edition) — the image carries an offline Flatpak repo: Chromium and LibreOffice install from the Launcher with no network; other apps, Steam included, come from Flathub. The app compatibility layer is declared through `compat.d`: Bottles for Windows desktop apps, a KVM virtual machine + RDP for full Windows, Waydroid for Android (no GApps, self-setup); macOS apps are not run locally. Scope and the explicit non-promises are in the [app compatibility guide](docs/guides/app-compat.md) (on the docs site: <https://os.duduclaw.dudustudio.monster/docs/en/os/guides/app-compat/>).
 
 The base image the installer ISO writes (`duduclaw-image-ab`) has the same desktop shell and gateway, just without the app layer; the dashboard is served by the gateway, so the box is operable from a browser on the LAN with or without a screen. What the desktop itself does with no monitor attached (whether it falls back to a purely headless box) has not been defined on real hardware yet; it is a bring-up open item.
 
@@ -112,7 +112,7 @@ zstd -d <wic.zst>
 dd if=<wic> of=/dev/<target-disk> bs=4M conv=fsync    # or bmaptool copy
 ```
 
-> Both forms for `duduclaw-qemux86-64` are boot-verified under QEMU. `duduclaw-genericx86-64` is the real-hardware target and cannot be booted under QEMU; through v0.2.0 it has been config-audited only, and a real-hardware boot is the most important open validation item.
+> For `duduclaw-qemux86-64`, the whole-disk image was boot-tested under QEMU (to the login prompt) before v0.2.0 was signed; the installer ISOs were not re-booted before release, and their last full QEMU installs on record are v0.1.0 and a 2026-09-06 development build; after release (2026-10-07) the desktop installer was booted under QEMU to the first wizard page only, without running an install. `duduclaw-genericx86-64` is the real-hardware target and cannot be booted under QEMU; through v0.2.0 it has been config-audited only, and a real-hardware boot is the most important open validation item.
 
 <a id="build"></a>
 
@@ -156,7 +156,7 @@ Every subcommand's `v<version>` is optional and defaults to the `VERSION` file, 
 - [`meta-duduclaw/README.md`](meta-duduclaw/README.md) — layer reference: layout, image roles, builder container, `kas build`.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history, Keep a Changelog format.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) / [`SECURITY.md`](SECURITY.md) — how to contribute, how to report vulnerabilities.
-- User-facing feature docs (authored in the platform repo, published on the docs site): [DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/en/features/50-duduclaw-os-appliance/), [hardware requirements](https://os.duduclaw.dudustudio.monster/docs/en/guides/hardware-requirements/), [app compatibility layer](https://os.duduclaw.dudustudio.monster/docs/en/guides/app-compat/).
+- User-facing feature docs (authored in the platform repo, published on the docs site): [DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/en/features/50-duduclaw-os-appliance/), [hardware requirements](https://os.duduclaw.dudustudio.monster/docs/en/guides/hardware-requirements/). The [app compatibility layer](docs/guides/app-compat.md) guide lives in this repo.
 
 <a id="license"></a>
 

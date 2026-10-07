@@ -22,7 +22,8 @@ const startLinks = (() => {
 /**
  * The docs site is served as a sub-path of the main DuDuClaw OS site
  * (website/ at the repo root is copied to `_site/`, this build to
- * `_site/docs/`). `SITE_URL` is set by CI once the real domain exists.
+ * `_site/docs/`). `SITE_URL` is supplied by scripts/deploy-cloudrun.sh
+ * (https://os.duduclaw.dudustudio.monster) and by the Pages workflow.
  */
 const site = process.env.SITE_URL || 'https://example.invalid';
 
@@ -55,9 +56,10 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
-      // No "edit this page" link and no GitHub icons anywhere in the chrome:
-      // the docs live on our own domain. The only header link is the one back
-      // to the main site, rendered by the SiteLink component below.
+      // No "edit this page" link: the docs live on our own domain. The header
+      // carries two text links (main site, DuDuClaw platform site) and a
+      // GitHub icon button for the OS repository, rendered by the SiteLink
+      // component below.
       components: {
         SocialIcons: './src/components/SiteLink.astro',
       },

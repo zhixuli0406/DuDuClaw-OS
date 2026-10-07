@@ -95,6 +95,7 @@
       <a href="#hardware">硬體</a>
       <a href="download.html">下載</a>
       <a href="docs/">文件</a>
+      <a href="https://duduclaw.dudustudio.monster/" rel="noopener">DuDuClaw 平台</a>
     </nav>
     <div class="nav-tools">
       <a class="icon-btn" href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener" aria-label="在 GitHub 上檢視 DuDuClaw OS">
@@ -116,6 +117,7 @@
     <a href="#hardware">硬體</a>
     <a href="download.html">下載</a>
     <a href="docs/">文件</a>
+    <a href="https://duduclaw.dudustudio.monster/" rel="noopener">DuDuClaw 平台</a>
     <a href="https://github.com/zhixuli0406/DuDuClaw-OS" rel="noopener">GitHub</a>
   </div>
 </header>
@@ -148,7 +150,7 @@
           <p class="hero-sub">DuDuClaw OS 反過來做：compositor、桌面殼、系統服務與信任邊界都圍著 gateway 設計，AI 操作這台電腦是作業系統原生的行為，煞車也長在系統裡。</p>
           <a class="hero-claim" href="#first-claim">
             <span class="dot" aria-hidden="true"></span>
-            <span>據我們查到的範圍：第一套把 agent 做進自家 compositor 的通用 Linux</span>
+            <span>據我們 2026 年 9 月查到的範圍：第一套把 agent 做進自家 compositor 的通用 Linux</span>
           </a>
           <div class="hero-cta">
             <a class="btn btn-primary" href="download.html" data-magnetic>
@@ -201,15 +203,16 @@
         <div class="frame">
           <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i></div>
           <!-- Below 600px the full desktop shot is replaced by a portrait
-               detail crop of the composer bar, task cards and dock, so the
-               UI text stays readable instead of shrinking into noise. -->
+               detail crop of the composer bar, task list and dock, so the
+               UI text stays readable instead of shrinking into noise.
+               Shots: v0.2.0 release image in QEMU, reshot 2026-10-07. -->
           <picture class="shot-light">
             <source media="(max-width: 600px)" type="image/avif" srcset="assets/screens/home-desktop-mobile.avif" width="640" height="670">
             <source media="(max-width: 600px)" type="image/webp" srcset="assets/screens/home-desktop-mobile.webp" width="640" height="670">
             <source media="(max-width: 600px)" srcset="assets/screens/home-desktop-mobile.png" width="640" height="670">
             <source type="image/avif" srcset="assets/screens/home-desktop.avif" width="1280" height="800">
             <source type="image/webp" srcset="assets/screens/home-desktop.webp" width="1280" height="800">
-            <img src="assets/screens/home-desktop.png" alt="DuDuClaw OS 淺色主題首頁：頂端選單列與待核准提示，中央是「交辦一件事給你的 AI 團隊」輸入框與三個常用交辦建議，畫面下方是緋紅貓與 Dock" width="1280" height="800" loading="eager" fetchpriority="high" decoding="async">
+            <img src="assets/screens/home-desktop.png" alt="DuDuClaw OS v0.2.0 在 QEMU 上的淺色主題首頁：頂端選單列與待核准提示，中央是「交辦一件事給你的 AI 團隊」輸入框、三個常用交辦建議與「還沒有交辦的任務」提示，畫面下方是緋紅貓與 Dock" width="1280" height="800" loading="eager" fetchpriority="high" decoding="async">
           </picture>
           <picture class="shot-dark">
             <source media="(max-width: 600px)" type="image/avif" srcset="assets/screens/home-dark-mobile.avif" width="640" height="670">
@@ -217,7 +220,7 @@
             <source media="(max-width: 600px)" srcset="assets/screens/home-dark-mobile.png" width="640" height="670">
             <source type="image/avif" srcset="assets/screens/home-dark.avif" width="1280" height="800">
             <source type="image/webp" srcset="assets/screens/home-dark.webp" width="1280" height="800">
-            <img src="assets/screens/home-dark.png" alt="DuDuClaw OS 深色主題首頁：交辦輸入框下方排著三張任務卡，分別顯示等你決定、進行中與已完成的狀態" width="1280" height="800" loading="eager" fetchpriority="high" decoding="async">
+            <img src="assets/screens/home-dark.png" alt="DuDuClaw OS v0.2.0 在 QEMU 上的深色主題首頁：交辦輸入框、三個常用交辦建議與「還沒有交辦的任務」提示，下方是緋紅貓與 Dock" width="1280" height="800" loading="eager" fetchpriority="high" decoding="async">
           </picture>
         </div>
       </div>
@@ -231,10 +234,10 @@
         <h2>這還不是正式版</h2>
         <ul>
           <li><strong>0.2.0 屬於 bring-up 階段</strong>，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動。</li>
-          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 只做過設定稽核。</li>
+          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 只做過設定稽核。v0.2.0 發布前跑過 QEMU 開機測試的是整碟映像；兩種安裝器 ISO 發布前沒有重跑開機，發布後只有 QEMU 版的桌面版安裝器在 QEMU 開到安裝精靈第一頁（2026-10-07 重拍截圖時），沒有跑完安裝。</li>
           <li><strong>發布映像沒有啟用 Secure Boot 簽章、dm-verity 與 TPM</strong>。相關 layer 已經接好，由建置 overlay 開啟；用官方映像開機前請在韌體裡關閉 Secure Boot。</li>
-          <li><strong>共駕功能已經編譯進映像，但預設關閉</strong>，每個 agent 要各自開啟。凍結、交還、急停與影子工作區已用真實輸入事件在容器與 QEMU 驗證過；真實 DRM 硬體與雙螢幕還沒驗。</li>
-          <li><strong>v0.1.0 仍留在 Releases</strong>，需要回滾隨時可以退回去。</li>
+          <li><strong>共駕功能已經編譯進映像，但預設關閉</strong>，每個 agent 要各自開啟。凍結、交還、急停與影子工作區在開發階段驗證過：容器裡用模擬輸入，QEMU 虛擬機裡用真實鍵盤滑鼠事件，那台虛擬機跑的是早期 arm64 開發映像，不是這版 x86-64 發布映像。真實 DRM 硬體與雙螢幕還沒驗。</li>
+          <li><strong>v0.1.0 仍留在 Releases</strong>，想回到舊版可以重新下載安裝；兩個版本之間沒有透過 A/B 更新互轉的驗證紀錄。</li>
         </ul>
       </div>
     </div>
@@ -255,8 +258,8 @@
           <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"></use></svg>
           我們敢講的第一與誰比我們早
         </h3>
-        <p><strong>據我們查到的範圍，DuDuClaw OS 是第一套把 AI agent 做進自家 Wayland compositor 的通用 Linux 發行版</strong>：agent 有專屬的輸入 seat 與影子輸出，人優先凍結與急停由 compositor 強制執行。Omarchy 把 agent 放在現成的 Hyprland 上面，差別就在這一層。</p>
-        <p>「Agent-first OS」這個名字已經有人先用。阿里雲 Alibaba Cloud Linux 4 Agentic Edition（2026 年 5 月）自稱 first Agent-first operating system，它是無頭伺服器版，沒有視窗系統；釘釘 Agent OS、階躍 Step AOS 與 Warmwind OS 各自宣稱過「全球首個」，分別是協作平台、Android 中介層與雲端虛擬桌面。所以我們只講上面那一句，範圍窄，但每個字都查得到。</p>
+        <p><strong>據我們 2026 年 9 月查到的範圍，DuDuClaw OS 是第一套把 AI agent 做進自家 Wayland compositor 的通用 Linux 發行版</strong>：agent 有專屬的輸入 seat 與影子輸出，人優先凍結與急停由 compositor 強制執行。Omarchy 把 agent 放在現成的 Hyprland 上面，差別就在這一層。</p>
+        <p>「Agent-first OS」這個名字已經有人先用。阿里雲 Alibaba Cloud Linux 4 Agentic Edition（2026 年 5 月）自稱 first Agent-first operating system，它是無頭伺服器版，沒有視窗系統；釘釘 Agent OS、階躍 Step AOS 與 Warmwind OS 各自宣稱過「全球首個」，分別是協作平台、Android 中介層與雲端虛擬桌面。所以我們只講上面那一句，範圍窄，查證來源列在下面。</p>
         <p class="claim-sources">查證來源：<a href="https://help.aliyun.com/en/alinux/agentic-os" target="_blank" rel="noopener">Alibaba Cloud Linux Agentic Edition</a> · <a href="https://omarchy.org/" target="_blank" rel="noopener">Omarchy</a> · <a href="https://about.warmwind.com/warmwind-os-building-the-ai-operating-system-for-everyone/" target="_blank" rel="noopener">Warmwind OS</a> · <a href="https://www.163.com/dy/article/L1PTHIHL05118HA4.html" target="_blank" rel="noopener">Step AOS 報導</a></p>
       </div>
 
@@ -316,17 +319,17 @@
           <div class="stack-do">
             <h4 class="stack-label">DuDuClaw OS 怎麼做</h4>
             <ul>
-              <li>gateway 是 systemd 服務，首次開機自動 provision，區網公告 <code>duduclaw.local</code>。</li>
-              <li>OS 更新由 gateway 自己下載、驗簽、寫進另一個 A/B 槽；一份 manifest 一把簽章，開不起來自動回滾。</li>
-              <li>需要 root 的六件事（重開機、關機、套用更新、恢復原廠設定等）交給獨立小 daemon <code>duduclaw-sysd</code>，Unix socket 加 peer-credential 驗證，只認六個固定指令。</li>
-              <li>gateway 與 compositor 跑在不同使用者底下；<code>/data/duduclaw</code> 是 gateway 真正的家，十套 CLI 的憑證與本機模型都在那裡，更新不洗掉。</li>
+              <li>gateway 是 systemd 服務，首次開機自動 provision，管理後台開在區網的 18789 埠。</li>
+              <li>OS 更新由 gateway 自己下載、驗簽、寫進另一個 A/B 槽，一份 manifest 一把簽章。新槽開機有計數，連續失敗就退回舊槽；這套映像上實測過的是套用更新與手動回滾。</li>
+              <li>需要 root 的系統操作（重開機、關機、套用與回滾更新、恢復原廠設定、時區與有線網路等）集中在獨立小 daemon <code>duduclaw-sysd</code>，Unix socket 加 peer-credential 驗證，只接受一份固定清單裡的 15 個指令。</li>
+              <li>compositor 與桌面跑在獨立帳號 <code>duduclaw-kiosk</code>，gateway 目前仍以 root 執行，降權是後續工作；<code>/data/duduclaw</code> 是 gateway 真正的家，十套 CLI 的憑證與本機模型都在那裡，更新不洗掉。</li>
             </ul>
           </div>
           <div class="stack-vs">
             <h4 class="stack-label">一般 Linux 裝 gateway</h4>
             <p class="stack-vs-line">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-minus"></use></svg>
-              <span>agent 要 sudo 才能碰系統，權限要嘛整包給、要嘛什麼都做不了。</span>
+              <span>agent 要碰系統只能自己拿 sudo，沒有一份固定、可稽核的指令清單。</span>
             </p>
           </div>
         </div>
@@ -340,7 +343,7 @@
           <div class="stack-do">
             <h4 class="stack-label">DuDuClaw OS 怎麼做</h4>
             <ul>
-              <li>唯讀 root，預設所有連入連接埠關閉，SSH 出廠關閉。</li>
+              <li>桌面版：唯讀 root，防火牆預設擋下所有連入，只開管理後台（TCP 18789）與 mDNS（UDP 5353）。映像裡有 dropbear SSH，桌面版被防火牆擋在外面；基礎版沒有防火牆，區網連得到。</li>
               <li>共駕是每個 agent 各自的 capability，預設關閉、fail-closed。</li>
               <li>發送、購買、刪除、授權先開審批卡；登入、密碼、付款 agent 主動把桌面交還給人，網路銀行與 CAPTCHA 在拒絕清單上。</li>
               <li>從螢幕或 accessibility tree 讀到的文字一律先當資料處理，密碼欄位不讀；每個事件落 JSONL 稽核。</li>
@@ -350,13 +353,13 @@
             <h4 class="stack-label">一般 Linux 裝 gateway</h4>
             <p class="stack-vs-line">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-minus"></use></svg>
-              <span>agent 跑在你的帳號底下，能做的就是你能做的全部。</span>
+              <span>agent 跑在你的帳號與桌面工作階段裡，你的檔案與視窗它都碰得到。</span>
             </p>
           </div>
         </div>
       </div>
 
-      <p class="stack-foot reveal">這四層都在 v0.2.0 映像裡；共駕預設關閉，真機驗證見上方狀態卡。</p>
+      <p class="stack-foot reveal">這四層都在 v0.2.0 桌面版映像裡；共駕預設關閉，驗證範圍見上方狀態卡。</p>
     </div>
   </section>
 
@@ -449,7 +452,7 @@
         </article>
       </div>
 
-      <p class="shadow-foot reveal">影子工作區與共駕已編譯進 v0.2.0，預設關閉，每個 agent 各自開啟；凍結、交還、急停已用真實輸入事件在容器與 QEMU 驗證，真機尚未。Steam、Chromium、LibreOffice 以 Flatpak 預載；桌面目前走 llvmpipe 軟體渲染，GPU 加速尚未接上，重度 3D 遊戲請等硬體加速那一版。</p>
+      <p class="shadow-foot reveal">影子工作區與共駕已編譯進 v0.2.0，預設關閉，每個 agent 各自開啟；驗證範圍見上方狀態卡，真機尚未驗。Steam 要從 Flathub 安裝；QEMU 上的桌面走 llvmpipe 軟體渲染，真機的 GPU 加速還沒驗證，重度 3D 遊戲先別指望。</p>
     </div>
   </section>
 
@@ -487,7 +490,7 @@
                   <p>套件管理器，失敗要自己救</p>
                 </details>
               </td>
-              <td class="col-new">A/B 雙槽原子更新，開機失敗自動回滾</td>
+              <td class="col-new">A/B 雙槽原子更新，新槽開機失敗退回舊槽（開機計數已接上，自動回滾尚未在這套映像上做故障注入測試）</td>
             </tr>
             <tr>
               <th scope="row">防竄改</th>
@@ -548,7 +551,7 @@
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-refresh"></use></svg></span>
           <h3>A/B 原子更新與回滾</h3>
-          <p>系統有兩個槽，更新寫進沒在用的那一槽，重開機才切換。新槽開不起來就自動切回舊槽，不會停在半更新的狀態。</p>
+          <p>系統有兩個槽，更新寫進沒在用的那一槽，重開機才切換，不會停在半更新的狀態。新槽有開機計數，連續開不起來就切回舊槽；這套映像上實測過套用與手動回滾。</p>
         </article>
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-lock"></use></svg></span>
@@ -563,7 +566,7 @@
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-command"></use></svg></span>
           <h3>Cmd+K 交辦列</h3>
-          <p>在任何 app 上按下去（OS 殼上顯示為 Super）都能叫出交辦列，第一個結果永遠是交辦給 AI 員工，進度回到首頁看。</p>
+          <p>在任何 app 上按 Super+K（殼的選單列標示為 ⌘K）都能叫出交辦列，第一個結果永遠是交辦給 AI 員工，進度回到首頁看。</p>
         </article>
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-columns"></use></svg></span>
@@ -573,7 +576,7 @@
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
           <h3>十套 AI CLI 內建</h3>
-          <p><code>claude</code>、<code>codex</code>、<code>gemini</code>、<code>qwen</code>、<code>kimi</code>、<code>copilot</code>、<code>grok</code>、<code>agent</code>（Cursor）、<code>opencode</code>、<code>vibe</code> 都在映像裡，登入即用。憑證統一存在 <code>/data/duduclaw</code>。</p>
+          <p><code>claude</code>、<code>codex</code>、<code>gemini</code>、<code>qwen</code>、<code>kimi</code>、<code>copilot</code>、<code>grok</code>、<code>agent</code>（Cursor）、<code>opencode</code>、<code>vibe</code> 都在桌面版映像裡，登入即用，憑證統一存在 <code>/data/duduclaw</code>。平台自 v1.67.0 起把 Gemini CLI runtime 標為棄用、預定 v1.71.0 移除，這版內嵌的平台 1.63.0 不受影響。</p>
         </article>
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
@@ -583,12 +586,12 @@
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-package"></use></svg></span>
           <h3>Flatpak 離線倉庫與注音</h3>
-          <p>Chromium 與 LibreOffice 從 Launcher 一鍵安裝，不需要網路；其他軟體走 Flathub。輸入法是 fcitx5 注音。</p>
+          <p>Chromium 與 LibreOffice 從 Launcher 一鍵安裝，不需要網路；Steam 與其他軟體走 Flathub。輸入法是 fcitx5 注音。</p>
         </article>
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-grid"></use></svg></span>
           <h3>app 相容層</h3>
-          <p>Bottles 跑 Windows 桌面程式，KVM 虛擬機加 RDP 跑完整 Windows，Waydroid 跑 Android（不含 GApps）。macOS 程式不在支援範圍。</p>
+          <p>Bottles 跑 Windows 桌面程式，KVM 虛擬機加 RDP 跑完整 Windows，Waydroid 跑 Android（不含 GApps）。目前在 QEMU 上試過 Bottles 跑記事本；Windows 虛擬機需要真機 KVM，還沒開機驗證；Waydroid 只走到初始化畫面。macOS 程式不在支援範圍。</p>
         </article>
       </div>
     </div>
@@ -600,7 +603,7 @@
       <div class="section-head reveal">
         <span class="eyebrow">桌面</span>
         <h2>這台機器長什麼樣子</h2>
-        <p>以下六張都是 DuDuClaw OS v0.2.0 在 QEMU 上的實際畫面。</p>
+        <p>以下六張都是 v0.2.0 發布映像在 QEMU 上的截圖，2026 年 10 月 7 日重拍，映像與 Release 上的檔案核對過 SHA-256 與簽章。安裝精靈那張來自桌面版安裝器 ISO，其餘五張來自整碟映像的首次開機。帳號名稱「Demo」是示範用的，也沒有設定任何 AI 服務的授權，所以首頁還沒有任務。真機畫面目前還沒有。</p>
       </div>
 
       <div class="tablist" role="tablist" aria-label="桌面畫面">
@@ -617,10 +620,10 @@
           <picture>
             <source type="image/avif" srcset="assets/screens/home-desktop.avif">
             <source type="image/webp" srcset="assets/screens/home-desktop.webp">
-            <img src="assets/screens/home-desktop.png" alt="淺色主題的 DuDuClaw OS 首頁，頂端選單列寫著「目前沒有待你核准的項目」，中央是交辦輸入框與整理 Q3 報表、清理收件匣、排明天的行程三個建議，底部是 Dock" width="1280" height="800" loading="lazy" decoding="async">
+            <img src="assets/screens/home-desktop.png" alt="v0.2.0 在 QEMU 上的淺色主題首頁，頂端選單列寫著「目前沒有待你核准的項目」，中央是「早安，Demo」、交辦輸入框與整理 Q3 報表、清理收件匣、排明天的行程三個建議，下面一列寫著還沒有交辦的任務，底部是 Dock" width="1280" height="800" loading="lazy" decoding="async">
           </picture>
         </div>
-        <p class="caption">開機第一眼就是交辦列。上面是待核准提示，中間是輸入框與常用交辦，下面是進行中的任務與 Dock。</p>
+        <p class="caption">開機第一眼就是交辦列。上面是待核准提示，中間是輸入框與常用交辦，下面是任務列與 Dock。剛裝好的機器還沒有任務，任務列只有一行提示。</p>
       </div>
 
       <div class="tabpanel" id="panel-home-dark" role="tabpanel" aria-labelledby="tab-home-dark" tabindex="0" hidden>
@@ -628,10 +631,10 @@
           <picture>
             <source type="image/avif" srcset="assets/screens/home-dark.avif">
             <source type="image/webp" srcset="assets/screens/home-dark.webp">
-            <img src="assets/screens/home-dark.png" alt="深色主題的 DuDuClaw OS 首頁，交辦輸入框下方三張任務卡分別標示等你決定、進行中、已完成，最下方一列今日摘要" width="1280" height="800" loading="lazy" decoding="async">
+            <img src="assets/screens/home-dark.png" alt="v0.2.0 在 QEMU 上的深色主題首頁，結構和淺色版相同：交辦輸入框、三個常用交辦建議、還沒有交辦的任務提示與 Dock" width="1280" height="800" loading="lazy" decoding="async">
           </picture>
         </div>
-        <p class="caption">同一個首頁的深色主題。任務卡顯示每件事跑到第幾輪、由哪位 AI 員工負責、目前狀態，最下面一列是今日摘要。</p>
+        <p class="caption">同一個首頁的深色主題，在首次設定精靈的「選擇外觀」那一步選定。有交辦之後，任務會以卡片列在輸入框下方；這張截圖的機器沒有設定 AI 服務，所以還沒有任務。</p>
       </div>
 
       <div class="tabpanel" id="panel-launcher" role="tabpanel" aria-labelledby="tab-launcher" tabindex="0" hidden>
@@ -639,7 +642,7 @@
           <picture>
             <source type="image/avif" srcset="assets/screens/launcher.avif">
             <source type="image/webp" srcset="assets/screens/launcher.webp">
-            <img src="assets/screens/launcher.png" alt="Launcher 搜尋面板，第一組結果是「交辦給 總管助理」，下面依序列出應用程式、可安裝的瀏覽器與 Bottles、以及檔案分類" width="1280" height="800" loading="lazy" decoding="async">
+            <img src="assets/screens/launcher.png" alt="v0.2.0 在 QEMU 上的 Launcher 搜尋面板，第一組結果是「交辦給 總管助理」，下面依序列出應用程式（Fcitx 5、Waydroid）、可安裝的瀏覽器與 Bottles，以及檔案分類" width="1280" height="800" loading="lazy" decoding="async">
           </picture>
         </div>
         <p class="caption">按 Super+K 叫出來，第一個結果永遠是交辦給 AI 員工，往下才是應用程式、可安裝項目與檔案。</p>
@@ -650,7 +653,7 @@
           <picture>
             <source type="image/avif" srcset="assets/screens/lock-screen.avif">
             <source type="image/webp" srcset="assets/screens/lock-screen.webp">
-            <img src="assets/screens/lock-screen.png" alt="鎖定畫面，大時鐘與日期下方一張摘要卡寫著「你離開的 2 分鐘」與「目前沒有待你核准的項目」，再往下是解鎖圖示與密碼欄" width="1280" height="800" loading="lazy" decoding="async">
+            <img src="assets/screens/lock-screen.png" alt="v0.2.0 在 QEMU 上的鎖定畫面，大時鐘與日期下方一張摘要卡寫著「你離開的 3 分鐘」與「目前沒有待你核准的項目」，再往下是解鎖圖示、帳號名稱 Demo 與「按任意鍵或點擊以輸入密碼」" width="1280" height="800" loading="lazy" decoding="async">
           </picture>
         </div>
         <p class="caption">鎖著的時候也看得到值班摘要：你離開多久、有沒有待你核准的項目。</p>
@@ -661,7 +664,7 @@
           <picture>
             <source type="image/avif" srcset="assets/screens/oobe-ai-runtimes.avif">
             <source type="image/webp" srcset="assets/screens/oobe-ai-runtimes.webp">
-            <img src="assets/screens/oobe-ai-runtimes.png" alt="首次設定精靈的 AI Runtime 授權頁，逐列列出 Claude Code、Codex、Gemini CLI、Grok、Qwen Code，每列都有輸入 API 金鑰與登入帳號按鈕" width="1280" height="800" loading="lazy" decoding="async">
+            <img src="assets/screens/oobe-ai-runtimes.png" alt="v0.2.0 在 QEMU 上的首次設定精靈 AI Runtime 授權頁，逐列列出 Claude Code、Codex、Gemini CLI、Grok、Qwen Code，都顯示未設定，每列有輸入 API 金鑰按鈕，前四列另有登入帳號按鈕" width="1280" height="800" loading="lazy" decoding="async">
           </picture>
         </div>
         <p class="caption">首次設定精靈的其中一步。登入既有帳號或貼上 API 金鑰都可以，一家都不設也能先略過，之後在管理後台補。</p>
@@ -672,7 +675,7 @@
           <picture>
             <source type="image/avif" srcset="assets/screens/installer-language.avif">
             <source type="image/webp" srcset="assets/screens/installer-language.webp">
-            <img src="assets/screens/installer-language.png" alt="安裝精靈的語言選擇頁，標題以繁體中文、English、日本語三種語言並列，下方三個語言選項卡片與底部的繼續按鈕" width="1280" height="800" loading="lazy" decoding="async">
+            <img src="assets/screens/installer-language.png" alt="v0.2.0 桌面版安裝器 ISO 在 QEMU 上的語言選擇頁，標題以繁體中文、English、日本語三種語言並列，下方三個語言選項卡片與底部的繼續按鈕" width="1280" height="800" loading="lazy" decoding="async">
           </picture>
         </div>
         <p class="caption">安裝器 ISO 開機後的第一步。安裝精靈提供繁體中文、English、日本語三種顯示語言。</p>
@@ -686,7 +689,7 @@
       <div class="section-head reveal">
         <span class="eyebrow">從開機到上工</span>
         <h2>四個步驟</h2>
-        <p><span class="pill pill-accent">安裝 8 分鐘</span> 從插上 USB 到交辦第一件事，中間不需要開終端機。</p>
+        <p>從插上 USB 到交辦第一件事，中間不需要開終端機。安裝時間依機器而定，QEMU 上量過的幾次從 8 分鐘到一個多小時都有，真機還沒有數字。</p>
       </div>
       <div class="steps">
         <div class="step reveal">
@@ -699,7 +702,7 @@
         </div>
         <div class="step reveal">
           <h3>登入 AI 廠商</h3>
-          <p>在 AI Runtime 授權頁登入既有帳號或貼上 API 金鑰。憑證存在 <code>/data/duduclaw</code>，系統更新不會清掉。</p>
+          <p>在 AI Runtime 授權頁或管理後台登入既有帳號、貼上 API 金鑰。憑證存在 <code>/data/duduclaw</code>，系統更新不會清掉。</p>
         </div>
         <div class="step reveal">
           <h3>交辦第一件事</h3>
@@ -753,7 +756,7 @@
         </table>
         </div>
       </div>
-      <p class="caption" style="margin-top:12px;color:var(--muted);font-size:14.5px">不需要獨立顯示卡，目前的桌面走 llvmpipe 軟體渲染。</p>
+      <p class="caption" style="margin-top:12px;color:var(--muted);font-size:14.5px">不需要獨立顯示卡；QEMU 上的桌面走 llvmpipe 軟體渲染，真機的 GPU 加速還沒驗證。以上規格都還沒有真機開機數據支撐。</p>
 
       <div class="table-shell reveal" style="margin-top:28px">
         <div class="table-scroll">
@@ -763,7 +766,7 @@
             <tr><th scope="col">定位</th><th scope="col">機型</th><th scope="col">備註</th></tr>
           </thead>
           <tbody>
-            <tr><th scope="row">入門</th><td data-label="機型">Intel N100 迷你主機（Beelink、GMKtec）</td><td data-label="備註">約 NT$4,000 至 6,000，無風扇</td></tr>
+            <tr><th scope="row">入門</th><td data-label="機型">Intel N100 迷你主機（Beelink、GMKtec）</td><td data-label="備註">無風扇、省電，桌面與文書夠用</td></tr>
             <tr><th scope="row">均衡</th><td data-label="機型">Beelink SER 系列（Ryzen）、Intel NUC</td><td data-label="備註">日常使用與多開都夠</td></tr>
             <tr><th scope="row">目標機</th><td data-label="機型">Intel N305 或 AMD Ryzen 7 8845HS 迷你主機</td><td data-label="備註">專案的參考機種</td></tr>
           </tbody>
@@ -797,7 +800,7 @@
           <ul class="checklist" style="margin-top:12px">
             <li>
               <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
-              <span><strong>A/B 原子更新與自動回滾</strong>更新寫進另一槽，開機失敗自動切回舊槽。</span>
+              <span><strong>A/B 原子更新與回滾</strong>更新寫進另一槽；開機計數已接上，這套映像實測過套用與手動回滾。</span>
             </li>
             <li>
               <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
@@ -836,7 +839,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
           minisign 公鑰
         </h3>
-        <p style="margin-bottom:14px">所有 v0.2.0 資產都用這一把簽。公鑰釘死在這裡，換版本不會換。</p>
+        <p style="margin-bottom:14px">所有 v0.2.0 資產都用這一把簽，v0.1.0 也是同一把。公鑰固定寫在這裡，下載後用它驗。</p>
         <div class="code key-block">
           <button class="copy-btn" type="button" data-copy="minisign-key">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
@@ -864,7 +867,7 @@
           </div>
           <ul>
             <li>A/B 更新鏈與桌面殼</li>
-            <li>Chromium、LibreOffice、Steam 的 Flatpak 預載</li>
+            <li>Chromium、LibreOffice 離線一鍵安裝</li>
             <li>注音輸入法與 app 相容層</li>
             <li>唯讀 root 與防火牆</li>
             <li>十套 AI CLI 與 llama.cpp</li>
@@ -877,19 +880,19 @@
         <article class="card edition reveal">
           <div>
             <h3>基礎版</h3>
-            <p class="persona">無頭 gateway 值班機，接不接螢幕都行</p>
+            <p class="persona">gateway 值班機，接不接螢幕都行</p>
           </div>
           <ul>
             <li>同樣的 A/B 佈局與桌面殼</li>
             <li>gateway 管理後台</li>
-            <li>沒有應用層與 app 相容層</li>
-            <li>沒有唯讀 root 與防火牆</li>
+            <li>沒有應用層、app 相容層、AI CLI 與 llama.cpp</li>
+            <li>沒有唯讀 root 與防火牆，SSH 在區網連得到</li>
             <li>屬於 bring-up 產物</li>
           </ul>
           <a class="btn btn-ghost btn-block" href="download.html#assets">看基礎版資產</a>
         </article>
       </div>
-      <p style="margin-top:20px;color:var(--muted)">管理後台由 gateway 提供，接不接螢幕都能從區網的瀏覽器操作 <code>http://duduclaw.local</code>。</p>
+      <p style="margin-top:20px;color:var(--muted)">管理後台由 gateway 提供，接不接螢幕都能從區網的瀏覽器打開 <code>http://&lt;這台機器的 IP&gt;:18789</code>。</p>
     </div>
   </section>
 
@@ -899,7 +902,7 @@
       <div class="section-head reveal">
         <span class="eyebrow">文件與回報</span>
         <h2>想再深入一點</h2>
-        <p>OS 本身的說明在 DuDuClaw-OS repo，平台功能的說明在 DuDuClaw repo。</p>
+        <p>OS 本身與平台功能的說明都在文件站，繁體中文、English、日本語三種語言。</p>
       </div>
       <div class="linkgrid reveal">
         <a class="linkcard" href="docs/os/readme/">
@@ -936,9 +939,9 @@
         </a>
         <a class="linkcard" href="docs/guides/hardware-requirements/">
           <svg class="icon" aria-hidden="true"><use href="#i-disk"></use></svg>
-          <span><b>硬體需求</b><small>能不能跑、買哪一台</small></span>
+          <span><b>硬體需求</b><small>能不能跑、推薦機型</small></span>
         </a>
-        <a class="linkcard" href="docs/guides/app-compat/">
+        <a class="linkcard" href="docs/os/guides/app-compat/">
           <svg class="icon" aria-hidden="true"><use href="#i-grid"></use></svg>
           <span><b>app 相容層</b><small>Windows、Android 程式怎麼跑</small></span>
         </a>
@@ -1006,9 +1009,10 @@
       <div>
         <h4>平台</h4>
         <ul>
-          <li><a href="https://github.com/zhixuli0406/DuDuClaw" rel="noopener">DuDuClaw</a></li>
+          <li><a href="https://duduclaw.dudustudio.monster/" rel="noopener">DuDuClaw 平台網站</a></li>
+          <li><a href="https://github.com/zhixuli0406/DuDuClaw" rel="noopener">平台 GitHub</a></li>
           <li><a href="docs/guides/hardware-requirements/">硬體需求</a></li>
-          <li><a href="docs/guides/app-compat/">app 相容層</a></li>
+          <li><a href="docs/os/guides/app-compat/">app 相容層</a></li>
           <li><a href="download.html">下載</a></li>
         </ul>
       </div>

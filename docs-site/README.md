@@ -7,10 +7,14 @@ static site, published under the main site — at `/docs/` by default, see
 [The base path](#the-base-path).
 
 The site never links to GitHub for content. Every document a reader can reach
-lives on our own domain: there is no "edit this page" link, no GitHub icon in
-the header, and body-text links that would leave for a source file are rendered
-as plain text instead. The one exception is a link to a GitHub **Releases**
-page, which is where release artifacts genuinely live.
+lives on our own domain: there is no "edit this page" link, and body-text links
+that would leave for a source file are rendered as plain text instead. The
+exceptions: a link to a GitHub **Releases** page, which is where release
+artifacts genuinely live; a link to the repository's **Security Advisories**
+page, which is the private vulnerability-report channel `SECURITY.md` names;
+and the header, which (like the main site's header)
+links to the OS repository and to the DuDuClaw platform site
+<https://duduclaw.dudustudio.monster/>.
 
 ## Run it
 
@@ -84,7 +88,8 @@ repo root:
 | `CHANGELOG.md` | `/docs/os/changelog/` |
 | `SECURITY.md` | `/docs/os/security/` |
 | `docs/README.md` | `/docs/os/` |
-| `docs/guides/*.md` | `/docs/os/guides/…` |
+| `docs/guides/*.md` | `/docs/os/guides/…` (zh-TW, or the English original with a notice) |
+| `docs/guides/x.md` with a `docs/guides/zh-TW/x.md` twin | English at `/docs/en/os/guides/x/`, the twin at `/docs/os/guides/x/`, `docs/guides/ja-JP/x.md` at `/docs/ja/os/guides/x/` |
 
 **The platform repo (`zhixuli0406/DuDuClaw`)** — only these five directories are
 public, and the sync script reads nothing else:
@@ -133,7 +138,7 @@ through Starlight's own fallback mechanism, which also labels them.
 2. Rewrites relative `.md` links to site paths, keeping the reader in their
    current language. Links pointing at files outside the whitelist become plain
    text carrying the original wording — never a GitHub fallback link.
-3. Plain-texts `github.com` links (Releases excepted) and defuses bare GitHub
+3. Plain-texts `github.com` links (Releases and Security Advisories excepted) and defuses bare GitHub
    URLs that GFM would otherwise auto-link, outside code blocks.
 4. Copies images referenced by a page next to that page.
 5. Prints a report: pages per locale, links rewritten, links plain-texted,
@@ -181,8 +186,10 @@ a UI colour. Light, dark and system all work — Starlight stamps `data-theme`
 before first paint, the same three-state pattern the main site uses.
 
 The only chrome customisation beyond CSS is `src/components/SiteLink.astro`,
-which replaces Starlight's social-icon slot with the single 「回到官網」 link
-back to the main site.
+which replaces Starlight's social-icon slot with two text links, 「回到官網」
+back to the main site and the DuDuClaw platform site (hidden below 50rem, where
+the header has no room), plus a GitHub icon button for the OS repository that
+uses the same monoline mark and 36px button as the main site's header.
 
 Search is Pagefind, Starlight's built-in static index — no third-party search
 service, no runtime dependency.

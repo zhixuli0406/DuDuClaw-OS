@@ -37,6 +37,7 @@ duplicated here.
 | Document | Description |
 |----------|-------------|
 | [guides/ai-runtimes.md](guides/ai-runtimes.md) | The bundled AI coding CLIs and llama.cpp: what is installed, what is deliberately not, where credentials live, how to run a local model, how to regenerate the runtime bundle, and the root-slot budget it consumes |
+| [guides/app-compat.md](guides/app-compat.md) · [zh-TW](guides/zh-TW/app-compat.md) · [ja-JP](guides/ja-JP/app-compat.md) | The app compatibility layer: `compat.d` runners, Bottles, the Windows VM, Waydroid, and what is and is not promised (moved here from the platform repo on 2026-09-29) |
 | [guides/platform-sync.md](guides/platform-sync.md) | Bringing the OS layer to one platform release with `scripts/sync-platform.sh`: the four snapshot refreshes, the embedded platform version bump + recipe renames, the fail-closed guards (stale detached lockfile, clobbered dependency version, stale dashboard dist), and what to bake and verify afterwards |
 
 The remaining subdirectories are created when their first document lands:
@@ -56,7 +57,8 @@ User-facing OS docs, authored in the platform repo and published on the docs sit
 | [DuDuClaw OS appliance](https://os.duduclaw.dudustudio.monster/docs/features/50-duduclaw-os-appliance/) | What the finished box does, from the user's side |
 | [OS keyboard shortcuts](https://os.duduclaw.dudustudio.monster/docs/features/51-os-keyboard-shortcuts/) | Global compositor bindings, shell UI, first-run setup, lock screen |
 | [Hardware requirements & compatibility](https://os.duduclaw.dudustudio.monster/docs/guides/hardware-requirements/) | x86-64-v3 / UEFI / SSD hard requirements, recommended mini-PCs, driver gaps |
-| [App compatibility layer](https://os.duduclaw.dudustudio.monster/docs/guides/app-compat/) | `compat.d` runners, Bottles, Waydroid, what is and is not promised |
+| [Desktop edition](https://os.duduclaw.dudustudio.monster/docs/features/52-desktop-edition/) | The desktop, the shadow workspace and co-driving, lock screen and first-run setup |
+| [Local models](https://os.duduclaw.dudustudio.monster/docs/features/53-local-models/) | Running a model on the box with the bundled `llama-server` |
 | [Building the mkosi appliance image](https://os.duduclaw.dudustudio.monster/docs/guides/appliance-build/) | Describes the `appliance/` line, which is now frozen here |
 
 ## Internal notes (L2, `wiki/`)

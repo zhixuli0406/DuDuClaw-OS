@@ -32,6 +32,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   與專案頁（`/<repo>/docs`）共用同一份設定；`docs-site/base.mjs` 是唯一的正規化點。
   網站主體維持零建置，只有文件站需要 Node。
 
+### Security
+- **Website build dependencies (2026-10-11)**: refresh the documentation lockfile, pin the patched selector parser to 7.1.6, and update sharp to 0.35.5. This changes the static site build tooling only; OS images, embedded platform version, and release asset URLs remain unchanged.
+
 ### Changed
   （2026-09-09 補：Pages 尚未啟用時 `configure-pages` 會失敗，故改為僅 `workflow_dispatch` 手動觸發；正式站走 Cloud Run。啟用 Pages 後再恢復 push 觸發。）
 - **`README.md`／`README.en.md`／`docs/README.md`：連到平台 repo 使用者文件的連結，從 GitHub

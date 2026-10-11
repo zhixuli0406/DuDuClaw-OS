@@ -33,6 +33,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   網站主體維持零建置，只有文件站需要 Node。
 
 ### Security
+- **Static-site response headers (2026-10-11)**: preserve server-level CSP and security headers on cacheable assets; use relative redirects behind the Cloud Run proxy and hide nginx version details. Site bytes, OS images, and release metadata are unchanged.
 - **Website build dependencies (2026-10-11)**: refresh the documentation lockfile, pin the patched selector parser to 7.1.6, and update sharp to 0.35.5. This changes the static site build tooling only; OS images, embedded platform version, and release asset URLs remain unchanged.
 
 ### Fixed

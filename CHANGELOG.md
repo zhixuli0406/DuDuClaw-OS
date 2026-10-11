@@ -39,6 +39,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **Website links (2026-10-11)**: resolve raw HTML documentation links through the same public-page mapping as Markdown and correct stale localized section links. Keep the download navigation linked to an existing home section. No platform documents or OS release artifacts are modified.
 
 ### Changed
+- **官網資訊呈現（2026-10-11）**：首頁改依用途 → pre-GA 狀態 → 內附 AI 工具 → 真實 QEMU 桌面 → 交辦與接手 → 核心能力 → 版本／硬體／入門 → 資料安全 → FAQ → 試用的閱讀路徑，移除「第一」與概括競品比較，合併重複技術說明。下載頁提前版本與安裝方式選擇、補閱讀結尾 CTA；資料說明區分本機儲存與雲端模型傳送，企業 DuDuClaw 導向既有總經銷。保留原有視覺與互動，FAQ 原生可展開，無 JS 時桌面六張圖集全部可讀。發布 metadata、資產 URL 與驗簽公鑰不變。
   （2026-09-09 補：Pages 尚未啟用時 `configure-pages` 會失敗，故改為僅 `workflow_dispatch` 手動觸發；正式站走 Cloud Run。啟用 Pages 後再恢復 push 觸發。）
 - **`README.md`／`README.en.md`／`docs/README.md`：連到平台 repo 使用者文件的連結，從 GitHub
   blob 連結全部改連文件站** `https://os.duduclaw.dudustudio.monster/docs/...`（值班機、桌面版、

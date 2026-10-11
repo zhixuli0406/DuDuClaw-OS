@@ -226,7 +226,7 @@ function maskCode(text) {
     store.push(m);
     return `\u0000FENCE${store.length - 1}\u0000`;
   });
-  out = out.replace(/(`+)(?:(?!\1)[\s\S])+?\1/g, (m) => {
+  out = out.replace(/(?<!`)(`+)(?!`)(?:(?!\1)[^\n])+?(?<!`)\1(?!`)/g, (m) => {
     store.push(m);
     return `\u0000CODE${store.length - 1}\u0000`;
   });
@@ -238,6 +238,39 @@ function unmaskCode(text, store) {
 }
 
 const EXTERNAL_RE = /^(https?:|mailto:|tel:|data:|#|\/\/)/i;
+
+// Legacy platform section links use headings from different locales or older
+// section numbers. Keep the link's section intent while using the destination
+// document's actual localized heading. Unlisted fragments are never guessed.
+function translatedFragment(hash, id, locale) {
+  let key;
+  try { key = decodeURIComponent(hash.slice(1)); } catch { return hash; }
+  const aliases = {
+    'guides/deployment-guide': {
+      '1-local-development': ['1-本機開發', '1-local-development', '1-ローカル開発'],
+      '3-ngrok-alternative': ['3-ngrok替代方案', '3-ngrok-alternative', '3-ngrok代替手段'],
+      '4-cloudflare-tunnel-long-term-stable': ['4-cloudflare-tunnel長期穩定', '4-cloudflare-tunnel-long-term-stable', '4-cloudflare-tunnel長期安定運用向け'],
+      '5-reverse-proxy-caddy--nginx': ['5-反向代理caddy--nginx', '5-reverse-proxy-caddy--nginx', '5-リバースプロキシcaddy--nginx'],
+      '8-prometheus--grafana-monitoring': ['9-prometheus--grafana-監控', '9-prometheus--grafana-monitoring', '9-prometheus--grafana-モニタリング'],
+      'websocket-origin-allowlist-required-reading-for-reverse-proxy-tailnet-setups': ['websocket-origin-白名單反向代理--tailnet-必讀', 'websocket-origin-allowlist-required-reading-for-reverse-proxy--tailnet-setups', 'websocket-origin-許可リストリバースプロキシtailnet-利用者は必読'],
+      'websocket-origin-白名單反向代理-tailnet-必讀': ['websocket-origin-白名單反向代理--tailnet-必讀', 'websocket-origin-allowlist-required-reading-for-reverse-proxy--tailnet-setups', 'websocket-origin-許可リストリバースプロキシtailnet-利用者は必読'],
+    },
+    'guides/google-workspace': { 'troubleshooting': ['疑難排解', 'troubleshooting', 'トラブルシューティング'] },
+    'guides/evals': {
+      'top-level-verdict-precedence': ['頂層-verdict-優先順序', 'toplevel-verdict-precedence', 'トップレベル-verdict-の優先順位'],
+      'capability-matrix---matrix': ['能力矩陣--matrix', 'capability-matrix---matrix', '能力マトリクス--matrix'],
+      'red-team-emitted-cases': ['用-soulmd-起步搭建-suiteeval-scaffold', 'red-team-emitted-cases', 'soulmd-から-suite-を組み立てるeval-scaffold'],
+      'verifier-cell-には混合した-gold': ['verifier-cell-需要混合的-gold', 'verifier-cells-need-a-mixed-gold', 'verifier-cell-には混合した-gold-が必要'],
+    },
+    'guides/docker': {
+      '11-tailscale-funnel-公開-https-給-webhook': ['11-tailscale-funnel公開-https-給-webhook', '11-tailscale-funnel-public-https-for-webhooks', '11-tailscale-funnel公開httpsをwebhookに提供'],
+      '11-tailscale-funnel-公開httpsをwebhookに提供': ['11-tailscale-funnel公開-https-給-webhook', '11-tailscale-funnel-public-https-for-webhooks', '11-tailscale-funnel公開httpsをwebhookに提供'],
+      'dashboardがくるくる回り続ける-websocket-403': ['dashboard-一直轉圈-websocket-403', 'dashboard-keeps-spinning-websocket-403', 'dashboardがくるくる回り続けるwebsocket-403'],
+    },
+  };
+  const found = aliases[id]?.[key];
+  return found ? '#' + found[{ root: 0, en: 1, ja: 2 }[locale]] : hash;
+}
 
 /**
  * Rewrite one link target found in `sourceFile` (locale `locale`).
@@ -256,6 +289,7 @@ function resolveLink(target, sourceFile, locale, pageIndex, currentId) {
     stats.links.plaintextGithub += 1;
     return { plain: true };
   }
+  if (trimmed.startsWith('#')) return { href: translatedFragment(trimmed, currentId, locale) };
   if (EXTERNAL_RE.test(trimmed)) return { href: trimmed };
 
   const [pathPart, hash = ''] = splitHash(trimmed);
@@ -269,7 +303,7 @@ function resolveLink(target, sourceFile, locale, pageIndex, currentId) {
     // honour the language the author pointed at. Everything else stays in the
     // reader's current language.
     const wanted = hit.id === currentId && hit.locale !== locale ? hit.locale : locale;
-    return { href: urlFor(hit.id, wanted) + hash };
+    return { href: urlFor(hit.id, wanted) + translatedFragment(hash, hit.id, wanted) };
   }
   stats.links.plaintextOutsideWhitelist += 1;
   return { plain: true };
@@ -322,6 +356,15 @@ function transformLinks(body, { sourceFile, outFile, locale, pageIndex, currentI
     const r = resolveLink(target, sourceFile, locale, pageIndex, currentId);
     if (r.plain) return `${lead}${label}`;
     return `${lead}[${label}](${r.href}${title || ''})`;
+  });
+
+  // Raw HTML anchors occur in platform notices as well as Markdown links.
+  // Resolve them through the same public whitelist, outside masked code blocks.
+  text = text.replace(/<a\b([^>]*?)\bhref=(['"])(.*?)\2([^>]*)>([\s\S]*?)<\/a>/gi, (_m, before, quote, target, after, label) => {
+    const r = resolveLink(target, sourceFile, locale, pageIndex, currentId);
+    if (r.plain) return label;
+    const href = r.href.replaceAll('&', '&amp;').replaceAll(quote, quote === '"' ? '&quot;' : '&#39;');
+    return `<a${before}href=${quote}${href}${quote}${after}>${label}</a>`;
   });
 
   // Bare GitHub URLs would be auto-linked by GFM; defuse them into code spans

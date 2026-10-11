@@ -121,7 +121,7 @@
   <section class="page-head">
     <div class="wrap">
       <h1>下載 DuDuClaw OS v0.2.0</h1>
-      <p>兩種版本、兩種形式、兩個機器目標，一共六個資產。每個資產都附同名的 <code>.sha256</code> 與 <code>.minisig</code>，燒錄前請自己驗一次。</p>
+      <p>先依試用目的選桌面版或基礎版，再選 QEMU／真機目標與安裝形式。每個資產都附 <code>.sha256</code> 與 <code>.minisig</code>，寫入前請驗證並備份目標硬碟。</p>
       <div class="badge-row">
         <span class="pill">2026-09-09 發布</span>
         <span class="pill">內嵌平台 1.63.0</span>
@@ -139,10 +139,34 @@
         <ul>
           <li><strong>0.2.0 是 bring-up 版本</strong>，1.0.0 才是第一個 GA。拿來當生產環境的唯一一台機器並不合適。</li>
           <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 只做過設定稽核。這一版發布前跑過 QEMU 開機測試的只有整碟映像，兩種安裝器 ISO 沒有重跑開機；發布後 QEMU 版的桌面版安裝器在 QEMU 開到安裝精靈第一頁，沒有跑完安裝。</li>
-          <li><strong>映像未簽章</strong>，安裝前要在韌體裡關閉 Secure Boot。dm-verity 與 TPM 也還沒啟用。</li>
+          <li><strong>開機鏈未啟用 Secure Boot 簽章</strong>，安裝前要在韌體裡關閉 Secure Boot；下載資產另有 minisign 簽章可驗證來源。dm-verity 與 TPM 也還沒啟用。</li>
           <li><strong>目標機需要 UEFI</strong>、支援 AVX2 的 x86-64 CPU 與一顆 SSD。arm64 機器（Apple Silicon、樹莓派）不能用。</li>
         </ul>
       </div>
+    </div>
+  </section>
+
+  <section class="section section-alt cv-auto" id="choose">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">怎麼選</span>
+        <h2>先選用途，再選安裝方式</h2>
+      </div>
+      <div class="grid grid-3">
+        <article class="card">
+          <h3>試用桌面與 AI 工具鏈</h3>
+          <p>選桌面版的安裝器 ISO（<code>installer-desktop</code>）。燒進 USB，開機跑圖形安裝精靈，選碟、確認、寫入、重開。</p>
+        </article>
+        <article class="card">
+          <h3>只要 gateway 值班機</h3>
+          <p>選基礎版的安裝器 ISO（<code>installer</code>）。同樣的 A/B 佈局與桌面殼加 gateway，沒有應用層、AI CLI、唯讀 root 與防火牆。這是 bring-up 產物。</p>
+        </article>
+        <article class="card">
+          <h3>想直接寫進整顆碟</h3>
+          <p>選桌面版的整碟映像（<code>.wic.zst</code>）。解壓之後 <code>dd</code> 或 <code>bmaptool</code> 寫進目標硬碟，跳過安裝精靈。</p>
+        </article>
+      </div>
+      <p style="margin-top:20px;color:var(--muted)">機器維度也要選對：<code>duduclaw-qemux86-64</code> 是 QEMU bring-up 目標，v0.2.0 的整碟映像發布前在 QEMU 開機到登入畫面，安裝器 ISO 跑完安裝的 QEMU 紀錄停在 v0.1.0 與 2026-09-06 的開發版，v0.2.0 的桌面版安裝器只在發布後開到安裝精靈第一頁；<code>duduclaw-genericx86-64</code> 是真實硬體目標，目前只做過設定稽核，在 QEMU 上開不起來。</p>
     </div>
   </section>
 
@@ -151,7 +175,7 @@
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">資產</span>
-        <h2>六個資產</h2>
+        <h2>依版本與機器目標下載</h2>
         <p>下面六列全部是直連 GitHub Release 的網址。用篩選器縮小範圍，或者直接往下捲看完整清單。</p>
       </div>
 
@@ -407,30 +431,6 @@
   </section>
 
   <!-- how to choose -->
-  <section class="section section-alt cv-auto" id="choose">
-    <div class="wrap">
-      <div class="section-head">
-        <span class="eyebrow">怎麼選</span>
-        <h2>三句話決定</h2>
-      </div>
-      <div class="grid grid-3">
-        <article class="card">
-          <h3>要一台日常在用的桌面</h3>
-          <p>選桌面版的安裝器 ISO（<code>installer-desktop</code>）。燒進 USB，開機跑圖形安裝精靈，選碟、確認、寫入、重開。</p>
-        </article>
-        <article class="card">
-          <h3>只要 gateway 值班機</h3>
-          <p>選基礎版的安裝器 ISO（<code>installer</code>）。同樣的 A/B 佈局與桌面殼加 gateway，沒有應用層、AI CLI、唯讀 root 與防火牆。這是 bring-up 產物。</p>
-        </article>
-        <article class="card">
-          <h3>想直接寫進整顆碟</h3>
-          <p>選桌面版的整碟映像（<code>.wic.zst</code>）。解壓之後 <code>dd</code> 或 <code>bmaptool</code> 寫進目標硬碟，跳過安裝精靈。</p>
-        </article>
-      </div>
-      <p style="margin-top:20px;color:var(--muted)">機器維度也要選對：<code>duduclaw-qemux86-64</code> 是 QEMU bring-up 目標，v0.2.0 的整碟映像發布前在 QEMU 開機到登入畫面，安裝器 ISO 跑完安裝的 QEMU 紀錄停在 v0.1.0 與 2026-09-06 的開發版，v0.2.0 的桌面版安裝器只在發布後開到安裝精靈第一頁；<code>duduclaw-genericx86-64</code> 是真實硬體目標，目前只做過設定稽核，在 QEMU 上開不起來。</p>
-    </div>
-  </section>
-
   <!-- verify -->
   <section class="section cv-auto" id="verify">
     <div class="wrap">
@@ -521,7 +521,7 @@ dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
 
       <ol class="steps-list" style="margin-top:24px">
         <li><strong>zstd 視窗參數</strong>：映像用 <code>--long=27</code> 壓縮。新版 zstd 解壓不必加參數；舊版如果提示視窗不足，解壓時補上 <code>--long=27</code>。</li>
-        <li><strong>目標機開機設定</strong>：韌體切到 UEFI 開機，並且關閉 Secure Boot。v0.2.0 的映像沒有簽章。</li>
+        <li><strong>目標機開機設定</strong>：韌體切到 UEFI 開機，並且關閉 Secure Boot。v0.2.0 的開機鏈未啟用 Secure Boot 簽章，下載資產仍可驗 minisign 簽章。</li>
         <li><strong>安裝流程</strong>：ISO 開機後是圖形安裝精靈，選碟、確認、看寫入進度、重開。第一次開機接著跑首次設定精靈。</li>
       </ol>
     </div>
@@ -581,6 +581,14 @@ dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
           </a>
         </article>
       </div>
+    </div>
+  </section>
+
+  <section class="cta" aria-labelledby="download-next-title">
+    <div class="wrap cta-inner">
+      <h2 id="download-next-title">下載後，從驗簽與入門指南開始</h2>
+      <p>請先備份、確認目標碟與 pre-GA 驗證範圍。遇到問題時附上版本與機器目標，方便追蹤。</p>
+      <div class="hero-cta"><a class="btn btn-primary" href="docs/os/readme/">閱讀入門文件</a><a class="btn btn-ghost" href="https://github.com/zhixuli0406/DuDuClaw-OS/issues" rel="noopener">回報試用問題</a></div>
     </div>
   </section>
 

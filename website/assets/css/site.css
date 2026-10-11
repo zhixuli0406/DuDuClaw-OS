@@ -382,7 +382,8 @@ code, kbd, pre { font-family: var(--font-mono); }
     transition: max-height var(--dur) var(--ease), padding var(--dur) var(--ease);
   }
   .nav-panel[data-open="true"] {
-    max-height: 360px;
+    max-height: min(480px, calc(100dvh - 72px));
+    overflow-y: auto;
     visibility: visible;
     border-top-width: 1px;
     padding-block: 8px 16px;
@@ -2338,3 +2339,47 @@ th[scope="row"] { font-weight: 600; white-space: nowrap; }
 @media print {
   .nav, .cta, .selector { display: none; }
 }
+
+/* ---------- information flow: workflow, FAQ and static screenshots ---------- */
+.workflow-steps { margin-bottom: 32px; }
+.workflow-steps .eyebrow { margin-bottom: 12px; }
+.trust-boundary { margin-top: 24px; color: var(--muted); }
+.faq-list { border-top: 1px solid var(--border); }
+.faq-list details { border-bottom: 1px solid var(--border); }
+.faq-list summary {
+  cursor: pointer;
+  padding: 20px 4px;
+  font-weight: 600;
+  line-height: 1.65;
+}
+.faq-list summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.faq-list details > p { max-width: 76ch; padding: 0 4px 18px; color: var(--muted); }
+:root:not([data-js]) .tablist { display: none; }
+:root:not([data-js]) .tabpanel[hidden] { display: block; }
+:root:not([data-js]) .tabpanel + .tabpanel { margin-top: 28px; }
+
+:root:not([data-js]) .theme-toggle,
+:root:not([data-js]) .nav-toggle { display: none; }
+@media (max-width: 860px) {
+  :root:not([data-js]) .nav-inner { flex-wrap: wrap; }
+  :root:not([data-js]) .nav-links {
+    display: flex;
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    padding-bottom: 6px;
+  }
+}
+
+/* Bundled CLI names describe image contents, without implying endorsement. */
+.tool-strip h2 { font-size: 20px; }
+.tool-brands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+.tool-note { max-width: 76ch; color: var(--muted); font-size: 14.5px; }

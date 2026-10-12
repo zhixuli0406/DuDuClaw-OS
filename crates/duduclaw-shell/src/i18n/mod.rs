@@ -432,7 +432,7 @@ pub enum Key {
     /// WP-lock-pw: the password field's own placeholder text.
     LockPasswordPlaceholder,
     /// `gateway_client::LoginError::InvalidCredentials` (401) — a real
-    /// password mismatch against the fixed `admin@local` account.
+    /// password mismatch against the owner account.
     LockPasswordWrongError,
     /// Every OTHER verify failure (offline, timeout, unexpected HTTP
     /// status, malformed response, the gateway's own rate limit) — one

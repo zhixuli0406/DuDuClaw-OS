@@ -15,7 +15,7 @@
 // its own ─────────────────────────────────────────────────────────────
 // A brand new local-session POST per feed would double the appliance's
 // `/api/session/local` traffic for no reason — both feeds are the SAME
-// `admin@local` operator session. `NotificationsFeed::session_jwt()` is
+// owner operator session. `NotificationsFeed::session_jwt()` is
 // already a `pub fn` accessor for exactly this kind of reuse. If no session
 // exists yet (fresh boot, panel/lockscreen never rendered), this feed falls
 // back to bootstrapping its own — it must not sit blocked forever waiting on

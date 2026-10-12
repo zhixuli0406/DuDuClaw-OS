@@ -214,7 +214,7 @@ pub struct OobeSelections {
     pub account_created: bool,
     /// The `AccountCreate` step's typed name value — LOCAL DISPLAY ONLY.
     /// Shell-S2 round 1's real `/api/first-run/claim` gateway endpoint is
-    /// password-only for the fixed `admin@local` user (see `oobe::claim`'s
+    /// password-only for the owner account (see `oobe::claim`'s
     /// own header comment) — this crate has no account-profile RPC to send
     /// a display name to anywhere, so this field never reaches the gateway.
     /// Kept anyway (rather than discarded after the click) so a resumed

@@ -39,7 +39,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **Website build dependencies (2026-10-11)**: refresh the documentation lockfile, pin the patched selector parser to 7.1.6, and update sharp to 0.35.5. This changes the static site build tooling only; OS images, embedded platform version, and release asset URLs remain unchanged.
 
 ### Fixed
-- **鎖定畫面改用擁有者目前的信箱驗證密碼**（`duduclaw-shell` 1.65.2）：平台 v1.73 起擁有者可以把預設的 `admin@local` 換成自己的信箱（首次設定表單、儀表板提示或帳號設定頁）。殼的鎖定畫面原本固定用 `admin@local` 呼叫 `/api/login`，換過信箱後正確密碼也會被拒。現在每次解鎖前先從本機 session（`/api/session/local` 回應的 `user.email`）讀出擁有者信箱再登入；拿不到本機 session 時（自動登入關閉、非個人版、舊版 gateway）退回 `admin@local`，原因寫到 stderr。代價是每次解鎖嘗試多一次本機往返和一筆 `login_local_auto` 稽核紀錄。已知限制：非個人版或關掉自動登入、又換過信箱的值班機，鎖定畫面仍會用 `admin@local`，需要平台另外提供不需信箱的擁有者驗證。
+- **鎖定畫面改用擁有者目前的信箱驗證密碼**（`duduclaw-shell` 1.65.2）：平台 v1.72.3 起擁有者可以把預設的 `admin@local` 換成自己的信箱（首次設定表單、儀表板提示或帳號設定頁）。殼的鎖定畫面原本固定用 `admin@local` 呼叫 `/api/login`，換過信箱後正確密碼也會被拒。現在每次解鎖前先從本機 session（`/api/session/local` 回應的 `user.email`）讀出擁有者信箱再登入；拿不到本機 session 時（自動登入關閉、非個人版、舊版 gateway）退回 `admin@local`，原因寫到 stderr。代價是每次解鎖嘗試多一次本機往返和一筆 `login_local_auto` 稽核紀錄。已知限制：非個人版或關掉自動登入、又換過信箱的值班機，鎖定畫面仍會用 `admin@local`，需要平台另外提供不需信箱的擁有者驗證。
 - **Website links (2026-10-11)**: resolve raw HTML documentation links through the same public-page mapping as Markdown and correct stale localized section links. Keep the download navigation linked to an existing home section. No platform documents or OS release artifacts are modified.
 
 ### Changed

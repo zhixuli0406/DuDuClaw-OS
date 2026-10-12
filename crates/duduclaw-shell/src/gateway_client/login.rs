@@ -25,7 +25,7 @@
 // Personal edition has exactly one owner account, the one OOBE's
 // `AccountCreate` step sets the password for via `/api/first-run/claim`
 // (see `oobe/claim.rs`'s own header comment). Its email used to be the fixed
-// placeholder `admin@local`; since platform v1.73 the owner can replace it
+// placeholder `admin@local`; since platform v1.72.3 the owner can replace it
 // with a real address from the dashboard. So each verify first reads the
 // owner's current email from the local-session response
 // (`session::local_owner_email`), then logs in with it. When no local

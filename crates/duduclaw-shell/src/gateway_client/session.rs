@@ -1,7 +1,8 @@
 // Local session bootstrap — Shell-S4 (2026-08-22). `POST /api/session/local`
 // (`duduclaw-gateway/src/server.rs::handle_local_session`, read-only
 // reference, not modified from here): issues a real JWT for the Personal
-// edition's `admin@local` user to a caller that has proven it's sitting at
+// edition's owner account (`admin@local` until the owner sets a real email)
+// to a caller that has proven it's sitting at
 // this machine — no password prompt, matching this shell's own "殼與
 // gateway 同機＝本機特權面" posture (task brief).
 //
@@ -93,17 +94,39 @@ fn gateway_base_url() -> String {
 /// mock server, same split `oobe/claim.rs`'s own
 /// `create_account`/`create_account_at` establish.
 pub(crate) fn bootstrap_local_session_at(base_url: &str) -> Result<String, SessionError> {
+    let json = post_local_session_at(base_url)?;
+    json.get("access_token")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| SessionError::Malformed("local session response missing `access_token`".to_string()))
+}
+
+/// The email the machine's owner account signs in with, read from the same
+/// local-session response (`user.email`). The gateway issues that session for
+/// its bootstrap owner, found by flag rather than by address, so this follows
+/// the owner after they replace the placeholder `admin@local` with a real
+/// email (platform v1.73). The lockscreen uses it to know which account to
+/// verify a password against.
+pub(crate) fn local_owner_email() -> Result<String, SessionError> {
+    local_owner_email_at(&gateway_base_url())
+}
+
+pub(crate) fn local_owner_email_at(base_url: &str) -> Result<String, SessionError> {
+    let json = post_local_session_at(base_url)?;
+    json.get("user")
+        .and_then(|u| u.get("email"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|e| !e.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| SessionError::Malformed("local session response missing `user.email`".to_string()))
+}
+
+fn post_local_session_at(base_url: &str) -> Result<serde_json::Value, SessionError> {
     let (host, port) = parse_loopback_base_url(base_url)?;
     let resp = http_post_local(&host, port, "/api/session/local")?;
     match resp.status {
-        200 => {
-            let json: serde_json::Value = serde_json::from_slice(&resp.body)
-                .map_err(|e| SessionError::Malformed(format!("local session response was not valid JSON: {e}")))?;
-            json.get("access_token")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(|| SessionError::Malformed("local session response missing `access_token`".to_string()))
-        }
+        200 => serde_json::from_slice(&resp.body)
+            .map_err(|e| SessionError::Malformed(format!("local session response was not valid JSON: {e}"))),
         403 => Err(SessionError::Refused),
         other => Err(SessionError::Http(other)),
     }
@@ -217,6 +240,28 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 47\r\n\r\n{\"access_token\":\"jwt-abc\",\"refresh_token\":\"r\"}",
         );
         assert_eq!(bootstrap_local_session_at(&base), Ok("jwt-abc".to_string()));
+    }
+
+    #[test]
+    fn owner_email_is_read_from_the_session_user() {
+        let base = start_mock_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"access_token\":\"jwt-abc\",\"user\":{\"email\":\"owner@example.com\"}}",
+        );
+        assert_eq!(local_owner_email_at(&base), Ok("owner@example.com".to_string()));
+    }
+
+    #[test]
+    fn owner_email_missing_or_blank_is_malformed() {
+        let base = start_mock_server("HTTP/1.1 200 OK\r\n\r\n{\"access_token\":\"jwt-abc\"}");
+        assert!(matches!(local_owner_email_at(&base), Err(SessionError::Malformed(_))));
+        let base = start_mock_server("HTTP/1.1 200 OK\r\n\r\n{\"user\":{\"email\":\"  \"}}");
+        assert!(matches!(local_owner_email_at(&base), Err(SessionError::Malformed(_))));
+    }
+
+    #[test]
+    fn owner_email_refused_session_maps_to_refused() {
+        let base = start_mock_server("HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(local_owner_email_at(&base), Err(SessionError::Refused));
     }
 
     #[test]

@@ -84,7 +84,7 @@ The layer wires the whole chain, but as of v0.2.0 the published images enable on
 - **TPM2 + LUKS** (`kas/tpm-luks.yml`, partial) — PCR 7+11 measured-boot key sealing with a fail-open recovery path is wired; automatic enrollment is an open defect pending a real-hardware TPM (QEMU/swtpm cannot complete it).
 - **Signed release artifacts** (enabled) — every file ships with a `.sha256` and a minisign `.minisig`; the public key is pinned in `scripts/release-os.sh` and re-verified fail-closed before upload. Vulnerability reporting: [SECURITY.md](SECURITY.md).
 
-`scripts/release-os.sh build` currently chains only `kas/serial1.yml` by default (the release overlay: serial `-j1` build + SPDX off), not `sb-signing.yml` / `tpm-luks.yml`; producing signed images means building with those two overlays by hand, which is on the list for the next release.
+`scripts/release-os.sh build` currently chains only `kas/serial1.yml` by default (the release overlay: serial `-j1` build + SPDX off; large Linux builders use `kas/release-linux-builder.yml` instead), not `sb-signing.yml` / `tpm-luks.yml`; producing signed images means building with those two overlays by hand, which is on the list for the next release.
 
 <a id="quickstart"></a>
 
@@ -129,8 +129,11 @@ Prerequisites:
 ./scripts/release-os.sh build      # kas build inside the running builder
 ./scripts/release-os.sh smoke      # headless QEMU boot to a login prompt
 ./scripts/release-os.sh package    # smoke gate + compress + sha256 + minisign
+./scripts/release-os.sh sign       # sign a set made by package --no-sign on a builder
 ./scripts/release-os.sh publish    # upload to a GitHub Release
 ```
+
+A remote builder (GCP, for example) never holds the signing key: run `package --no-sign` there, copy `artifacts/os/v<version>/<machine>/` back to the machine that has the key, then run `sign` and `publish`. A Linux builder with plenty of memory can set `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` instead of the default `serial1.yml` (SPDX still off, no `-j1`); pass the same value to `build`, `smoke` and `package`.
 
 Every subcommand's `v<version>` is optional and defaults to the `VERSION` file, the OS's own release line, independent of the embedded platform version. Run `release-os.sh` with no argument for the full usage text. Builder container setup, cache and disk layout, and the role of each image recipe are in [`meta-duduclaw/README.md`](meta-duduclaw/README.md).
 

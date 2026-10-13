@@ -84,7 +84,7 @@ layer 已接好整條鏈，但截至 v0.2.0，發布的映像都只啟用了一�
 - **TPM2 + LUKS**（`kas/tpm-luks.yml`，部分完成）：PCR 7+11 量測開機的金鑰密封與 fail-open 復原路徑已接好；自動 enroll 是待解缺陷，要等真機 TPM 才能完成（QEMU/swtpm 做不到）。
 - **發布產物簽章**（已啟用）：每個檔案附 `.sha256` 與 minisign `.minisig`，公鑰釘在 `scripts/release-os.sh`，上傳前 fail-closed 重驗。漏洞回報方式見 [SECURITY.md](SECURITY.md)。
 
-`scripts/release-os.sh build` 目前預設只會疊加 `kas/serial1.yml`（release overlay：`-j1` 序列建置＋SPDX off），不含 `sb-signing.yml`／`tpm-luks.yml`；要出簽章版必須手動疊加這兩個 overlay 建置，列為下一版待辦。
+`scripts/release-os.sh build` 目前預設只會疊加 `kas/serial1.yml`（release overlay：`-j1` 序列建置＋SPDX off；大型 Linux builder 改用 `kas/release-linux-builder.yml`），不含 `sb-signing.yml`／`tpm-luks.yml`；要出簽章版必須手動疊加這兩個 overlay 建置，列為下一版待辦。
 
 <a id="quickstart"></a>
 
@@ -129,8 +129,11 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 ./scripts/release-os.sh build      # 在已啟動的 builder 容器內 kas build
 ./scripts/release-os.sh smoke      # 無頭 QEMU 開機到 login prompt
 ./scripts/release-os.sh package    # smoke 閘門 + 壓縮 + sha256 + minisign
+./scripts/release-os.sh sign       # 簽 builder 上以 package --no-sign 產出、複製回來的檔案
 ./scripts/release-os.sh publish    # 上傳到 GitHub Release
 ```
+
+遠端 builder（例如 GCP）不放簽章金鑰：在 builder 上跑 `package --no-sign`，把 `artifacts/os/v<版本>/<機型>/` 複製回持有金鑰的機器，再跑 `sign` 與 `publish`。大記憶體的 Linux builder 可以用 `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` 取代預設的 `serial1.yml`（同樣關掉 SPDX，但不做 `-j1`），`build`／`smoke`／`package` 要帶同一個值。
 
 每個子命令的 `v<version>` 都可省略，預設讀 `VERSION` 檔（OS 自己的版號，與內嵌平台版號無關）。不帶參數執行可看完整說明。builder 容器怎麼起、磁碟與快取怎麼掛、各 image 的用途，見 [`meta-duduclaw/README.md`](meta-duduclaw/README.md)。
 

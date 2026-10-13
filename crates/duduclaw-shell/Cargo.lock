@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "duduclaw-shell"
-version = "1.65.2"
+version = "1.65.3"
 dependencies = [
  "chrono",
  "duduclaw-native-gui",

@@ -2,7 +2,7 @@
 //!
 //! ## Why this module exists
 //!
-//! `commercial/docs/DESIGN-everything-is-a-plugin-2026-08.md` §2 row 8 graded
+//! `commercial/docs/specs/DESIGN-everything-is-a-plugin-2026-08.md` §2 row 8 graded
 //! [`AcceptanceJudge`](crate::dispatch_engine::AcceptanceJudge) **T — a fake
 //! seam**: a `pub trait` with exactly ONE production implementation
 //! (`LlmAcceptanceJudge`), one hardcoded injection point
@@ -18,25 +18,36 @@
 //! implementations (the doc's own criterion for grade S — `#[cfg(test)]`
 //! stubs explicitly do not count).
 //!
-//! ## The four modes
+//! ## The modes
 //!
 //! | `[dispatch] judge` | Behavior | Failure direction |
 //! |---|---|---|
-//! | `mav` (**default**) | Today's flow, unchanged: cheap [`PreAcceptanceEvaluator`](crate::dispatch_engine::PreAcceptanceEvaluator) first stage → three-aspect MAV panel | judge error ⇒ `needs_human` (pre-existing) |
-//! | `evaluator_only` | **Low-cost mode with deliberately weaker acceptance.** Only the cheap first-stage evaluator runs; its `candidate_complete` verdict accepts outright — the MAV panel is never paid for | evaluator absent / disabled / errored / timed out ⇒ `needs_human`, **never an auto-accept** |
+//! | `mav` (**default**) | Cheap [`PreAcceptanceEvaluator`](crate::dispatch_engine::PreAcceptanceEvaluator) first stage → three-aspect MAV panel | judge error ⇒ `needs_human` |
 //! | `external` | Spawn an operator-configured command ([`ExternalJudgeConfig`]); structured JSON on stdin, a JSON verdict on stdout | ANY defect (bad config, spawn failure, timeout, non-zero exit, unparseable verdict, injection-flagged feedback) ⇒ degrade to the **`mav` panel**, audited — a degrade never releases work |
-//! | `human_only` | Never machine-judged: every `review` task parks as `needs_human` | n/a — it is itself the maximal fail-closed mode |
 //!
 //! Any other value ⇒ `warn!` + `mav` (design §5 contract rule 2: unknown
 //! values fail loud, and the fallback is the *strongest* verifier, never the
 //! cheapest).
 //!
-//! ## Divergence from the design doc's value set (recorded honestly)
+//! ## Removed values (v1.69.0)
 //!
-//! §6-P1 names the first batch `mav | eval_backed | human_only`.
-//! `evaluator_only` and `external` are this WP's assignment; `human_only` is
-//! kept because §6-P1 requires it and it is the strictest mode in the table.
-//! **`eval_backed` is deliberately NOT a fourth mode** — it is `external` with
+//! `evaluator_only` and `human_only` (and their aliases `evaluator` /
+//! `human`) were removed in v1.69.0. They are still *recognised* on read so
+//! a leftover value never takes the unknown-value path, and they can no
+//! longer be written through `system.update_config`:
+//!
+//! | Leftover value | What runs | Why |
+//! |---|---|---|
+//! | `evaluator_only` | `mav` | the old single-evaluator accept was weaker; `mav` only tightens acceptance (and costs more) |
+//! | `human_only` | every review parks `needs_human` (`pause_reason = infra`) with a migration notice | falling back to `mav` would replace "a person confirms every item" with machine acceptance — a human gate silently removed |
+//!
+//! Each is warned about once per process and reported once per home through
+//! a `judge_mode_removed` audit row plus an Activity Feed notice.
+//! [`removed_judge_mode_finding`] is the pure check `duduclaw doctor` uses.
+//!
+//! ## `eval_backed` is not a mode
+//!
+//! The design doc's §6-P1 names `eval_backed`. It is `external` with
 //! `judge_command = ["duduclaw", "eval", …]`, so shipping it as its own
 //! enum arm would be a second subprocess implementation of a path that
 //! already exists. If a named preset is wanted later it belongs on top of
@@ -70,10 +81,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use duduclaw_security::input_guard::{scan_input, DEFAULT_BLOCK_THRESHOLD};
+use duduclaw_core::types::RuntimeType;
+use duduclaw_security::input_guard::{DEFAULT_BLOCK_THRESHOLD, scan_input};
 use tracing::warn;
 
 use crate::dispatch_engine::{AcceptanceJudge, AcceptanceVerdict};
+use crate::runtime_dispatch::UtilityModelHint;
 
 /// Default wall-clock budget for one external-judge subprocess, matching the
 /// pre-existing `EVALUATOR_TIMEOUT_SECS` / `eval_runner::DEFAULT_TIMEOUT_SECS`
@@ -105,6 +118,14 @@ pub const EXTERNAL_JUDGE_SCHEMA: &str = "duduclaw.judge.v1";
 
 // ── Mode ────────────────────────────────────────────────────────────────
 
+/// The version that removed `evaluator_only` / `human_only`. One constant so
+/// every message, audit row and doctor finding names the same release.
+pub const JUDGE_MODES_REMOVED_IN: &str = "v1.69.0";
+
+/// The only values `system.update_config` (and therefore the dashboard) may
+/// write to `[dispatch] judge`.
+pub const WRITABLE_JUDGE_MODES: [&str; 2] = ["mav", "external"];
+
 /// Which acceptance-judge implementation `review_goal_tasks` routes through,
 /// parsed from `config.toml [dispatch] judge`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -113,40 +134,55 @@ pub enum JudgeMode {
     /// and the fallback every failure path lands on.
     #[default]
     Mav,
-    /// First-stage evaluator only — cheap, and **explicitly weaker
-    /// acceptance**. Never falls through to the panel; never auto-accepts on
-    /// its own malfunction either.
-    EvaluatorOnly,
     /// An operator-configured subprocess. Degrades to [`JudgeMode::Mav`] on
     /// every defect.
     External,
-    /// No machine acceptance at all — every review parks for a person.
-    HumanOnly,
+    /// `evaluator_only` (removed in v1.69.0) still present in `config.toml`.
+    /// Adjudicates exactly like [`JudgeMode::Mav`]: the old single-evaluator
+    /// accept was the weaker verifier, so the fallback only tightens
+    /// acceptance (and costs more).
+    RemovedEvaluatorOnly,
+    /// `human_only` (removed in v1.69.0) still present in `config.toml`.
+    /// Every review parks as `needs_human` with a migration notice. It is
+    /// recognised rather than treated as unknown on purpose: the unknown-value
+    /// path falls back to `mav`, which would turn "a person confirms every
+    /// item" into "the AI panel accepts on its own" — a human gate silently
+    /// removed.
+    RemovedHumanOnly,
 }
 
 impl JudgeMode {
-    /// Stable config/telemetry token. Never localise.
+    /// Stable config/telemetry token. Never localise. The removed variants
+    /// keep their historical spelling so knob snapshots and audit rows from
+    /// before and after the removal carry the same token.
     pub fn as_str(self) -> &'static str {
         match self {
             JudgeMode::Mav => "mav",
-            JudgeMode::EvaluatorOnly => "evaluator_only",
             JudgeMode::External => "external",
-            JudgeMode::HumanOnly => "human_only",
+            JudgeMode::RemovedEvaluatorOnly => "evaluator_only",
+            JudgeMode::RemovedHumanOnly => "human_only",
         }
+    }
+
+    /// `true` for a value that is still recognised on read but can no longer
+    /// be written.
+    pub fn is_removed(self) -> bool {
+        matches!(self, JudgeMode::RemovedEvaluatorOnly | JudgeMode::RemovedHumanOnly)
     }
 
     /// Parse one raw config value. `None` ⇒ the value is **unknown** and the
     /// caller must fail loud (an empty/whitespace value is not unknown — it
-    /// reads as "unset" ⇒ `Mav`).
+    /// reads as "unset" ⇒ `Mav`). The removed values and their old aliases
+    /// parse to the `Removed*` variants, never to `None`.
     ///
     /// Exact token equality after trim + ASCII-lowercase, never substring
     /// matching (coding convention 2).
     pub fn from_config_str(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "" | "mav" | "panel" => Some(JudgeMode::Mav),
-            "evaluator_only" | "evaluator" => Some(JudgeMode::EvaluatorOnly),
             "external" => Some(JudgeMode::External),
-            "human_only" | "human" => Some(JudgeMode::HumanOnly),
+            "evaluator_only" | "evaluator" => Some(JudgeMode::RemovedEvaluatorOnly),
+            "human_only" | "human" => Some(JudgeMode::RemovedHumanOnly),
             _ => None,
         }
     }
@@ -158,7 +194,8 @@ impl JudgeMode {
     /// absent key, or a non-string value all yield [`JudgeMode::Mav`]. An
     /// unrecognised *string* additionally `warn!`s — design §5 rule 2's
     /// "fail loud, never silently degrade", with `RuntimeType::parse`'s
-    /// silent-substitution as the named anti-pattern.
+    /// silent-substitution as the named anti-pattern. A removed value is
+    /// returned as its `Removed*` variant and warned about once per process.
     pub fn from_home(home_dir: Option<&Path>) -> Self {
         let Some(home_dir) = home_dir else {
             return JudgeMode::Mav;
@@ -183,18 +220,249 @@ impl JudgeMode {
                     JudgeMode::Mav
                 }
                 Some(s) => match JudgeMode::from_config_str(s) {
-                    Some(mode) => mode,
+                    Some(mode) => {
+                        // `from_home` runs once per reviewed task, so the
+                        // removal notice is emitted once per process per
+                        // mode — never on every iteration.
+                        warn_once_if_removed(mode);
+                        mode
+                    }
                     None => {
                         warn!(
                             value = %s,
                             "unknown [dispatch] judge — falling back to \"mav\" (the strongest verifier). \
-                             Valid: mav, evaluator_only, external, human_only"
+                             Valid: mav, external"
                         );
                         JudgeMode::Mav
                     }
                 },
             },
         }
+    }
+}
+
+/// Emit the removal warning at most once per process per mode.
+///
+/// Deliberately not a plain `warn!` inside [`JudgeMode::from_home`]: that
+/// function is re-read once per reviewed task (the seam's hot-reload
+/// contract), so an unconditional warning would fill the log with the same
+/// line forever and train operators to ignore it.
+fn warn_once_if_removed(mode: JudgeMode) {
+    use std::sync::Once;
+    static EVALUATOR_ONLY: Once = Once::new();
+    static HUMAN_ONLY: Once = Once::new();
+    let once = match mode {
+        JudgeMode::RemovedEvaluatorOnly => &EVALUATOR_ONLY,
+        JudgeMode::RemovedHumanOnly => &HUMAN_ONLY,
+        _ => return,
+    };
+    once.call_once(|| {
+        let behavior = match mode {
+            JudgeMode::RemovedHumanOnly => {
+                "every review parks as needs_human; no machine acceptance runs"
+            }
+            _ => "adjudicating with mav (stricter, higher judge cost)",
+        };
+        warn!(
+            value = mode.as_str(),
+            removed_in = JUDGE_MODES_REMOVED_IN,
+            behavior,
+            "[dispatch] judge is set to a removed value — set judge = \"mav\"; \
+             for per-employee human sign-off use [capabilities] autonomy_level and \
+             approval_required_tools"
+        );
+    });
+}
+
+// ── Removed values: operator-facing text ────────────────────────────────
+
+/// The `judge_feedback` written on a task parked because `config.toml` still
+/// says `human_only`. Shown on the task page, the needs-human board and the
+/// channel notice, so it says what happened, why, and how to move on.
+pub const HUMAN_ONLY_REMOVED_PARK_REASON: &str = "這件工作沒有經過機器驗收，先停下來等你確認：\
+驗收判官設定為「一律人工驗收」（[dispatch] judge = \"human_only\"），這個選項已在 v1.69.0 移除。\
+為了不讓原本要人工確認的工作被自動放行，送驗的工作會全部停在這裡。\
+請到「系統設定 → 自動化引擎」把驗收判官改成「標準驗收」（judge = \"mav\"）；\
+需要人工把關的 AI 員工，請在該員工的設定調整「自主等級」（autonomy_level）與\
+「一律等人核可」的工具（approval_required_tools）。\
+這件工作可以直接按「標記完成」，或改好設定後按「重試」重新執行。";
+
+/// Activity Feed summary for the one-time removal notice. `None` for a
+/// supported mode.
+pub fn removed_mode_activity_summary(mode: JudgeMode) -> Option<&'static str> {
+    match mode {
+        JudgeMode::RemovedHumanOnly => Some(
+            "驗收判官設定「一律人工驗收」（judge = \"human_only\"）已在 v1.69.0 移除：\
+             目前所有送驗的工作都停在「等你決定」，不做機器驗收。\
+             請到「系統設定 → 自動化引擎」改成「標準驗收」（judge = \"mav\"），\
+             需要人工把關的員工改用「自主等級」（autonomy_level）與「一律等人核可」（approval_required_tools）。",
+        ),
+        JudgeMode::RemovedEvaluatorOnly => Some(
+            "驗收判官設定「快速模式」（judge = \"evaluator_only\"）已在 v1.69.0 移除：\
+             目前改用標準驗收（judge = \"mav\"：先做初步評估，看起來完成的工作才請判官團複核），\
+             驗收變嚴，判官費用會增加。請到「系統設定 → 自動化引擎」改選「標準驗收」或「外部判官」並儲存。",
+        ),
+        _ => None,
+    }
+}
+
+/// The error `system.update_config` returns when asked to write a removed
+/// value. End-user wording: dashboard labels only, no file or key names.
+/// `None` for a supported mode.
+pub fn removed_mode_write_error(mode: JudgeMode) -> Option<&'static str> {
+    match mode {
+        JudgeMode::RemovedHumanOnly => Some(
+            "「一律人工驗收」已在 v1.69.0 移除，無法再選用。請改選「標準驗收」；\
+             需要人工把關的 AI 員工，請在該員工的設定調整「自主等級」與「一律等人核可」的工具。",
+        ),
+        JudgeMode::RemovedEvaluatorOnly => Some(
+            "「快速模式」驗收已在 v1.69.0 移除，無法再選用。請改選「標準驗收」\
+             （會先做初步檢查，只有看起來完成的工作才請判官團複核）或「外部判官」。",
+        ),
+        _ => None,
+    }
+}
+
+// ── Removed values: one-time notice and doctor finding ──────────────────
+
+/// Claim the one-time removal notice (audit row + Activity Feed) for
+/// `(home, mode)`. `true` exactly once per process for each pair; always
+/// `false` for a supported mode. Keyed by home so two homes in one process
+/// (tests, eval homes) each get their own notice.
+pub fn claim_removed_mode_notice(home_dir: &Path, mode: JudgeMode) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    if !mode.is_removed() {
+        return false;
+    }
+    static CLAIMED: OnceLock<Mutex<HashSet<(std::path::PathBuf, &'static str)>>> =
+        OnceLock::new();
+    let set = CLAIMED.get_or_init(Default::default);
+    let mut guard = match set.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.insert((home_dir.to_path_buf(), mode.as_str()))
+}
+
+/// Write the `judge_mode_removed` audit row (`security_audit.jsonl`).
+pub fn log_judge_mode_removed(home_dir: &Path, agent_id: &str, mode: JudgeMode) {
+    if !mode.is_removed() {
+        return;
+    }
+    let event = duduclaw_security::audit::AuditEvent::new(
+        "judge_mode_removed",
+        agent_id,
+        duduclaw_security::audit::Severity::Warning,
+        serde_json::json!({
+            "value": mode.as_str(),
+            "removed_in": JUDGE_MODES_REMOVED_IN,
+            "behavior": match mode {
+                JudgeMode::RemovedHumanOnly => "needs_human",
+                _ => "mav",
+            },
+            "replacement": "mav",
+            "source": "config.toml [dispatch] judge",
+        }),
+    );
+    crate::security_autopilot::audit_and_emit(home_dir, &event);
+}
+
+/// What `duduclaw doctor` reports when `[dispatch] judge` holds a removed
+/// value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedJudgeModeFinding {
+    /// The removed variant the value resolves to.
+    pub mode: JudgeMode,
+    /// The value exactly as written in `config.toml` (trimmed).
+    pub configured: String,
+    /// What the gateway does with it today (zh-TW).
+    pub current_behavior: &'static str,
+    /// How to fix it (zh-TW, operator wording — names config keys).
+    pub fix: &'static str,
+}
+
+/// Pure check over the text of `config.toml`. `None` when the value is a
+/// supported one, absent, unknown, not a string, or the file does not parse
+/// (those cases have their own reporting; this finding is only about the
+/// removed values).
+pub fn removed_judge_mode_finding(config_toml: &str) -> Option<RemovedJudgeModeFinding> {
+    let table = config_toml.parse::<toml::Table>().ok()?;
+    let raw = table
+        .get("dispatch")
+        .and_then(|v| v.as_table())
+        .and_then(|d| d.get("judge"))
+        .and_then(|v| v.as_str())?;
+    let mode = JudgeMode::from_config_str(raw).filter(|m| m.is_removed())?;
+    let (current_behavior, fix) = match mode {
+        JudgeMode::RemovedHumanOnly => (
+            "每件送驗的工作都停在 needs_human（等你決定），不做機器驗收",
+            "把 [dispatch] judge 改成 judge = \"mav\"；需要人工把關的 AI 員工改用 \
+             agent.toml [capabilities] autonomy_level 與 approval_required_tools",
+        ),
+        _ => (
+            "以 mav 驗收（先做初步評估，完成候選才請判官團），比原本嚴格、判官費用較高",
+            "把 [dispatch] judge 改成 judge = \"mav\"（或 \"external\"）",
+        ),
+    };
+    Some(RemovedJudgeModeFinding {
+        mode,
+        configured: raw.trim().to_string(),
+        current_behavior,
+        fix,
+    })
+}
+
+/// [`removed_judge_mode_finding`] over `<home>/config.toml`. A missing or
+/// unreadable file yields `None`.
+pub fn removed_judge_mode_finding_in_home(home_dir: &Path) -> Option<RemovedJudgeModeFinding> {
+    let content = std::fs::read_to_string(home_dir.join("config.toml")).ok()?;
+    removed_judge_mode_finding(&content)
+}
+
+/// Outcome of looking for a removed `[dispatch] judge` value in a home.
+/// Separates "checked and it is not used" from "could not check".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemovedJudgeModeCheck {
+    /// `config.toml` was read (or does not exist) and `[dispatch] judge` is
+    /// absent, a supported value, or an unknown string the gateway ignores.
+    NotUsed,
+    /// `judge` holds a removed value.
+    Finding(RemovedJudgeModeFinding),
+    /// The check could not be made; the text says why (zh-TW).
+    Unchecked(String),
+}
+
+/// Look for a removed `[dispatch] judge` value in `<home>/config.toml`.
+/// A missing file is a default configuration (`NotUsed`); an unreadable or
+/// unparsable file, a `[dispatch]` that is not a table, or a `judge` that is
+/// not a string cannot be judged and is `Unchecked`.
+pub fn check_removed_judge_mode_in_home(home_dir: &Path) -> RemovedJudgeModeCheck {
+    let content = match std::fs::read_to_string(home_dir.join("config.toml")) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return RemovedJudgeModeCheck::NotUsed;
+        }
+        Err(e) => return RemovedJudgeModeCheck::Unchecked(format!("無法讀取 config.toml：{e}")),
+    };
+    let table = match content.parse::<toml::Table>() {
+        Ok(table) => table,
+        Err(e) => return RemovedJudgeModeCheck::Unchecked(format!("config.toml 無法解析：{e}")),
+    };
+    let judge = match table.get("dispatch") {
+        None => return RemovedJudgeModeCheck::NotUsed,
+        Some(toml::Value::Table(dispatch)) => dispatch.get("judge"),
+        Some(_) => {
+            return RemovedJudgeModeCheck::Unchecked("[dispatch] 不是一個表格".to_string());
+        }
+    };
+    match judge {
+        None => RemovedJudgeModeCheck::NotUsed,
+        Some(toml::Value::String(_)) => match removed_judge_mode_finding(&content) {
+            Some(finding) => RemovedJudgeModeCheck::Finding(finding),
+            None => RemovedJudgeModeCheck::NotUsed,
+        },
+        Some(_) => RemovedJudgeModeCheck::Unchecked("[dispatch] judge 不是字串".to_string()),
     }
 }
 
@@ -214,6 +482,10 @@ pub struct ExternalJudgeConfig {
     /// Wall-clock budget for one invocation, clamped to
     /// `[JUDGE_TIMEOUT_MIN_SECS, JUDGE_TIMEOUT_MAX_SECS]`.
     pub timeout_secs: u64,
+    /// WP-G1: the home this config was read from. The verdict parser reads
+    /// `[dispatch] strict_reply_parsing` from it at each decision and audits
+    /// shadow mismatches into it. `None` ⇒ strict contract off.
+    pub home_dir: Option<std::path::PathBuf>,
 }
 
 impl ExternalJudgeConfig {
@@ -247,8 +519,309 @@ impl ExternalJudgeConfig {
         Some(Self {
             command,
             timeout_secs,
+            home_dir: Some(home_dir.to_path_buf()),
         })
     }
+}
+
+// ── Judge model routing (P0/WP-B, verifier decorrelation) ───────────────
+//
+// arXiv:2607.13918: an acceptance judge drawn from the worker's own model
+// family inherits the worker's blind spots — it forgives exactly what the
+// worker got wrong. The cheapest fix is to let the operator run the judge on
+// a *different* `(runtime, model)` than the worker, which is what
+// `[dispatch] judge_provider` / `[dispatch] judge_model` do.
+//
+// Scope, stated honestly: **global only**. A per-agent override would live in
+// `agent.toml [dispatch]`, but `duduclaw_core::agent_toml::AgentTomlSections`
+// has no `[dispatch]` section reader, and inventing a 63rd shadow reader is
+// exactly what the wave-2/3 `AgentTomlSections` consolidation removed. When a
+// `[dispatch]` section lands there, this resolver is the single place to
+// layer it in.
+//
+// Read timing matches `[dispatch] judge` itself: one small `config.toml` read
+// per adjudication, no cache, so the switch hot-reloads.
+
+/// Read `config.toml [dispatch] judge_provider` / `judge_model` into a hint.
+///
+/// `None` ⇒ no override (both keys absent/blank), **or** the configured
+/// provider id is not a runtime this build knows — an unusable hint is
+/// dropped whole rather than half-applied, so the judge simply runs on the
+/// default utility resolution.
+pub fn judge_model_hint_from_home(home_dir: Option<&Path>) -> Option<UtilityModelHint> {
+    let home_dir = home_dir?;
+    let content = std::fs::read_to_string(home_dir.join("config.toml")).ok()?;
+    let table = content.parse::<toml::Table>().ok()?;
+    let section = table.get("dispatch").and_then(|v| v.as_table())?;
+    parse_judge_model_hint(section)
+}
+
+/// Pure half of [`judge_model_hint_from_home`] — takes the already-parsed
+/// `[dispatch]` table so it is unit-testable without touching a file.
+///
+/// A non-string value on either key reads as "unset" (fail-safe toward the
+/// default utility model, consistent with every other `[dispatch]` reader in
+/// this module).
+pub fn parse_judge_model_hint(section: &toml::Table) -> Option<UtilityModelHint> {
+    let raw_provider = section
+        .get("judge_provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let raw_model = section
+        .get("judge_model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if raw_provider.is_none() && raw_model.is_none() {
+        return None;
+    }
+    let provider = match raw_provider {
+        None => None,
+        Some(s) => match RuntimeType::parse(s) {
+            Some(p) => {
+                // R1 (2026-10): a deprecated runtime still judges; say so once.
+                crate::runtime_config::warn_once_if_deprecated_runtime(
+                    p,
+                    crate::runtime_config::DeprecatedRuntimeSource::JudgeProvider,
+                );
+                Some(p)
+            }
+            None => {
+                // Never substitute (the `RuntimeType::parse` anti-pattern the
+                // module doc names): drop the whole hint and say so.
+                warn!(
+                    value = %s,
+                    valid = %RuntimeType::valid_values(),
+                    "unknown [dispatch] judge_provider — ignoring the judge model override entirely"
+                );
+                return None;
+            }
+        },
+    };
+    Some(UtilityModelHint {
+        provider,
+        model: raw_model.map(str::to_string),
+        // P1/WP-3: the judge does not yet take an effort override from
+        // `[dispatch]`; `None` keeps the judge byte-identical and lets the
+        // agent's own `agent.toml [model] effort` apply. Wiring a
+        // `judge_effort` config key is a deliberate follow-up.
+        effort: None,
+        // Live round 8: the reply-shape requirement is NOT a config key — it
+        // belongs to whichever adjudication stage is running (the evaluator's
+        // `decision` enum vs. the MAV panel's aspect objects), so
+        // `GoalAcceptanceCaller::complete` folds it on per call. `[dispatch]`
+        // only ever decides WHICH model judges.
+        output_schema: None,
+    })
+}
+
+/// Has this `(agent, judge model)` pair already produced a same-family
+/// warning in this process? Returns `true` the FIRST time only.
+fn mark_same_family_warned(agent_id: &str, judge_model: &str) -> bool {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let set = WARNED.get_or_init(Default::default);
+    match set.lock() {
+        Ok(mut guard) => guard.insert(format!("{agent_id}|{judge_model}")),
+        // A poisoned mutex must not silence the signal *and* must not spam:
+        // emitting once per occurrence is the safer of the two.
+        Err(_) => true,
+    }
+}
+
+/// Audit how this adjudication's judge model relates to the worker's.
+///
+/// Emits at most two events per settle, both advisory — neither can change a
+/// verdict:
+/// - `model_routed` (Info) when an operator hint is in force and actually
+///   moved the judge off the worker's model. Not emitted when no hint is
+///   configured (the default utility model has always differed from the
+///   worker's; logging that on every settle of every deployment would be
+///   pure noise) nor when the hint degraded (nothing was routed).
+/// - `judge_same_family` (Warning) when worker and judge share a model
+///   family — the decorrelation the operator was after did not happen.
+///   Warn-once per `(agent_id, judge_model)` per process, so a long goal loop
+///   produces one line, not one per round.
+///
+/// The judge spec is resolved through the same
+/// [`crate::runtime_dispatch::resolve_hinted_utility`] the caller uses, so
+/// the audited model is the model that runs.
+pub async fn audit_judge_model_routing(home_dir: Option<&Path>, worker_agent_id: &str) {
+    let Some(home) = home_dir else {
+        return;
+    };
+    let hint = judge_model_hint_from_home(Some(home));
+    let (spec, degraded) =
+        crate::runtime_dispatch::resolve_hinted_utility(home, None, hint.as_ref()).await;
+
+    let sections = duduclaw_core::agent_toml::load_for_agent(home, worker_agent_id);
+    let worker_model = sections.model.preferred.unwrap_or_default();
+    let worker_model = worker_model.trim();
+    if worker_model.is_empty() {
+        // No declared worker model ⇒ nothing to compare against. Silence is
+        // the honest answer (a fabricated "default" would make the family
+        // verdict meaningless).
+        return;
+    }
+
+    if hint.is_some() && degraded.is_none() && !spec.model.eq_ignore_ascii_case(worker_model) {
+        log_judge_routing_event(
+            home,
+            worker_agent_id,
+            "model_routed",
+            duduclaw_security::audit::Severity::Info,
+            serde_json::json!({
+                "agent_id": worker_agent_id,
+                "slot": "judge",
+                "from": worker_model,
+                "to": spec.model,
+                "provider": spec.provider.as_str(),
+                "reason": "dispatch.judge_model",
+            }),
+        );
+    }
+
+    emit_same_family_if_needed(home, worker_agent_id, worker_model, &spec.model);
+}
+
+/// Emit the `judge_same_family` advisory when `judge_model` shares the
+/// worker's family. Warn-once per `(agent_id, judge_model)`; never rejects.
+fn emit_same_family_if_needed(
+    home: &Path,
+    worker_agent_id: &str,
+    worker_model: &str,
+    judge_model: &str,
+) {
+    if !crate::runtime_config::same_model_family(worker_model, judge_model) {
+        return;
+    }
+    if !mark_same_family_warned(worker_agent_id, judge_model) {
+        return;
+    }
+    warn!(
+        agent = %worker_agent_id,
+        worker_model = %worker_model,
+        judge_model = %judge_model,
+        "驗收判官與工作者同屬一個模型家族，交叉驗證效果有限（arXiv:2607.13918）；\
+         可設定 config.toml [dispatch] judge_provider / judge_model 改用另一家族的判官"
+    );
+    log_judge_routing_event(
+        home,
+        worker_agent_id,
+        "judge_same_family",
+        duduclaw_security::audit::Severity::Warning,
+        serde_json::json!({
+            "agent_id": worker_agent_id,
+            "worker_model": worker_model,
+            "judge_model": judge_model,
+        }),
+    );
+}
+
+// ── POST-spawn hinted-judge failure (live-test gap) ─────────────────────
+//
+// The pre-spawn degrades above cover "the hint is unusable". A live test
+// found the other half: the hinted runtime was usable, was selected, and
+// then FAILED at spawn — after which `failover.rs` substituted the default
+// family's model and the verdict came back from the worker's own family with
+// no `judge_seam_degraded` line at all. `RuntimeContext::allow_cross_family_
+// failover = false` now turns that silent substitution into an error, and
+// this is the matching audit for the degrade that follows it.
+//
+// Attribution note: the judge caller is agent-less by construction (one
+// shared `GoalAcceptanceCaller` for every task), so it cannot name the worker
+// on its own. `review_goal_tasks` publishes the worker id for the round it is
+// about to adjudicate through the slot below. This is sound because the
+// review loop is a sequential `for` over `tasks_in_status("review")` inside a
+// single `DispatchEngine` background task — one settle is adjudicated at a
+// time. Worst case if that ever stops holding: the worker-family half of one
+// advisory line is attributed to the wrong agent; the degrade event itself
+// carries no agent-derived data and stays correct. `None` ⇒ the degrade is
+// still audited, just without the family half.
+
+/// Worker agent id of the settle round currently being adjudicated.
+fn settle_worker_slot() -> &'static std::sync::Mutex<Option<String>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Publish the worker whose round is about to be judged. Called once per
+/// settle by `dispatch_engine::review_goal_tasks`.
+pub fn set_settle_worker(worker_agent_id: &str) {
+    if let Ok(mut slot) = settle_worker_slot().lock() {
+        *slot = Some(worker_agent_id.to_string());
+    }
+}
+
+/// Stable `reason` token for a hinted judge runtime that failed after being
+/// selected (as opposed to the pre-spawn degrades). Never localise.
+pub const DEGRADE_HINTED_RUNTIME_FAILED: &str = "hinted_runtime_failed";
+
+/// Audit a hinted judge call that failed **after** the routing decision, and
+/// the un-hinted retry that follows it.
+///
+/// Writes `judge_seam_degraded { reason: "hinted_runtime_failed", provider,
+/// model, error }`, plus the `judge_same_family` advisory when the fallback
+/// the retry lands on turns out to be the worker's own family — which is
+/// precisely the outcome the operator configured the hint to avoid.
+pub fn audit_hinted_judge_failure(
+    home_dir: &Path,
+    provider: RuntimeType,
+    model: &str,
+    error: &str,
+    fallback_model: &str,
+) {
+    log_judge_routing_event(
+        home_dir,
+        JUDGE_ROUTING_AGENT_ID,
+        "judge_seam_degraded",
+        duduclaw_security::audit::Severity::Warning,
+        serde_json::json!({
+            "reason": DEGRADE_HINTED_RUNTIME_FAILED,
+            "provider": provider.as_str(),
+            "model": model,
+            "error": duduclaw_core::truncate_bytes(error, 1000),
+            "fallback_model": fallback_model,
+        }),
+    );
+
+    let worker = settle_worker_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone());
+    let Some(worker) = worker else {
+        return;
+    };
+    let worker_model = duduclaw_core::agent_toml::load_for_agent(home_dir, &worker)
+        .model
+        .preferred
+        .unwrap_or_default();
+    let worker_model = worker_model.trim();
+    if worker_model.is_empty() {
+        return;
+    }
+    emit_same_family_if_needed(home_dir, &worker, worker_model, fallback_model);
+}
+
+/// Attribution id for judge-routing audit rows written by the agent-less
+/// judge caller. Matches `dispatch_engine::JUDGE_CALLER_ID`.
+const JUDGE_ROUTING_AGENT_ID: &str = "goal-acceptance-judge";
+
+/// Append one judge-routing event to `security_audit.jsonl`.
+///
+/// Separate from [`log_judge_seam_event`] because routing events are not all
+/// warnings (a successful re-route is `Info`) and their payloads are
+/// event-specific rather than the seam's fixed `{judge_mode, detail}` shape.
+fn log_judge_routing_event(
+    home_dir: &Path,
+    agent_id: &str,
+    event_type: &str,
+    severity: duduclaw_security::audit::Severity,
+    payload: serde_json::Value,
+) {
+    let event = duduclaw_security::audit::AuditEvent::new(event_type, agent_id, severity, payload);
+    crate::security_autopilot::audit_and_emit(home_dir, &event);
 }
 
 // ── External judge payload / verdict ────────────────────────────────────
@@ -336,6 +909,104 @@ pub fn parse_external_verdict(raw: &str) -> Result<AcceptanceVerdict, String> {
     })
 }
 
+// ── WP-G1: strict external verdict contract ─────────────────────────────
+
+/// `pass` as [`parse_external_verdict`] accepts it: a JSON bool or one of
+/// the verdict strings [`coerce_pass`] recognises.
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum StrictPassField {
+    Bool(bool),
+    Text(String),
+}
+
+/// The external judge reply under the strict contract: one object with
+/// `pass` and an optional `feedback` string, nothing else.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictExternalReply {
+    pass: StrictPassField,
+    #[serde(default)]
+    feedback: Option<String>,
+}
+
+/// Parse an external judge's stdout under the strict contract, then apply
+/// the same `pass` coercion and feedback sanitization as the lenient parser.
+/// A failed semantic check is reported as a
+/// [`Violation::Schema`](duduclaw_core::llm_contract::strict_json::Violation::Schema).
+fn parse_external_verdict_strict(
+    raw: &str,
+) -> Result<AcceptanceVerdict, duduclaw_core::llm_contract::strict_json::Violation> {
+    use duduclaw_core::llm_contract::strict_json::{Violation, parse_strict_with_limit};
+    let reply: StrictExternalReply = parse_strict_with_limit(raw, EXTERNAL_STDOUT_MAX_BYTES)?;
+    let passed = match reply.pass {
+        StrictPassField::Bool(b) => Some(b),
+        StrictPassField::Text(t) => coerce_pass(&serde_json::Value::String(t)),
+    }
+    .ok_or_else(|| Violation::Schema {
+        detail: "`pass` is not a recognised verdict".to_string(),
+    })?;
+    let feedback = sanitize_external_feedback(reply.feedback.as_deref().unwrap_or(""))
+        .map_err(|detail| Violation::Schema { detail })?;
+    Ok(AcceptanceVerdict {
+        passed,
+        feedback,
+        aspects: None,
+    })
+}
+
+/// WP-G1 entry point for the external judge: [`parse_external_verdict`] plus
+/// the strict contract according to `mode`. Under `enforce` a violation is
+/// an `Err`, so `review_goal_tasks` degrades to the MAV panel exactly as for
+/// any other external-judge failure.
+pub fn parse_external_verdict_contract(
+    raw: &str,
+    mode: crate::dispatch_engine::StrictReplyParsing,
+    home_dir: Option<&Path>,
+) -> Result<AcceptanceVerdict, String> {
+    parse_external_verdict_contract_with(crate::metrics::global_metrics(), raw, mode, home_dir)
+}
+
+/// [`parse_external_verdict_contract`] against an explicit metrics registry.
+pub(crate) fn parse_external_verdict_contract_with(
+    metrics: &crate::metrics::MetricsRegistry,
+    raw: &str,
+    mode: crate::dispatch_engine::StrictReplyParsing,
+    home_dir: Option<&Path>,
+) -> Result<AcceptanceVerdict, String> {
+    use crate::dispatch_engine::{
+        ReplyParser, ShadowObservation, ShadowOutcome, StrictReplyParsing, record_shadow,
+    };
+    if mode == StrictReplyParsing::Off {
+        return parse_external_verdict(raw);
+    }
+    let lenient = parse_external_verdict(raw);
+    let strict = parse_external_verdict_strict(raw);
+    let same = matches!(
+        (&lenient, &strict),
+        (Ok(l), Ok(s)) if l.passed == s.passed
+    );
+    let outcome = ShadowOutcome::classify(lenient.is_ok(), strict.is_ok(), same);
+    record_shadow(
+        metrics,
+        home_dir,
+        &ShadowObservation {
+            parser: ReplyParser::External,
+            mode,
+            outcome,
+            violation: strict.as_ref().err(),
+            lenient_error: lenient.as_ref().err().map(String::as_str),
+            raw,
+        },
+    );
+    match mode {
+        StrictReplyParsing::Enforce => strict.map_err(|v| {
+            format!("external judge reply violates the strict JSON contract: {v}")
+        }),
+        _ => lenient,
+    }
+}
+
 /// Cap, scan, and label an external judge's feedback before it may enter a
 /// prompt.
 ///
@@ -384,7 +1055,11 @@ impl ExternalAcceptanceJudge {
 
     /// The command as configured (telemetry / audit).
     pub fn program(&self) -> &str {
-        self.config.command.first().map(String::as_str).unwrap_or("")
+        self.config
+            .command
+            .first()
+            .map(String::as_str)
+            .unwrap_or("")
     }
 
     /// Full-context adjudication. The trait method delegates here with an
@@ -411,7 +1086,7 @@ impl ExternalAcceptanceJudge {
         // 目前的設計取捨" — operators who want isolation are told to wrap
         // `judge_command` in a script that clears its own env). Applying
         // the allowlist here would silently break that documented contract
-        // outside this WP's mandate (`commercial/docs/DESIGN-credentials-doctrine-2026-08.md`
+        // outside this WP's mandate (`commercial/docs/specs/DESIGN-credentials-doctrine-2026-08.md`
         // §3 P3 names the agent-CLI spawn paths only, not this one).
         // Deliberately left untouched — flagged in the WP-8B report as a
         // same-family follow-up that needs its own decision + doc update,
@@ -421,53 +1096,135 @@ impl ExternalAcceptanceJudge {
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        // Own process group / tree so a timeout can kill everything the judge
+        // spawned, not just its leader; `kill_on_drop` is the backstop for a
+        // cancelled review future.
+        #[cfg(unix)]
+        cmd.process_group(0);
+        #[cfg(windows)]
+        cmd.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
+        cmd.kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("spawn external judge `{}` failed: {e}", self.program()))?;
+        let pid = child.id();
 
-        // Write stdin and collect output under ONE deadline. Writing before
-        // reading can deadlock on a child that fills its stdout pipe first,
-        // so the write is dropped into the same timed future as the wait.
+        // Feed stdin, drain both pipes and wait — all concurrently under ONE
+        // deadline, so a child that fills a pipe before reading stdin cannot
+        // deadlock us. The readers stop BUFFERING past their cap but keep
+        // draining (so the child never blocks on a full pipe and its exit
+        // status stays meaningful); memory is bounded by the caps, time by
+        // the deadline.
         let stdin = child.stdin.take();
-        let run = async move {
-            if let Some(mut stdin) = stdin {
-                // A judge that ignores stdin closes the pipe early: a broken
-                // pipe here is not fatal on its own — let the verdict decide.
-                let _ = stdin.write_all(payload.as_bytes()).await;
-                let _ = stdin.shutdown().await;
-            }
-            child.wait_with_output().await
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let run = async {
+            let feed = async move {
+                if let Some(mut stdin) = stdin {
+                    // A judge that ignores stdin closes the pipe early: a broken
+                    // pipe here is not fatal on its own — let the verdict decide.
+                    let _ = stdin.write_all(payload.as_bytes()).await;
+                    let _ = stdin.shutdown().await;
+                }
+            };
+            let (_, out, err, status) = tokio::join!(
+                feed,
+                read_bounded(stdout, EXTERNAL_STDOUT_MAX_BYTES),
+                read_bounded(stderr, EXTERNAL_STDERR_MAX_BYTES),
+                child.wait(),
+            );
+            Ok::<_, std::io::Error>((status?, out?, err?))
         };
 
-        let output = tokio::time::timeout(Duration::from_secs(self.config.timeout_secs), run)
-            .await
-            .map_err(|_| {
-                format!(
-                    "external judge `{}` timed out after {}s",
-                    self.program(),
-                    self.config.timeout_secs
-                )
-            })?
-            .map_err(|e| format!("external judge `{}` io error: {e}", self.program()))?;
+        let (status, stdout_bytes, stderr_bytes) =
+            match tokio::time::timeout(Duration::from_secs(self.config.timeout_secs), run).await {
+                Ok(res) => {
+                    res.map_err(|e| format!("external judge `{}` io error: {e}", self.program()))?
+                }
+                Err(_) => {
+                    kill_judge_tree(&mut child, pid).await;
+                    return Err(format!(
+                        "external judge `{}` timed out after {}s",
+                        self.program(),
+                        self.config.timeout_secs
+                    ));
+                }
+            };
 
         // Unlike `duduclaw eval` (whose non-zero exit encodes "some case
         // failed"), an external judge's exit status is not a verdict channel:
         // a crashed judge must never be read as "fail" (which would burn a
         // retry round on a platform defect) nor as "pass". Non-zero ⇒ Err ⇒
         // the MAV panel decides.
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
             let tail = duduclaw_core::truncate_bytes(stderr.trim(), 500);
             return Err(format!(
                 "external judge `{}` exited {} — stderr tail: {tail}",
                 self.program(),
-                output.status
+                status
             ));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_external_verdict(&stdout)
+        let stdout = String::from_utf8_lossy(&stdout_bytes);
+        // WP-G1: mode read per decision from the config's home.
+        let home = self.config.home_dir.as_deref();
+        let mode = crate::dispatch_engine::StrictReplyParsing::from_home(home);
+        parse_external_verdict_contract(&stdout, mode, home)
+    }
+}
+
+/// Byte cap on the child's buffered stderr (only a short head reaches the log).
+const EXTERNAL_STDERR_MAX_BYTES: usize = 64 * 1024;
+
+/// Read a child pipe to EOF, buffering at most `cap` bytes. Bytes past the
+/// cap are read and discarded, never accumulated. `None` pipe ⇒ empty.
+async fn read_bounded<R>(pipe: Option<R>, cap: usize) -> std::io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+    let Some(mut pipe) = pipe else {
+        return Ok(Vec::new());
+    };
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = pipe.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(buf);
+        }
+        let room = cap.saturating_sub(buf.len());
+        if room > 0 {
+            buf.extend_from_slice(&chunk[..n.min(room)]);
+        }
+    }
+}
+
+/// Kill a timed-out judge together with everything it spawned, then reap it.
+/// Best-effort: failures are logged, never returned (the caller is already
+/// on the degrade-to-MAV path).
+async fn kill_judge_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
+    if let Some(pid) = pid {
+        // Unix: the pid is the pgid (`process_group(0)`). Windows: `taskkill
+        // /T` is a blocking subprocess, so keep it off the async worker.
+        match tokio::task::spawn_blocking(move || {
+            duduclaw_core::platform::kill_process_group(pid)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::debug!(pid, "external judge group kill: {e}"),
+            Err(e) => tracing::debug!(pid, "external judge group kill task: {e}"),
+        }
+    }
+    let _ = child.start_kill();
+    if tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        tracing::warn!(?pid, "external judge did not exit within 5s of SIGKILL");
     }
 }
 
@@ -523,9 +1280,9 @@ mod tests {
     fn known_modes_round_trip() {
         for m in [
             JudgeMode::Mav,
-            JudgeMode::EvaluatorOnly,
             JudgeMode::External,
-            JudgeMode::HumanOnly,
+            JudgeMode::RemovedEvaluatorOnly,
+            JudgeMode::RemovedHumanOnly,
         ] {
             assert_eq!(JudgeMode::from_config_str(m.as_str()), Some(m));
         }
@@ -537,6 +1294,56 @@ mod tests {
         assert_eq!(JudgeMode::from_config_str(""), Some(JudgeMode::Mav));
     }
 
+    /// v1.69.0: the two removed values (and their old aliases) are still
+    /// RECOGNISED — never read as "unknown", because the unknown-value path
+    /// falls back to `mav`, which for `human_only` would silently drop a
+    /// human gate. Their telemetry tokens stay the historical spellings so
+    /// knob snapshots written before and after the removal read the same.
+    #[test]
+    fn removed_judge_modes_are_recognised_not_unknown() {
+        for (raw, mode) in [
+            ("evaluator_only", JudgeMode::RemovedEvaluatorOnly),
+            ("evaluator", JudgeMode::RemovedEvaluatorOnly),
+            ("human_only", JudgeMode::RemovedHumanOnly),
+            ("human", JudgeMode::RemovedHumanOnly),
+            (" Human_Only ", JudgeMode::RemovedHumanOnly),
+        ] {
+            assert_eq!(JudgeMode::from_config_str(raw), Some(mode), "raw = {raw:?}");
+            assert!(mode.is_removed(), "{raw} must be flagged removed");
+        }
+        assert_eq!(JudgeMode::RemovedEvaluatorOnly.as_str(), "evaluator_only");
+        assert_eq!(JudgeMode::RemovedHumanOnly.as_str(), "human_only");
+        for mode in [JudgeMode::Mav, JudgeMode::External] {
+            assert!(!mode.is_removed(), "{} must stay a supported mode", mode.as_str());
+        }
+    }
+
+    /// Only `mav` and `external` may be written; the removed values are
+    /// recognised on read but refused on write.
+    #[test]
+    fn writable_modes_are_exactly_mav_and_external() {
+        assert_eq!(WRITABLE_JUDGE_MODES, ["mav", "external"]);
+        for raw in ["mav", "external", " MAV "] {
+            assert!(JudgeMode::from_config_str(raw).is_some_and(|m| !m.is_removed()));
+        }
+    }
+
+    /// Reading a removed value out of a real `config.toml` yields the removed
+    /// variant (the warn-once is a side effect, never a substitution).
+    #[test]
+    fn from_home_returns_the_removed_variant_unchanged() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[dispatch]\njudge = \"human_only\"\n",
+        )
+        .expect("write config");
+        assert_eq!(
+            JudgeMode::from_home(Some(home.path())),
+            JudgeMode::RemovedHumanOnly
+        );
+    }
+
     #[test]
     fn unknown_mode_is_reported_not_substituted() {
         // `from_config_str` must NOT silently map an unknown value onto a
@@ -546,6 +1353,7 @@ mod tests {
         assert_eq!(JudgeMode::from_config_str("mavv"), None);
         // Substring must not match (coding convention 2).
         assert_eq!(JudgeMode::from_config_str("not-mav-really"), None);
+        assert_eq!(JudgeMode::from_config_str("human_only_please"), None);
     }
 
     #[test]
@@ -557,7 +1365,11 @@ mod tests {
         assert_eq!(JudgeMode::from_home(Some(dir.path())), JudgeMode::Mav);
 
         // Config with no [dispatch] judge key.
-        std::fs::write(dir.path().join("config.toml"), "[dispatch]\nenabled = true\n").unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[dispatch]\nenabled = true\n",
+        )
+        .unwrap();
         assert_eq!(JudgeMode::from_home(Some(dir.path())), JudgeMode::Mav);
 
         // Unknown value ⇒ mav (the STRONGEST verifier, not the cheapest).
@@ -582,9 +1394,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for (raw, want) in [
             ("mav", JudgeMode::Mav),
-            ("evaluator_only", JudgeMode::EvaluatorOnly),
+            ("evaluator_only", JudgeMode::RemovedEvaluatorOnly),
             ("external", JudgeMode::External),
-            ("human_only", JudgeMode::HumanOnly),
+            ("human_only", JudgeMode::RemovedHumanOnly),
         ] {
             std::fs::write(
                 dir.path().join("config.toml"),
@@ -593,6 +1405,269 @@ mod tests {
             .unwrap();
             assert_eq!(JudgeMode::from_home(Some(dir.path())), want, "raw = {raw}");
         }
+    }
+
+    // ── removed-value finding (for `duduclaw doctor`) ───────────────────
+
+    #[test]
+    fn removed_judge_mode_finding_names_the_value_and_the_fix() {
+        let f = removed_judge_mode_finding("[dispatch]\njudge = \"human_only\"\n")
+            .expect("human_only is a finding");
+        assert_eq!(f.mode, JudgeMode::RemovedHumanOnly);
+        assert_eq!(f.configured, "human_only");
+        assert!(f.current_behavior.contains("needs_human"), "{}", f.current_behavior);
+        for needle in ["judge = \"mav\"", "autonomy_level", "approval_required_tools"] {
+            assert!(f.fix.contains(needle), "fix must name {needle}: {}", f.fix);
+        }
+
+        let f = removed_judge_mode_finding("[dispatch]\njudge = \"Evaluator\"\n")
+            .expect("the evaluator alias is a finding");
+        assert_eq!(f.mode, JudgeMode::RemovedEvaluatorOnly);
+        assert_eq!(f.configured, "Evaluator");
+        assert!(f.current_behavior.contains("mav"), "{}", f.current_behavior);
+        assert!(f.fix.contains("judge = \"mav\""), "{}", f.fix);
+    }
+
+    #[test]
+    fn judge_mode_check_separates_not_used_from_could_not_check() {
+        let check = |body: Option<&str>| {
+            let dir = tempfile::tempdir().unwrap();
+            if let Some(body) = body {
+                std::fs::write(dir.path().join("config.toml"), body).unwrap();
+            }
+            check_removed_judge_mode_in_home(dir.path())
+        };
+        for body in [
+            None,
+            Some(""),
+            Some("[dispatch]\nenabled = true\n"),
+            Some("[dispatch]\njudge = \"mav\"\n"),
+            Some("[dispatch]\njudge = \"external\"\n"),
+            Some("[dispatch]\njudge = \"chaos_monkey\"\n"),
+        ] {
+            assert_eq!(check(body), RemovedJudgeModeCheck::NotUsed, "body = {body:?}");
+        }
+        for body in ["[dispatch\njudge = ", "[dispatch]\njudge = 7\n", "dispatch = 3\n"] {
+            assert!(
+                matches!(check(Some(body)), RemovedJudgeModeCheck::Unchecked(_)),
+                "body = {body:?}"
+            );
+        }
+        match check(Some("[dispatch]\njudge = \"human_only\"\n")) {
+            RemovedJudgeModeCheck::Finding(f) => assert_eq!(f.mode, JudgeMode::RemovedHumanOnly),
+            other => panic!("{other:?}"),
+        }
+        // A config.toml that is a directory cannot be read: not a missing file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("config.toml")).unwrap();
+        assert!(matches!(
+            check_removed_judge_mode_in_home(dir.path()),
+            RemovedJudgeModeCheck::Unchecked(_)
+        ));
+    }
+
+    #[test]
+    fn removed_judge_mode_finding_is_none_for_supported_or_unreadable_config() {
+        for body in [
+            "",
+            "[dispatch]\nenabled = true\n",
+            "[dispatch]\njudge = \"mav\"\n",
+            "[dispatch]\njudge = \"external\"\n",
+            "[dispatch]\njudge = \"chaos_monkey\"\n",
+            "[dispatch]\njudge = 7\n",
+            "[dispatch\njudge = ",
+        ] {
+            assert!(removed_judge_mode_finding(body).is_none(), "body = {body:?}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        assert!(removed_judge_mode_finding_in_home(dir.path()).is_none());
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[dispatch]\njudge = \"evaluator_only\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            removed_judge_mode_finding_in_home(dir.path()).map(|f| f.mode),
+            Some(JudgeMode::RemovedEvaluatorOnly)
+        );
+    }
+
+    /// The removal notice is claimed once per (home, mode) — a second claim
+    /// in the same home is refused, a different home gets its own.
+    #[test]
+    fn removed_mode_notice_is_claimed_once_per_home_and_mode() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        assert!(claim_removed_mode_notice(a.path(), JudgeMode::RemovedHumanOnly));
+        assert!(!claim_removed_mode_notice(a.path(), JudgeMode::RemovedHumanOnly));
+        assert!(claim_removed_mode_notice(a.path(), JudgeMode::RemovedEvaluatorOnly));
+        assert!(claim_removed_mode_notice(b.path(), JudgeMode::RemovedHumanOnly));
+        // Supported modes never produce a notice.
+        assert!(!claim_removed_mode_notice(b.path(), JudgeMode::Mav));
+        assert!(!claim_removed_mode_notice(b.path(), JudgeMode::External));
+    }
+
+    // ── judge model routing config (P0/WP-B) ────────────────────────────
+
+    fn dispatch_table(body: &str) -> toml::Table {
+        let full = format!("[dispatch]\n{body}\n");
+        full.parse::<toml::Table>()
+            .unwrap()
+            .get("dispatch")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap()
+    }
+
+    #[test]
+    fn judge_model_hint_absent_without_keys() {
+        // No keys ⇒ no hint ⇒ the default utility resolution, unchanged.
+        assert_eq!(
+            parse_judge_model_hint(&dispatch_table("enabled = true")),
+            None
+        );
+        // Blank values read as unset.
+        assert_eq!(
+            parse_judge_model_hint(&dispatch_table(
+                "judge_provider = \"  \"\njudge_model = \"\""
+            )),
+            None
+        );
+        // Wrong types read as unset (fail-safe, same as every other
+        // `[dispatch]` reader here).
+        assert_eq!(
+            parse_judge_model_hint(&dispatch_table("judge_provider = 7\njudge_model = false")),
+            None
+        );
+    }
+
+    #[test]
+    fn judge_model_hint_reads_both_keys() {
+        let h = parse_judge_model_hint(&dispatch_table(
+            "judge_provider = \"gemini\"\njudge_model = \"gemini-3-pro-preview\"",
+        ))
+        .unwrap();
+        assert_eq!(h.provider, Some(RuntimeType::Gemini));
+        assert_eq!(h.model.as_deref(), Some("gemini-3-pro-preview"));
+        assert!(!h.is_empty());
+
+        // Model only — legal; the family check at apply time decides whether
+        // it is runnable on the resolved provider.
+        let h =
+            parse_judge_model_hint(&dispatch_table("judge_model = \"claude-opus-4-6\"")).unwrap();
+        assert_eq!(h.provider, None);
+        assert_eq!(h.model.as_deref(), Some("claude-opus-4-6"));
+
+        // Provider only.
+        let h = parse_judge_model_hint(&dispatch_table("judge_provider = \"codex\"")).unwrap();
+        assert_eq!(h.provider, Some(RuntimeType::Codex));
+        assert_eq!(h.model, None);
+
+        // Catalog aliases resolve (the alias list lives in `runtime_catalog`).
+        assert_eq!(
+            parse_judge_model_hint(&dispatch_table("judge_provider = \"openai\""))
+                .unwrap()
+                .provider,
+            RuntimeType::parse("openai")
+        );
+    }
+
+    #[test]
+    fn unknown_judge_provider_drops_the_whole_hint() {
+        // Never substitute a runtime (the `RuntimeType::parse` anti-pattern):
+        // an unknown provider must not leave a half-applied model override
+        // riding on whatever the default provider happens to be.
+        assert_eq!(
+            parse_judge_model_hint(&dispatch_table(
+                "judge_provider = \"kimi-typo\"\njudge_model = \"gemini-3-pro-preview\""
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn judge_model_hint_is_read_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(judge_model_hint_from_home(None), None);
+        assert_eq!(judge_model_hint_from_home(Some(dir.path())), None);
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[dispatch]\njudge = \"mav\"\njudge_provider = \"gemini\"\njudge_model = \"gemini-3-pro-preview\"\n",
+        )
+        .unwrap();
+        let h = judge_model_hint_from_home(Some(dir.path())).unwrap();
+        assert_eq!(h.provider, Some(RuntimeType::Gemini));
+        assert_eq!(h.model.as_deref(), Some("gemini-3-pro-preview"));
+
+        // Malformed TOML / no [dispatch] table ⇒ no hint.
+        std::fs::write(dir.path().join("config.toml"), "[dispatch\njudge_model = ").unwrap();
+        assert_eq!(judge_model_hint_from_home(Some(dir.path())), None);
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[runtime]\nprovider = \"claude\"\n",
+        )
+        .unwrap();
+        assert_eq!(judge_model_hint_from_home(Some(dir.path())), None);
+    }
+
+    #[test]
+    fn same_family_detection_is_conservative() {
+        use crate::runtime_config::same_model_family;
+        // Same family ⇒ the decorrelation warning fires.
+        assert!(same_model_family("claude-opus-4-6", "claude-haiku-4-5"));
+        assert!(same_model_family(
+            "gemini-3-pro-preview",
+            "gemini-2.5-flash"
+        ));
+        // Identical unknown ids are trivially the same family.
+        assert!(same_model_family("house-model-v1", "HOUSE-MODEL-V1"));
+        // Cross-family ⇒ silent (this is the configuration we want).
+        assert!(!same_model_family(
+            "claude-opus-4-6",
+            "gemini-3-pro-preview"
+        ));
+        assert!(!same_model_family("claude-opus-4-6", "gpt-5.6-sol"));
+        // Unknown vs known ⇒ never guessed into a warning.
+        assert!(!same_model_family("claude-opus-4-6", "house-model-v1"));
+        assert!(!same_model_family("", "claude-opus-4-6"));
+    }
+
+    #[test]
+    fn hinted_runtime_failure_is_audited_with_its_own_reason_token() {
+        // The POST-spawn degrade the live test exposed: the hinted runtime was
+        // selected and then failed. It must produce a `judge_seam_degraded`
+        // row carrying the stable `hinted_runtime_failed` token plus the
+        // provider/model/error, so an operator can tell it apart from the
+        // pre-spawn degrades (bad family, runtime not installed).
+        let dir = tempfile::tempdir().unwrap();
+        audit_hinted_judge_failure(
+            dir.path(),
+            RuntimeType::Codex,
+            "gpt-5.6-sol",
+            "spawn codex failed: unexpected argument",
+            "claude-haiku-4-5",
+        );
+
+        let audit =
+            std::fs::read_to_string(dir.path().join("security_audit.jsonl")).unwrap_or_default();
+        assert!(audit.contains("judge_seam_degraded"), "{audit}");
+        assert!(audit.contains(DEGRADE_HINTED_RUNTIME_FAILED), "{audit}");
+        assert_eq!(DEGRADE_HINTED_RUNTIME_FAILED, "hinted_runtime_failed");
+        assert!(audit.contains("gpt-5.6-sol"), "{audit}");
+        assert!(audit.contains("codex"), "{audit}");
+        assert!(audit.contains("unexpected argument"), "{audit}");
+        // The retry target is recorded too — that is what actually judged.
+        assert!(audit.contains("claude-haiku-4-5"), "{audit}");
+    }
+
+    #[test]
+    fn same_family_warning_fires_once_per_pair() {
+        assert!(mark_same_family_warned("agent-a", "claude-opus-4-6"));
+        assert!(!mark_same_family_warned("agent-a", "claude-opus-4-6"));
+        // A different agent, or a different judge model, is a new signal.
+        assert!(mark_same_family_warned("agent-b", "claude-opus-4-6"));
+        assert!(mark_same_family_warned("agent-a", "claude-haiku-4-5"));
     }
 
     // ── external config parsing ─────────────────────────────────────────
@@ -604,8 +1679,11 @@ mod tests {
         assert_eq!(ExternalJudgeConfig::from_home(Some(dir.path())), None);
 
         // Missing key.
-        std::fs::write(dir.path().join("config.toml"), "[dispatch]\njudge = \"external\"\n")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[dispatch]\njudge = \"external\"\n",
+        )
+        .unwrap();
         assert_eq!(ExternalJudgeConfig::from_home(Some(dir.path())), None);
 
         // Empty array / blank program / non-string element ⇒ unusable.
@@ -670,8 +1748,8 @@ mod tests {
 
     #[test]
     fn external_verdict_parses_bool_and_string_forms() {
-        let v = parse_external_verdict(r#"{"pass": true, "feedback": "所有驗收條件皆滿足"}"#)
-            .unwrap();
+        let v =
+            parse_external_verdict(r#"{"pass": true, "feedback": "所有驗收條件皆滿足"}"#).unwrap();
         assert!(v.passed);
         assert!(v.feedback.contains("所有驗收條件皆滿足"));
         assert!(
@@ -681,9 +1759,11 @@ mod tests {
         );
         assert!(v.aspects.is_none(), "an external verdict has no MAV panel");
 
-        assert!(!parse_external_verdict(r#"{"pass": "fail", "feedback": "缺測試"}"#)
-            .unwrap()
-            .passed);
+        assert!(
+            !parse_external_verdict(r#"{"pass": "fail", "feedback": "缺測試"}"#)
+                .unwrap()
+                .passed
+        );
         assert!(parse_external_verdict(r#"{"pass":"PASS"}"#).unwrap().passed);
         // Banner noise before/after the object still parses.
         assert!(
@@ -699,11 +1779,11 @@ mod tests {
             "",
             "PASS",
             "not json at all",
-            r#"{"verdict": "pass"}"#,     // wrong field name
-            r#"{"pass": "maybe"}"#,       // unusable value
-            r#"{"pass": 1}"#,             // numbers are not a pass channel
-            r#"}{"#,                      // inverted braces
-            r#"{"pass": true"#,           // truncated JSON
+            r#"{"verdict": "pass"}"#, // wrong field name
+            r#"{"pass": "maybe"}"#,   // unusable value
+            r#"{"pass": 1}"#,         // numbers are not a pass channel
+            r#"}{"#,                  // inverted braces
+            r#"{"pass": true"#,       // truncated JSON
         ] {
             assert!(
                 parse_external_verdict(bad).is_err(),
@@ -734,7 +1814,11 @@ mod tests {
         assert!(out.len() <= EXTERNAL_FEEDBACK_MAX_BYTES + EXTERNAL_FEEDBACK_LABEL.len() + 8);
         assert!(out.contains('測'));
         // Empty feedback is legal (a passing judge may say nothing).
-        assert!(sanitize_external_feedback("   ").unwrap().contains("未提供"));
+        assert!(
+            sanitize_external_feedback("   ")
+                .unwrap()
+                .contains("未提供")
+        );
     }
 
     #[test]
@@ -756,13 +1840,8 @@ mod tests {
     /// code itself is platform-neutral (`tokio::process::Command`).
     #[cfg(unix)]
     fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
-        use std::io::Write as _;
-        use std::os::unix::fs::PermissionsExt as _;
         let path = dir.join(name);
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(f, "#!/bin/sh\n{body}").unwrap();
-        drop(f);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::write_executable(&path, format!("#!/bin/sh\n{body}\n"), 0o755);
         path
     }
 
@@ -771,6 +1850,7 @@ mod tests {
         ExternalAcceptanceJudge::new(ExternalJudgeConfig {
             command,
             timeout_secs,
+            home_dir: None,
         })
     }
 
@@ -784,7 +1864,10 @@ mod tests {
         let bin = script(
             dir.path(),
             "judge.sh",
-            &format!("cat > {}\necho '{{\"pass\": true, \"feedback\": \"外部判官通過\"}}'", seen.display()),
+            &format!(
+                "cat > {}\necho '{{\"pass\": true, \"feedback\": \"外部判官通過\"}}'",
+                seen.display()
+            ),
         );
 
         let j = external(vec![bin.to_string_lossy().into_owned()], 30);
@@ -832,11 +1915,100 @@ mod tests {
         assert!(err.contains("timed out"), "{err}");
     }
 
+    /// FX6: a timed-out judge must not outlive the timeout — neither the
+    /// leader nor a background grandchild it spawned.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_judge_timeout_leaves_no_surviving_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader_pid = dir.path().join("leader.pid");
+        let child_pid = dir.path().join("child.pid");
+        let bin = script(
+            dir.path(),
+            "hang.sh",
+            &format!(
+                "echo $$ > '{}'\nsleep 60 &\necho $! > '{}'\nwait",
+                leader_pid.display(),
+                child_pid.display()
+            ),
+        );
+        let err = external(vec![bin.to_string_lossy().into_owned()], 1)
+            .judge("c", "t", "r")
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+
+        for file in [&leader_pid, &child_pid] {
+            let pid: i32 = std::fs::read_to_string(file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            // The leader is reaped by the judge; the reparented grandchild is
+            // reaped by init — poll briefly for that.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
+                if !alive {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "judge process {pid} survived the timeout"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+
+    /// FX6: a judge that floods stdout is bounded in memory and still
+    /// degrades cleanly (here: the flood never forms a JSON verdict).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_judge_stdout_flood_is_bounded_and_degrades() {
+        let dir = tempfile::tempdir().unwrap();
+        // ~8 MiB of non-JSON output, then a clean exit.
+        let bin = script(
+            dir.path(),
+            "flood.sh",
+            "cat > /dev/null\nhead -c 8388608 /dev/zero | tr '\\0' 'x'",
+        );
+        let err = external(vec![bin.to_string_lossy().into_owned()], 30)
+            .judge("c", "t", "r")
+            .await
+            .unwrap_err();
+        assert!(err.contains("no JSON object"), "{err}");
+
+        // The reader itself never buffers past its cap.
+        let big = vec![b'y'; EXTERNAL_STDOUT_MAX_BYTES * 3];
+        let got = read_bounded(Some(&big[..]), EXTERNAL_STDOUT_MAX_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), EXTERNAL_STDOUT_MAX_BYTES);
+    }
+
+    /// FX6: an endless flood is cut off by the deadline, not by memory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_judge_endless_flood_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = script(dir.path(), "yes.sh", "cat > /dev/null\nexec yes");
+        let err = external(vec![bin.to_string_lossy().into_owned()], 1)
+            .judge("c", "t", "r")
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn external_judge_bad_json_is_an_error_not_a_pass() {
         let dir = tempfile::tempdir().unwrap();
-        let bin = script(dir.path(), "junk.sh", "cat > /dev/null\necho 'LGTM, ship it'");
+        let bin = script(
+            dir.path(),
+            "junk.sh",
+            "cat > /dev/null\necho 'LGTM, ship it'",
+        );
         let err = external(vec![bin.to_string_lossy().into_owned()], 30)
             .judge("c", "t", "r")
             .await
@@ -858,7 +2030,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("exited"), "{err}");
-        assert!(err.contains("boom"), "stderr tail must reach the log: {err}");
+        assert!(
+            err.contains("boom"),
+            "stderr tail must reach the log: {err}"
+        );
     }
 
     #[tokio::test]
@@ -866,7 +2041,36 @@ mod tests {
         let j = ExternalAcceptanceJudge::new(ExternalJudgeConfig {
             command: vec!["definitely-not-a-real-duduclaw-judge-binary".into()],
             timeout_secs: 5,
+            home_dir: None,
         });
         assert!(j.judge("c", "t", "r").await.is_err());
+    }
+
+    /// R1 (2026-10): a `gemini` judge provider keeps judging (the hint is
+    /// unchanged) and its deprecation notice fires once per process — every
+    /// parse consults it, the de-duplication lets exactly one through.
+    #[test]
+    fn judge_provider_deprecation_notice_fires_once() {
+        use crate::runtime_config::{CONSULTED_NOTICES, DeprecatedRuntimeSource, deprecated_runtime_first_notice};
+        CONSULTED_NOTICES.with(|n| n.borrow_mut().clear());
+        for _ in 0..3 {
+            let h = parse_judge_model_hint(&dispatch_table("judge_provider = \"gemini\"")).unwrap();
+            assert_eq!(h.provider, Some(RuntimeType::Gemini));
+        }
+        let consulted = CONSULTED_NOTICES.with(|n| n.borrow().clone());
+        assert_eq!(consulted.len(), 3, "{consulted:?}");
+        assert!(consulted.iter().all(|(rt, src, agent)| *rt == "gemini"
+            && *src == DeprecatedRuntimeSource::JudgeProvider && agent.is_none()));
+        let mut seen = std::collections::HashSet::new();
+        let fired: Vec<String> = consulted
+            .iter()
+            .filter_map(|(_, src, agent)| deprecated_runtime_first_notice(&mut seen, RuntimeType::Gemini, *src, agent.as_deref()))
+            .collect();
+        assert_eq!(fired.len(), 1, "{fired:?}");
+        assert!(fired[0].starts_with("config.toml [dispatch] judge_provider"), "{fired:?}");
+        // A live judge provider consults nothing.
+        CONSULTED_NOTICES.with(|n| n.borrow_mut().clear());
+        parse_judge_model_hint(&dispatch_table("judge_provider = \"codex\"")).unwrap();
+        assert!(CONSULTED_NOTICES.with(|n| n.borrow().is_empty()));
     }
 }

@@ -48,6 +48,7 @@ pub(super) async fn import_facts(
     agent_id: &str,
     label: &str,
     facts: &[String],
+    source_id: &str,
 ) {
     if facts.is_empty() {
         return;
@@ -61,14 +62,23 @@ pub(super) async fn import_facts(
         return;
     };
     let mut ok = 0usize;
-    for f in facts {
+    let now = chrono::Utc::now();
+    // H-3 / N8: the file is identified by its canonical path and each record
+    // by its content, so the same file re-imported (reordered, touched) stays
+    // forgotten. A copy at another path is a different source.
+    let canonical_id = duduclaw_memory::lineage::canonical_import_id(source_id);
+    for f in facts.iter() {
         let entry = build_semantic_entry(agent_id, f, ctx.platform);
         // WP1: migrated facts carry the `import` origin (ceiling 0.7).
         let meta = duduclaw_memory::TemporalMeta {
             origin: Some("import".to_string()),
             ..Default::default()
         };
-        if eng.store_temporal(agent_id, entry, meta).await.is_ok() {
+        // P2-B: an imported record's source is its file and its content.
+        let prov = duduclaw_memory::lineage::Provenance::source(
+            duduclaw_memory::SourceRef::import_item(&canonical_id, f.as_bytes(), now),
+        );
+        if eng.store_temporal(agent_id, entry, meta, prov).await.is_ok() {
             ok += 1;
         }
     }
@@ -101,6 +111,7 @@ pub(super) async fn store_import_memory(
     content: &str,
     tags: Vec<String>,
     mut meta: duduclaw_memory::TemporalMeta,
+    source_id: &str,
 ) {
     let scan = duduclaw_security::input_guard::scan_input(
         content,
@@ -140,8 +151,21 @@ pub(super) async fn store_import_memory(
         source_event: format!("migrate-from-{}", ctx.platform.as_str()),
     };
     meta.origin = Some("import".to_string());
-    match eng.store_temporal(agent_id, entry, meta).await {
-        Ok(_) => report.imported("memory", label),
+    let prov = duduclaw_memory::lineage::Provenance::source(duduclaw_memory::SourceRef::import_item(
+        &duduclaw_memory::lineage::canonical_import_id(source_id),
+        content.as_bytes(),
+        chrono::Utc::now(),
+    ));
+    match eng.store_temporal_outcome(agent_id, entry, meta, prov).await {
+        Ok(duduclaw_memory::TemporalWriteOutcome::Stored(_)) => report.imported("memory", label),
+        Ok(duduclaw_memory::TemporalWriteOutcome::Fenced(_)) => {
+            report.skipped("memory", label, "此來源先前已依來源刪除，不再匯入")
+        }
+        // L5: a more trusted current value (operator-set or approved) is kept;
+        // the import does not overwrite it. Not a failure.
+        Ok(duduclaw_memory::TemporalWriteOutcome::Refused(_)) => {
+            report.skipped("memory", label, "已有更可信的現有內容，保留原值未覆寫")
+        }
         Err(e) => report.skipped("memory", label, format!("寫入失敗: {e}")),
     }
 }
@@ -257,7 +281,12 @@ pub(super) fn plan_channel_token(
 
 /// Plan/apply the Anthropic API key into config.toml `[api]`.
 /// Only the encrypted field is written; an existing key is never overwritten.
-pub(super) fn plan_api_key(ctx: &Ctx, report: &mut Report, config: &mut toml::value::Table, key: &str) {
+pub(super) fn plan_api_key(
+    ctx: &Ctx,
+    report: &mut Report,
+    config: &mut toml::value::Table,
+    key: &str,
+) {
     if key.trim().is_empty() {
         return;
     }
@@ -393,7 +422,12 @@ pub(super) async fn scaffold_agent(
 
 /// Copy + install skill directories after running each SKILL.md through the
 /// prompt-injection scanner. A flagged skill is NOT installed (SKIPPED-security).
-pub(super) fn install_skills(ctx: &Ctx, report: &mut Report, agent_id: &str, skill_dirs: &[PathBuf]) {
+pub(super) fn install_skills(
+    ctx: &Ctx,
+    report: &mut Report,
+    agent_id: &str,
+    skill_dirs: &[PathBuf],
+) {
     for sd in skill_dirs {
         let name = sd
             .file_name()
@@ -457,7 +491,8 @@ pub(super) fn archive_raw(ctx: &Ctx, report: &mut Report, entries: &[(String, Pa
         let res = if src.is_dir() {
             copy_dir_recursive(src, &dest)
         } else {
-            std::fs::create_dir_all(ctx.raw_dir()).and_then(|_| std::fs::copy(src, &dest).map(|_| ()))
+            std::fs::create_dir_all(ctx.raw_dir())
+                .and_then(|_| std::fs::copy(src, &dest).map(|_| ()))
         };
         match res {
             Ok(()) => report.imported("raw", label),
@@ -481,17 +516,25 @@ pub(super) fn copy_into_agent_memory(ctx: &Ctx, agent_id: &str, src: &Path) -> s
 }
 
 /// Recursively copy a directory tree.
+///
+/// Symlinks are never followed (classified via `DirEntry::file_type`, which
+/// does not traverse links) and are skipped along with special files: an
+/// imported skill or archive must not pull content from outside its own tree
+/// (e.g. a link to `~/.ssh/id_rsa`) into an agent directory, nor recurse
+/// forever through a link to an ancestor.
 pub(super) fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dest)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        let ft = entry.file_type()?;
         let path = entry.path();
         let target = dest.join(entry.file_name());
-        if path.is_dir() {
+        if ft.is_dir() {
             copy_dir_recursive(&path, &target)?;
-        } else {
+        } else if ft.is_file() {
             std::fs::copy(&path, &target)?;
         }
+        // symlink / fifo / socket / device: skipped.
     }
     Ok(())
 }
@@ -517,7 +560,12 @@ pub(super) struct ImportedWikiPage {
 /// Identity/Core), `trust: 0.3` (same ceiling as the `import` memory origin),
 /// `author: "import"`. Injection-scanned first (fail-closed, same discipline
 /// as `store_import_memory`); dry-run only records the plan.
-pub(super) fn import_wiki_page(ctx: &Ctx, report: &mut Report, agent_id: &str, page: &ImportedWikiPage) {
+pub(super) fn import_wiki_page(
+    ctx: &Ctx,
+    report: &mut Report,
+    agent_id: &str,
+    page: &ImportedWikiPage,
+) {
     let scan = duduclaw_security::input_guard::scan_input(
         &page.body,
         duduclaw_security::input_guard::DEFAULT_BLOCK_THRESHOLD,
@@ -568,5 +616,28 @@ pub(super) fn import_wiki_page(ctx: &Ctx, report: &mut Report, agent_id: &str, p
     match store.write_page_with_author(&page.rel_path, &content, "import") {
         Ok(()) => report.imported("wiki", &page.rel_path),
         Err(e) => report.skipped("wiki", &page.rel_path, format!("寫入失敗: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod copy_dir_tests {
+    use super::copy_dir_recursive;
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_does_not_follow_symlinks() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("id_rsa"), "PRIVATE").unwrap();
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("SKILL.md"), "skill").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("id_rsa"), src.path().join("key")).unwrap();
+        std::os::unix::fs::symlink(src.path(), src.path().join("loop")).unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let out = dst.path().join("copy");
+        copy_dir_recursive(src.path(), &out).unwrap();
+        assert!(out.join("SKILL.md").is_file());
+        assert!(std::fs::symlink_metadata(out.join("key")).is_err());
+        assert!(std::fs::symlink_metadata(out.join("loop")).is_err());
     }
 }

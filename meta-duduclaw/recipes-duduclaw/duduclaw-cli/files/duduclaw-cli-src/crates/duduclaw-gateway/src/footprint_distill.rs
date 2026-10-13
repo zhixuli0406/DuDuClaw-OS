@@ -427,8 +427,32 @@ async fn write_footprint_triples(
             )),
             ..TemporalMeta::default()
         };
-        let id = engine.store_temporal(agent_id, entry, meta).await?;
-        ids.push(id);
+        // L5: a supersession-guard refusal (a more trusted value holds this
+        // key) skips this triple and logs; real errors still propagate.
+        // P2-B (G7): the source is this employee's footprint day, not a
+        // conversation; it can be forgotten as `footprint:<agent>` / `day:<date>`.
+        let source = crate::memory_provenance::footprint_day_source(
+            agent_id,
+            &stats.date.format("%Y-%m-%d").to_string(),
+            Utc::now(),
+        );
+        match engine
+            .store_temporal_outcome(
+                agent_id,
+                entry,
+                meta,
+                duduclaw_memory::lineage::Provenance::source(source),
+            )
+            .await?
+        {
+            duduclaw_memory::TemporalWriteOutcome::Stored(id) => ids.push(id),
+            duduclaw_memory::TemporalWriteOutcome::Refused(r) => {
+                tracing::info!(agent = agent_id, "footprint triple skipped: {r}");
+            }
+            duduclaw_memory::TemporalWriteOutcome::Fenced(r) => {
+                tracing::info!(agent = agent_id, "footprint triple skipped (source forgotten): {r}");
+            }
+        }
     }
     Ok(ids)
 }
@@ -605,7 +629,10 @@ impl FootprintTracker {
     /// `<home>/os/<agent>/footprint-aggregate.json` — the crash/restart
     /// snapshot of one agent's in-progress day bucket.
     fn snapshot_path(&self, agent_id: &str) -> PathBuf {
-        self.home_dir.join("os").join(agent_id).join("footprint-aggregate.json")
+        self.home_dir
+            .join("os")
+            .join(agent_id)
+            .join("footprint-aggregate.json")
     }
 
     /// Persist every tracked agent's in-progress bucket (atomic tmp+rename).
@@ -622,7 +649,9 @@ impl FootprintTracker {
         for (agent_id, stats) in snapshot {
             let path = self.snapshot_path(&agent_id);
             let Some(dir) = path.parent() else { continue };
-            let Ok(json) = serde_json::to_vec(&stats) else { continue };
+            let Ok(json) = serde_json::to_vec(&stats) else {
+                continue;
+            };
             let write = std::fs::create_dir_all(dir).and_then(|_| {
                 let tmp = path.with_extension("json.tmp");
                 std::fs::write(&tmp, &json)?;
@@ -639,11 +668,18 @@ impl FootprintTracker {
     /// rolls it over and distills it, so a restart shortly after midnight
     /// still gets yesterday's memories. Unreadable/invalid files are ignored.
     pub fn load_snapshots(&self) {
-        let agents: Vec<String> =
-            self.enabled_agents.lock().unwrap().iter().cloned().collect();
+        let agents: Vec<String> = self
+            .enabled_agents
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect();
         for agent_id in agents {
             let path = self.snapshot_path(&agent_id);
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
             let Ok(stats) = serde_json::from_slice::<AgentDayStats>(&bytes) else {
                 warn!(agent = %agent_id, "P4-4 footprint snapshot unreadable — starting fresh");
                 continue;
@@ -787,14 +823,14 @@ mod tests {
     #[test]
     fn default_direction_footprint_is_deny_by_default() {
         for body in [
-            "",                                  // empty file
-            "[os_watch]\n",                      // section, no key
-            "[os_watch]\npaths = [\"~/x\"]\n",   // watching, but no footprint
-            "[os_watch]\nfootprint = false\n",   // explicit off
+            "",                                   // empty file
+            "[os_watch]\n",                       // section, no key
+            "[os_watch]\npaths = [\"~/x\"]\n",    // watching, but no footprint
+            "[os_watch]\nfootprint = false\n",    // explicit off
             "[os_watch]\nfootprint = \"true\"\n", // wrong type — NOT coerced
-            "[os_watch]\nfootprint = 1\n",       // wrong type
-            "os_watch = \"scalar\"\n",           // wrong-typed section
-            "not valid [[[ toml",                // malformed file
+            "[os_watch]\nfootprint = 1\n",        // wrong type
+            "os_watch = \"scalar\"\n",            // wrong-typed section
+            "not valid [[[ toml",                 // malformed file
         ] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("agent.toml"), body).unwrap();
@@ -810,7 +846,11 @@ mod tests {
 
         // Only an explicit `true` turns it on.
         let on = tempfile::tempdir().unwrap();
-        std::fs::write(on.path().join("agent.toml"), "[os_watch]\nfootprint = true\n").unwrap();
+        std::fs::write(
+            on.path().join("agent.toml"),
+            "[os_watch]\nfootprint = true\n",
+        )
+        .unwrap();
         assert!(read_footprint_enabled(on.path()));
     }
 
@@ -1106,6 +1146,78 @@ mod tests {
             duduclaw_memory::read_sensitivity_metadata(Some(&hours_fact.1)),
             Sensitivity::Personal
         );
+    }
+
+    /// L5: an operator value on one footprint key refuses that triple only;
+    /// the other triples are still written and the call does not fail.
+    #[tokio::test]
+    async fn write_footprint_triples_continues_after_a_refusal() {
+        let engine = SqliteMemoryEngine::in_memory().unwrap();
+        engine
+            .store_temporal(
+                "agent-x",
+                MemoryEntry {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    agent_id: "agent-x".into(),
+                    content: "operator-set hours".into(),
+                    timestamp: Utc::now(),
+                    tags: vec![],
+                    embedding: None,
+                    layer: MemoryLayer::Semantic,
+                    importance: 5.0,
+                    access_count: 0,
+                    last_accessed: None,
+                    source_event: "test".into(),
+                },
+                TemporalMeta {
+                    subject: Some(FOOTPRINT_SUBJECT.into()),
+                    predicate: Some(PREDICATE_ACTIVE_HOURS.into()),
+                    object: Some("operator".into()),
+                    origin: Some("operator".into()),
+                    ..TemporalMeta::default()
+                }, duduclaw_memory::lineage::Provenance::test_only(),
+            )
+            .await
+            .unwrap();
+        let mut stats = AgentDayStats::new(NaiveDate::from_ymd_opt(2026, 7, 20).unwrap());
+        stats.app_seconds.insert("VSCode".into(), 3600);
+        stats.dir_counts.insert("/Users/me/proj".into(), 4);
+        stats.hour_counts[9] = 3;
+        let ids = write_footprint_triples(&engine, "agent-x", &stats).await.unwrap();
+        assert_eq!(ids.len(), 2, "hours refused, app + directory written");
+    }
+
+    /// P2-B (G7): a forgotten footprint day is never written again; another
+    /// day still is.
+    #[tokio::test]
+    async fn forgotten_footprint_day_is_not_written_again() {
+        let engine = SqliteMemoryEngine::in_memory().unwrap();
+        let day = |d: u32| {
+            let mut s = AgentDayStats::new(NaiveDate::from_ymd_opt(2026, 7, d).unwrap());
+            s.app_seconds.insert("VSCode".into(), 3600);
+            s
+        };
+        assert_eq!(write_footprint_triples(&engine, "agent-x", &day(20)).await.unwrap().len(), 1);
+        let sel = duduclaw_memory::ForgetSelector {
+            session: "footprint:agent-x".into(),
+            messages: vec!["day:2026-07-20".into()],
+            upto_seq: None,
+            upto_time: None,
+        };
+        let plan = match engine
+            .plan_forget_source("agent-x", &sel, Default::default(), &Default::default())
+            .await
+            .unwrap()
+        {
+            duduclaw_memory::PlanOutcome::Planned(p) => p,
+            other => panic!("{other:?}"),
+        };
+        assert!(matches!(
+            engine.apply_forget_plan(&plan.plan_id, &Default::default()).await.unwrap(),
+            duduclaw_memory::ApplyOutcome::Applied(_)
+        ));
+        assert!(write_footprint_triples(&engine, "agent-x", &day(20)).await.unwrap().is_empty());
+        assert_eq!(write_footprint_triples(&engine, "agent-x", &day(21)).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1404,9 +1516,19 @@ mod tests {
         // A fresh tracker (= restarted gateway) restores the bucket.
         let t2 = FootprintTracker::new(home.path().to_path_buf(), enabled_set("a1"));
         t2.load_snapshots();
-        let restored = t2.state.lock().unwrap().get("a1").cloned().expect("bucket restored");
+        let restored = t2
+            .state
+            .lock()
+            .unwrap()
+            .get("a1")
+            .cloned()
+            .expect("bucket restored");
         assert_eq!(restored.date, now.date_naive());
-        assert_eq!(restored.app_seconds.get("Xcode"), Some(&600), "10 min of Xcode kept");
+        assert_eq!(
+            restored.app_seconds.get("Xcode"),
+            Some(&600),
+            "10 min of Xcode kept"
+        );
         assert_eq!(
             restored.current_app.as_ref().map(|(a, _)| a.as_str()),
             Some("Safari"),
@@ -1414,7 +1536,11 @@ mod tests {
         );
 
         // Corrupt file → ignored, fresh start (never a panic).
-        std::fs::write(home.path().join("os/a1/footprint-aggregate.json"), b"not json").unwrap();
+        std::fs::write(
+            home.path().join("os/a1/footprint-aggregate.json"),
+            b"not json",
+        )
+        .unwrap();
         let t3 = FootprintTracker::new(home.path().to_path_buf(), enabled_set("a1"));
         t3.load_snapshots();
         assert!(t3.state.lock().unwrap().get("a1").is_none());

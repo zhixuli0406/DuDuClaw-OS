@@ -17,6 +17,27 @@
 //! `build_memory_engine` closes that gap: it is the one place gateway code
 //! should call to get an engine that will actually honor the config.
 //!
+//! ## Convergence status (H4, 2026-09)
+//!
+//! Every gateway-internal auto-write / auto-read path now builds through this
+//! function: `channel_reply` (key-fact storage, user-profile block, key-fact
+//! recall, decision capture / auto-resolve / TTL sweep), `profile_distill`,
+//! `goal_loop`'s task-rule injection, `chat_commands`' `/rules`,
+//! `autopilot_engine`'s persona lines, `night_engine`'s N1–N4 pass, the
+//! skill-synthesis evidence lookup, and `server.rs`'s scheduled decay job.
+//!
+//! Three families stay on the raw constructor **on purpose**:
+//!
+//! 1. **Operator / dashboard RPCs** (`handlers.rs`, `wiki_ingest`'s quarantine
+//!    decision). Human curation is not screened — an operator who types a
+//!    near-duplicate meant to type it. This is the exemption documented in
+//!    `CLAUDE.md`.
+//! 2. **Schema bootstrap + row copies** (`memory_migrate::merge_one`). It opens
+//!    an engine only to run the idempotent column migrations and then copies
+//!    rows with `ATTACH` + SQL; routing a migration through a write-time
+//!    de-duplication gate would silently drop rows.
+//! 3. **Tests**, which construct exactly the engine shape they assert on.
+//!
 //! The config-reading half (`novelty_gate_enabled_from_config`) mirrors
 //! `duduclaw_cli::mcp::novelty_gate_enabled_from_config` byte-for-byte.
 //! It is duplicated rather than imported because `duduclaw-gateway` does not
@@ -49,8 +70,40 @@ pub fn novelty_gate_enabled_from_config(home_dir: &Path) -> bool {
         .unwrap_or(default)
 }
 
+/// Reads `[memory] supersession_trust_guard` from `<home_dir>/config.toml`.
+/// Default `true` (guard on) when the file is absent, unreadable, malformed,
+/// or the key is unset — fails closed: only an explicit `false` lets a
+/// lower-trust write replace a more trusted current fact
+/// (`duduclaw_memory::supersession_guard`). Mirrors
+/// `duduclaw_cli::mcp::supersession_trust_guard_enabled_from_config`.
+pub fn supersession_trust_guard_enabled_from_config(home_dir: &Path) -> bool {
+    let default = true;
+    let Ok(content) = std::fs::read_to_string(home_dir.join("config.toml")) else {
+        return default;
+    };
+    let Ok(table) = content.parse::<toml::Table>() else {
+        return default;
+    };
+    table
+        .get("memory")
+        .and_then(|v| v.as_table())
+        .and_then(|t| t.get("supersession_trust_guard"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default)
+}
+
+/// `[memory] graph_embed_seed` / `graph_embed_seed_top_k` from
+/// `<home_dir>/config.toml` as engine retrieval weights (absent or unreadable
+/// ⇒ engine defaults). Shared by the gateway factory and the MCP server.
+pub fn retrieval_weights_from_config(home_dir: &Path) -> duduclaw_memory::engine::RetrievalWeights {
+    let table = std::fs::read_to_string(home_dir.join("config.toml"))
+        .ok()
+        .and_then(|c| c.parse::<toml::Table>().ok());
+    crate::handlers::memory_retrieval_weights_from_table(table.as_ref())
+}
+
 /// Open a `SqliteMemoryEngine` at `db_path`, honoring `[memory] novelty_gate`
-/// from `<home_dir>/config.toml`.
+/// and `[memory] supersession_trust_guard` from `<home_dir>/config.toml`.
 ///
 /// - `db_path` is the actual `memory.db` file to open — per-agent, and not
 ///   always a simple `home_dir`-relative join (some callers cross-reference a
@@ -73,7 +126,11 @@ pub fn novelty_gate_enabled_from_config(home_dir: &Path) -> bool {
 /// on next construction / process restart); this module makes no caching
 /// decision of its own.
 pub fn build_memory_engine(db_path: &Path, home_dir: &Path) -> Result<SqliteMemoryEngine> {
-    let engine = SqliteMemoryEngine::new(db_path)?;
+    let mut engine = SqliteMemoryEngine::new(db_path)?
+        .with_supersession_trust_guard(supersession_trust_guard_enabled_from_config(home_dir));
+    // `[memory] graph_embed_seed(_top_k)` (v1.68.0): agent recall now uses
+    // the same retrieval weights as the dashboard's memory search.
+    engine.retrieval_weights = retrieval_weights_from_config(home_dir);
     let engine = if novelty_gate_enabled_from_config(home_dir) {
         engine
             .with_embedder(Arc::new(NgramHashEmbedder::new()))
@@ -115,19 +172,85 @@ mod tests {
     #[test]
     fn config_reads_explicit_false() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "[memory]\nnovelty_gate = false\n").unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[memory]\nnovelty_gate = false\n",
+        )
+        .unwrap();
         assert!(!novelty_gate_enabled_from_config(dir.path()));
+    }
+
+    #[test]
+    fn supersession_trust_guard_defaults_on_and_reads_false() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(supersession_trust_guard_enabled_from_config(dir.path()));
+        std::fs::write(dir.path().join("config.toml"), "not = = toml").unwrap();
+        assert!(supersession_trust_guard_enabled_from_config(dir.path()));
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[memory]\nsupersession_trust_guard = \"no\"\n",
+        )
+        .unwrap();
+        assert!(
+            supersession_trust_guard_enabled_from_config(dir.path()),
+            "a non-boolean value fails closed"
+        );
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[memory]\nsupersession_trust_guard = false\n",
+        )
+        .unwrap();
+        assert!(!supersession_trust_guard_enabled_from_config(dir.path()));
+    }
+
+    #[test]
+    fn factory_applies_graph_embed_seed() {
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("memory.db");
+        let e = build_memory_engine(&db, home.path()).unwrap();
+        assert!(!e.retrieval_weights.graph_embed_seed);
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[memory]\ngraph_embed_seed = true\ngraph_embed_seed_top_k = 9\n",
+        )
+        .unwrap();
+        let e = build_memory_engine(&db, home.path()).unwrap();
+        assert!(e.retrieval_weights.graph_embed_seed);
+        assert_eq!(e.retrieval_weights.graph_embed_seed_top_k, 9);
+    }
+
+    #[test]
+    fn factory_wires_supersession_trust_guard() {
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("memory.db");
+        assert!(build_memory_engine(&db, home.path()).unwrap().supersession_trust_guard);
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[memory]\nsupersession_trust_guard = false\n",
+        )
+        .unwrap();
+        assert!(!build_memory_engine(&db, home.path()).unwrap().supersession_trust_guard);
     }
 
     #[tokio::test]
     async fn enabled_engine_rejects_near_duplicate_semantic_writes() {
         let home = tempfile::tempdir().unwrap();
-        std::fs::write(home.path().join("config.toml"), "[memory]\nnovelty_gate = true\n").unwrap();
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[memory]\nnovelty_gate = true\n",
+        )
+        .unwrap();
         let db_path = home.path().join("memory.db");
         let engine = build_memory_engine(&db_path, home.path()).unwrap();
 
         engine
-            .store("agent-a", entry("agent-a", "The deployment pipeline uses GitHub Actions for CI/CD."))
+            .store(
+                "agent-a",
+                entry(
+                    "agent-a",
+                    "The deployment pipeline uses GitHub Actions for CI/CD.",
+                ),
+            )
             .await
             .unwrap();
 
@@ -147,12 +270,22 @@ mod tests {
     #[tokio::test]
     async fn disabled_engine_never_rejects_near_duplicate_writes() {
         let home = tempfile::tempdir().unwrap();
-        std::fs::write(home.path().join("config.toml"), "[memory]\nnovelty_gate = false\n").unwrap();
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[memory]\nnovelty_gate = false\n",
+        )
+        .unwrap();
         let db_path = home.path().join("memory.db");
         let engine = build_memory_engine(&db_path, home.path()).unwrap();
 
         engine
-            .store("agent-a", entry("agent-a", "The deployment pipeline uses GitHub Actions for CI/CD."))
+            .store(
+                "agent-a",
+                entry(
+                    "agent-a",
+                    "The deployment pipeline uses GitHub Actions for CI/CD.",
+                ),
+            )
             .await
             .unwrap();
 
@@ -166,6 +299,51 @@ mod tests {
         assert!(
             rejection.is_none(),
             "an engine built with novelty_gate=false (no embedder attached) must never reject a write"
+        );
+    }
+
+    /// Regression (H4, 2026-09): the scheduled decay job in `server.rs` used to
+    /// call `SqliteMemoryEngine::new` directly, so the engine it ran against
+    /// carried no embedder and `[memory] novelty_gate` was a documented no-op on
+    /// that path. This reproduces the job's construction + `run_decay` call and
+    /// asserts the gate is live on the resulting engine.
+    #[tokio::test]
+    async fn scheduled_decay_path_engine_honors_novelty_gate() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[memory]\nnovelty_gate = true\n",
+        )
+        .unwrap();
+        let db_path = home.path().join("memory.db");
+
+        // Exactly what the decay job does: build via the factory, then decay.
+        let engine = build_memory_engine(&db_path, home.path()).unwrap();
+        let policy = duduclaw_memory::decay::MemoryDecayPolicy {
+            archive_after_days: 30,
+            delete_after_days: 90,
+            ..duduclaw_memory::decay::MemoryDecayPolicy::default()
+        };
+        engine
+            .store("agent-decay", entry("agent-decay", "Nightly backups run at 03:00 UTC."))
+            .await
+            .unwrap();
+        duduclaw_memory::decay::run_decay(&engine, &policy).await;
+
+        assert!(
+            engine.has_embedder(),
+            "the decay job's engine must carry the embedder the gate needs"
+        );
+        assert!(
+            engine
+                .check_novelty(
+                    "agent-decay",
+                    MemoryLayer::Semantic,
+                    "Nightly backups run at 03:00 UTC."
+                )
+                .await
+                .is_some(),
+            "novelty_gate must be live on the scheduled-decay construction path"
         );
     }
 }

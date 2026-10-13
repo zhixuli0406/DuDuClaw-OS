@@ -203,6 +203,13 @@ impl LiveAgent {
 /// Maximum total concurrent evolution subprocesses across all agents (BE-H5).
 const MAX_GLOBAL_CONCURRENT: usize = 8;
 
+/// Called right before the proactive check spawns the agent's CLI on the host,
+/// with `(home_dir, agent_id, sandbox_enabled)` from the agent config the check
+/// already loaded. The gateway wires it to `task_sandbox::note_not_applied`
+/// (`path = "proactive"`) so a sandbox-enabled employee's host run is never
+/// silent; this crate cannot reach the gateway's task sandbox itself.
+pub type HostRunNotice = Arc<dyn Fn(&Path, &str, bool) + Send + Sync>;
+
 pub struct HeartbeatScheduler {
     home_dir: PathBuf,
     registry: Arc<RwLock<AgentRegistry>>,
@@ -218,6 +225,8 @@ pub struct HeartbeatScheduler {
     /// U1 natural-timing deferral state (silence breaker + proactive checks).
     /// In-memory only — restart merely restarts the 6h deferral cap clock.
     timing_deferrals: Arc<crate::proactive_timing::DeferralLedger>,
+    /// See [`HostRunNotice`]. `None` (tests, standalone use) ⇒ no notice.
+    host_run_notice: Option<HostRunNotice>,
 }
 
 impl HeartbeatScheduler {
@@ -231,7 +240,15 @@ impl HeartbeatScheduler {
             proactive_states: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             silence_tx: None,
             timing_deferrals: Arc::new(crate::proactive_timing::DeferralLedger::new()),
+            host_run_notice: None,
         }
+    }
+
+    /// Builder: install the [`HostRunNotice`] the proactive check calls before
+    /// it spawns the agent's CLI on the host.
+    pub fn with_host_run_notice(mut self, notice: HostRunNotice) -> Self {
+        self.host_run_notice = Some(notice);
+        self
     }
 
     /// Builder: install a channel that receives [`SilenceBreakerEvent`]s. Gateway
@@ -323,8 +340,9 @@ impl HeartbeatScheduler {
             let sem = agent.active_runs.clone();
             let ps = self.proactive_states.clone();
             let timing = self.timing_deferrals.clone();
+            let notice = self.host_run_notice.clone();
             tokio::spawn(async move {
-                execute_heartbeat(&home, &aid, &sem, &ps, &timing).await;
+                execute_heartbeat(&home, &aid, &sem, &ps, &timing, notice.as_ref()).await;
             });
             true
         } else {
@@ -375,9 +393,8 @@ impl HeartbeatScheduler {
             };
             for (home, aid) in pull_targets {
                 tokio::spawn(async move {
-                    if let Err(e) = poll_assigned_tasks(&home, &aid).await {
-                        debug!(agent = %aid, error = %e, "Task board poll skipped");
-                    }
+                    let result = poll_assigned_tasks(&home, &aid).await;
+                    note_task_board_poll(&home, &aid, &result);
                 });
             }
 
@@ -508,12 +525,14 @@ impl HeartbeatScheduler {
                 let global_sem = self.global_semaphore.clone();
                 let proactive_states = self.proactive_states.clone();
                 let timing = self.timing_deferrals.clone();
+                let notice = self.host_run_notice.clone();
                 tokio::spawn(async move {
                     let _global_permit = match global_sem.acquire().await {
                         Ok(p) => p,
                         Err(_) => return,
                     };
-                    execute_heartbeat(&home, &aid, &sem, &proactive_states, &timing).await;
+                    execute_heartbeat(&home, &aid, &sem, &proactive_states, &timing, notice.as_ref())
+                        .await;
                 });
             }
         }
@@ -544,6 +563,7 @@ async fn execute_heartbeat(
     semaphore: &tokio::sync::Semaphore,
     proactive_states: &tokio::sync::Mutex<HashMap<String, crate::proactive::ProactiveState>>,
     timing_deferrals: &crate::proactive_timing::DeferralLedger,
+    host_run_notice: Option<&HostRunNotice>,
 ) {
     let _permit = match semaphore.try_acquire() {
         Ok(p) => p,
@@ -581,7 +601,8 @@ async fn execute_heartbeat(
     check_soul_integrity_with_audit(home_dir, agent_id).await;
 
     // ── Proactive check (new) ──
-    execute_proactive_check(home_dir, agent_id, proactive_states, timing_deferrals).await;
+    execute_proactive_check(home_dir, agent_id, proactive_states, timing_deferrals, host_run_notice)
+        .await;
 
     info!(agent = agent_id, "Heartbeat cycle complete");
 }
@@ -656,6 +677,63 @@ async fn check_soul_integrity_with_audit(home_dir: &Path, agent_id: &str) {
 /// We track which (task_id, kind) pairs have been nudged in `tasks.db`'s
 /// `metadata` field of an injected `activity` row, so a single backlog item
 /// doesn't generate one wake-up per heartbeat tick. Cooldown: 1 hour.
+/// Consecutive failures before the task-board pull is reported in the
+/// Activity Feed (P2-A fourth review L4-1).
+const TASK_BOARD_FAILURE_REPORT_AFTER: u32 = 3;
+
+/// Per (home, agent): consecutive failures, and whether this process already
+/// reported the outage in the Activity Feed.
+fn task_board_failures() -> &'static std::sync::Mutex<HashMap<(PathBuf, String), (u32, bool)>> {
+    static MAP: std::sync::OnceLock<std::sync::Mutex<HashMap<(PathBuf, String), (u32, bool)>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// P2-A L4-1: a failing task-board pull is a `warn!` every time, and after
+/// [`TASK_BOARD_FAILURE_REPORT_AFTER`] failures in a row one Activity Feed
+/// row per employee per process says the employee's task-board wake-ups
+/// have stopped and why. A success resets the streak.
+fn note_task_board_poll(home: &Path, agent: &str, result: &Result<(), String>) {
+    let key = (home.to_path_buf(), agent.to_string());
+    let Ok(mut map) = task_board_failures().lock() else { return };
+    let entry = map.entry(key).or_insert((0, false));
+    let Err(e) = result else {
+        entry.0 = 0;
+        return;
+    };
+    entry.0 = entry.0.saturating_add(1);
+    warn!(agent = %agent, failures = entry.0, error = %e, "Task board poll failed");
+    if entry.0 >= TASK_BOARD_FAILURE_REPORT_AFTER && !entry.1 {
+        entry.1 = true;
+        let summary = format!(
+            "{agent} 的任務看板喚醒連續 {} 次失敗，待辦任務暫時不會被叫醒：{}",
+            entry.0,
+            duduclaw_core::truncate_chars(e, 200)
+        );
+        if let Err(write_err) = append_task_board_activity(home, agent, &summary) {
+            warn!(agent = %agent, error = %write_err, "could not record the task-board outage");
+        }
+    }
+}
+
+fn append_task_board_activity(home: &Path, agent: &str, summary: &str) -> Result<(), String> {
+    let conn = rusqlite::Connection::open(home.join("tasks.db")).map_err(|e| e.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO activity (id, event_type, agent_id, task_id, summary, timestamp, metadata)
+         VALUES (?1, 'heartbeat.task_board_unavailable', ?2, NULL, ?3, ?4, NULL)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            agent,
+            summary,
+            chrono::Utc::now().to_rfc3339()
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 async fn poll_assigned_tasks(home_dir: &Path, agent_id: &str) -> Result<(), String> {
     let tasks_db = home_dir.join("tasks.db");
     let queue_db = home_dir.join("message_queue.db");
@@ -698,6 +776,26 @@ async fn poll_assigned_tasks(home_dir: &Path, agent_id: &str) -> Result<(), Stri
         tdb.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| format!("set busy_timeout: {e}"))?;
 
+        // Legacy stores have no kind column. Once present, only the explicit
+        // ordinary-worker kinds may wake this scheduler; unknown kinds deny.
+        let has_kind = {
+            let mut columns = tdb.prepare("PRAGMA table_info(tasks)").map_err(|e| e.to_string())?;
+            let names = columns.query_map([], |row| row.get::<_,String>(1)).map_err(|e| e.to_string())?
+                .collect::<std::result::Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
+            names.iter().any(|name| name == "kind")
+        };
+        let kind_gate = if has_kind { "AND kind IN ('task','goal')" } else { "" };
+        // P2-A M3-5: tasks inside a stopped tree are excluded in the query
+        // itself, so a stopped member at the top of the ordering cannot hide
+        // the employee's other work. `None` => the stop table cannot be read:
+        // skip this pass (fail closed, retried on the next tick).
+        let Some(has_stops) = stop_table_present(&tdb) else {
+            warn!(agent = %agent, "Heartbeat: stop records unreadable — task-board wake-up skipped this pass");
+            return Ok(());
+        };
+        let stall_filter =
+            format!("assigned_to = ?1 AND status = 'in_progress' AND updated_at < ?2 {kind_gate}");
+
         // Highest-priority unstarted task for this agent. `pending` = durable
         // dispatch-engine tasks awaiting a claim — without it here they are
         // never surfaced to anyone (MED finding, 2026-07 review).
@@ -708,17 +806,7 @@ async fn poll_assigned_tasks(home_dir: &Path, agent_id: &str) -> Result<(), Stri
         // heartbeat pull remains the fallback wake-up for ordinary tasks.
         let todo: Option<(String, String, String)> = tdb
             .query_row(
-                "SELECT id, title, priority, source_channel, source_chat_id FROM tasks
-                 WHERE assigned_to = ?1 AND status IN ('todo', 'pending')
-                   AND COALESCE(goal_mode, 0) = 0
-                 ORDER BY CASE priority
-                     WHEN 'critical' THEN 0
-                     WHEN 'urgent'   THEN 1
-                     WHEN 'high'     THEN 2
-                     WHEN 'medium'   THEN 3
-                     ELSE 4
-                   END, created_at ASC
-                 LIMIT 1",
+                &todo_query(has_stops, kind_gate),
                 rusqlite::params![&agent],
                 |row| {
                     Ok((
@@ -745,11 +833,13 @@ async fn poll_assigned_tasks(home_dir: &Path, agent_id: &str) -> Result<(), Stri
         let stall_cutoff = (chrono::Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
         let stalled: Option<(String, String)> = tdb
             .query_row(
-                "SELECT id, title, source_channel, source_chat_id FROM tasks
-                 WHERE assigned_to = ?1 AND status = 'in_progress'
-                   AND updated_at < ?2
+                &format!("{} SELECT id, title, source_channel, source_chat_id FROM tasks
+                 WHERE {stall_filter} {}
                  ORDER BY updated_at ASC
                  LIMIT 1",
+                    stop_exclusion_cte(has_stops, &stall_filter),
+                    stop_exclusion_filter(has_stops)
+                ),
                 rusqlite::params![&agent, stall_cutoff],
                 |row| {
                     Ok((
@@ -877,6 +967,7 @@ async fn execute_proactive_check(
     agent_id: &str,
     proactive_states: &tokio::sync::Mutex<HashMap<String, crate::proactive::ProactiveState>>,
     timing_deferrals: &crate::proactive_timing::DeferralLedger,
+    host_run_notice: Option<&HostRunNotice>,
 ) {
     use crate::proactive;
 
@@ -994,6 +1085,33 @@ async fn execute_proactive_check(
 
     let result = match claude {
         Some(claude_path) => {
+            // Not the task sandbox: the check needs the agent's MCP tools.
+            // Report it for a sandbox-enabled employee (the gateway's notice
+            // is once per agent per process; sandbox off ⇒ nothing).
+            if let Some(notice) = host_run_notice {
+                notice(home_dir, agent_id, agent_config.container.sandbox_enabled);
+            }
+            // `.mcp.json` platform fix: regenerate the DuDuClaw entry before
+            // the CLI starts every server the file lists; refuse the check
+            // when the file cannot be confirmed (audited inside).
+            {
+                let dir_owned = agent_dir.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::mcp_template::prepare_mcp_config_for_spawn(&dir_owned)
+                })
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(msg)) => {
+                        warn!(agent = agent_id, "Proactive check skipped: {msg}");
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(agent = agent_id, "Proactive check skipped: MCP config check failed: {e}");
+                        return;
+                    }
+                }
+            }
             // Write system prompt to a temp file — Claude CLI ≥2 supports
             // --system-prompt-file and this avoids cmdline length / leak issues.
             let prompt_file = match tempfile::NamedTempFile::new() {
@@ -1022,12 +1140,54 @@ async fn execute_proactive_check(
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
 
+            // Read-only explore lane (2026-10): a proactive check is
+            // background exploration, so it gets read-only tools only. The
+            // built-in surface is narrowed to `EXPLORE_LANE_BUILTIN_TOOLS`
+            // (minus the employee's own `denied_tools`; an allowlist can only
+            // remove more, never add Write/Edit/Bash back), and
+            // `DUDUCLAW_LANE=explore` reaches the DuDuClaw MCP server through
+            // the CLI's inherited environment (the `.mcp.json` entry does not
+            // set the variable, so nothing overrides it), where `tools/list`
+            // shows only `read` / `draft` tools and every other call is
+            // refused. A notification the check wants to send is still
+            // delivered by this function from the reply, not by a tool.
+            let explore_tools: Vec<String> = agent_config
+                .capabilities
+                .minimal_builtin_tools(duduclaw_core::tool_effect::EXPLORE_LANE_BUILTIN_TOOLS)
+                .into_iter()
+                .filter(|t| duduclaw_core::tool_effect::EXPLORE_LANE_BUILTIN_TOOLS.contains(&t.as_str()))
+                .collect();
+            cmd.args(["--tools", &explore_tools.join(",")]);
+            cmd.env(duduclaw_core::ENV_LANE, duduclaw_core::LANE_EXPLORE);
+
             // Attach agent's MCP server definitions so Notion/Gmail/etc tools
             // are available during the proactive run. `--strict-mcp-config`
             // prevents ambient global MCP from leaking in.
+            //
+            // Third-party stdio servers are routed through `duduclaw
+            // mcp-proxy` (2026-10-08), which applies the explore lane to
+            // their tools: only tools classed `read` are listed and callable,
+            // and a server's `readOnlyHint` counts only when the operator
+            // lists it in `[capabilities] trusted_read_hint_servers`. Remote
+            // bridges gate themselves (they inherit `DUDUCLAW_LANE`). If the
+            // rewritten config cannot be written the check is skipped rather
+            // than started with ungated servers.
             let mcp_json = agent_dir.join(".mcp.json");
+            let mut _gated_mcp: Option<tempfile::TempPath> = None;
             if mcp_json.exists() {
-                cmd.args(["--mcp-config", &mcp_json.to_string_lossy()]);
+                let mut target = mcp_json.to_string_lossy().to_string();
+                match explore_lane_mcp_config(home_dir, agent_id, &mcp_json) {
+                    Ok(Some(tmp)) => {
+                        target = tmp.to_string_lossy().to_string();
+                        _gated_mcp = Some(tmp);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(agent = agent_id, "Proactive check skipped: {e}");
+                        return;
+                    }
+                }
+                cmd.args(["--mcp-config", &target]);
                 cmd.arg("--strict-mcp-config");
             }
 
@@ -1210,7 +1370,7 @@ pub fn start_heartbeat_scheduler(
     home_dir: PathBuf,
     registry: Arc<RwLock<AgentRegistry>>,
 ) -> Arc<HeartbeatScheduler> {
-    start_heartbeat_scheduler_with(home_dir, registry, None)
+    start_heartbeat_scheduler_with(home_dir, registry, None, None)
 }
 
 /// Same as [`start_heartbeat_scheduler`] but allows the caller to install a
@@ -1220,10 +1380,14 @@ pub fn start_heartbeat_scheduler_with(
     home_dir: PathBuf,
     registry: Arc<RwLock<AgentRegistry>>,
     silence_tx: Option<tokio::sync::mpsc::UnboundedSender<SilenceBreakerEvent>>,
+    host_run_notice: Option<HostRunNotice>,
 ) -> Arc<HeartbeatScheduler> {
     let mut sched = HeartbeatScheduler::new(home_dir, registry);
     if let Some(tx) = silence_tx {
         sched = sched.with_silence_tx(tx);
+    }
+    if let Some(notice) = host_run_notice {
+        sched = sched.with_host_run_notice(notice);
     }
     let scheduler = Arc::new(sched);
     let s = scheduler.clone();
@@ -1466,6 +1630,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discovery_and_unknown_kinds_never_generate_ordinary_worker_heartbeat() {
+        for kind in ["discovery", "unrecognized"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path();
+            init_test_tasks_db(&home.join("tasks.db"));
+            init_test_queue_db(&home.join("message_queue.db"));
+            let tasks = rusqlite::Connection::open(home.join("tasks.db")).unwrap();
+            tasks.execute("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'", []).unwrap();
+            let old = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+            for (id,status) in [("queued", "pending"), ("active", "in_progress")] {
+                tasks.execute("INSERT INTO tasks(id,title,status,assigned_to,goal_mode,created_at,updated_at,kind)
+                    VALUES(?1,'discovery fixture',?2,'worker',0,?3,?3,?4)",
+                    rusqlite::params![id,status,old,kind]).unwrap();
+            }
+            poll_assigned_tasks(home,"worker").await.unwrap();
+            let queue=rusqlite::Connection::open(home.join("message_queue.db")).unwrap();
+            let count:i64=queue.query_row("SELECT COUNT(*) FROM message_queue",[],|row|row.get(0)).unwrap();
+            assert_eq!(count,0,"{kind} must not wake an ordinary worker through pending or stall SQL");
+        }
+    }
+
+    #[tokio::test]
     async fn poll_assigned_tasks_stamps_heartbeat_sender_for_todo_wakeup() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
@@ -1667,4 +1853,252 @@ mod tests {
         poll_assigned_tasks(home, "worker").await.unwrap();
         assert_eq!(queued_count(&queue_path), 1);
     }
+}
+
+/// Whether `task_stop_requests` exists (`Some(false)` before the P2-A schema
+/// was ever created); `None` when that cannot be read.
+fn stop_table_present(tdb: &rusqlite::Connection) -> Option<bool> {
+    tdb.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_stop_requests')",
+        [],
+        |r| r.get::<_, bool>(0),
+    )
+    .ok()
+}
+
+/// P2-A M3-5: CTE naming the candidate rows (`candidate_filter`, the same
+/// `WHERE` as the main query) whose own id or any ancestor (64 levels, as the
+/// gateway's stop check) is the root of a stop request. The walk starts from
+/// this employee's candidates only, so its cost is bounded by their number.
+fn stop_exclusion_cte(has_stops: bool, candidate_filter: &str) -> String {
+    if !has_stops {
+        return String::new();
+    }
+    format!(
+        "WITH RECURSIVE hb_anc(cid, id, depth) AS ( \
+           SELECT id, id, 0 FROM tasks WHERE {candidate_filter} \
+           UNION ALL SELECT hb_anc.cid, t.parent_task_id, hb_anc.depth + 1 FROM tasks t \
+             JOIN hb_anc ON t.id = hb_anc.id \
+            WHERE t.parent_task_id IS NOT NULL AND hb_anc.depth < 64), \
+         hb_stopped(cid) AS (SELECT DISTINCT cid FROM hb_anc \
+            WHERE id IN (SELECT root_task_id FROM task_stop_requests))"
+    )
+}
+
+fn stop_exclusion_filter(has_stops: bool) -> &'static str {
+    if has_stops {
+        "AND id NOT IN (SELECT cid FROM hb_stopped)"
+    } else {
+        ""
+    }
+}
+
+/// The task-board pull's pick: this employee's highest-priority unstarted
+/// ordinary task, with stopped-tree members excluded in the query (M3-5).
+fn todo_query(has_stops: bool, kind_gate: &str) -> String {
+    let todo_filter = format!(
+        "assigned_to = ?1 AND status IN ('todo', 'pending') AND COALESCE(goal_mode, 0) = 0 {kind_gate}"
+    );
+    format!(
+        "{} SELECT id, title, priority, source_channel, source_chat_id FROM tasks
+          WHERE {todo_filter} {}
+          ORDER BY CASE priority
+              WHEN 'critical' THEN 0
+              WHEN 'urgent'   THEN 1
+              WHEN 'high'     THEN 2
+              WHEN 'medium'   THEN 3
+              ELSE 4
+            END, created_at ASC
+          LIMIT 1",
+        stop_exclusion_cte(has_stops, &todo_filter),
+        stop_exclusion_filter(has_stops)
+    )
+}
+
+/// Whether `task_id` lies in a stopped tree, by the same rule the queries
+/// above apply (tests). Unreadable => treated as stopped.
+#[cfg(test)]
+fn in_stopped_tree(tdb: &rusqlite::Connection, task_id: &str) -> bool {
+    let Some(has) = stop_table_present(tdb) else {
+        return true;
+    };
+    if !has {
+        return false;
+    }
+    tdb.query_row(
+        &format!(
+            "{} SELECT EXISTS(SELECT 1 FROM hb_stopped)",
+            stop_exclusion_cte(true, "id = ?1")
+        ),
+        rusqlite::params![task_id],
+        |r| r.get::<_, bool>(0),
+    )
+    .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod stop_tree_tests {
+    use super::{in_stopped_tree, todo_query};
+
+    fn db(with_stop_table: bool) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_task_id TEXT);")
+            .unwrap();
+        if with_stop_table {
+            c.execute_batch("CREATE TABLE task_stop_requests (root_task_id TEXT PRIMARY KEY);")
+                .unwrap();
+        }
+        c
+    }
+
+    /// Round 4 (M-2): the task-board wake-up skips a task whose ancestor (or
+    /// itself) was stopped by an operator, so a stopped tree is not woken.
+    #[test]
+    fn a_task_under_a_stopped_root_is_skipped() {
+        let c = db(true);
+        c.execute_batch(
+            "INSERT INTO tasks VALUES ('root', NULL), ('child', 'root'), ('grand', 'child'), ('other', NULL);
+             INSERT INTO task_stop_requests VALUES ('root');",
+        )
+        .unwrap();
+        assert!(in_stopped_tree(&c, "root"));
+        assert!(in_stopped_tree(&c, "child"));
+        assert!(in_stopped_tree(&c, "grand"));
+        assert!(!in_stopped_tree(&c, "other"));
+    }
+
+    /// Before the responsibilities schema exists nothing has been stopped.
+    #[test]
+    fn no_stop_table_means_nothing_is_stopped() {
+        let c = db(false);
+        c.execute_batch("INSERT INTO tasks VALUES ('t', NULL);").unwrap();
+        assert!(!in_stopped_tree(&c, "t"));
+    }
+
+    /// A store that cannot be queried counts as stopped (fail closed).
+    #[test]
+    fn an_unreadable_store_counts_as_stopped() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        // The stop table exists but `tasks` does not: the ancestry query fails.
+        c.execute_batch("CREATE TABLE task_stop_requests (root_task_id TEXT PRIMARY KEY);")
+            .unwrap();
+        assert!(in_stopped_tree(&c, "t"));
+    }
+
+    /// M3-5: a stopped member at the top of the ordering does not hide the
+    /// employee's other work; the pick skips it in the query.
+    #[test]
+    fn the_pick_skips_stopped_members_and_finds_other_work() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, priority TEXT,
+                source_channel TEXT, source_chat_id TEXT, assigned_to TEXT, status TEXT,
+                goal_mode INTEGER, created_at TEXT, parent_task_id TEXT, kind TEXT);
+             CREATE TABLE task_stop_requests (root_task_id TEXT PRIMARY KEY);
+             INSERT INTO tasks VALUES
+               ('root', 'r', 'medium', NULL, NULL, 'other', 'cancelled', 0, '1', NULL, 'task'),
+               ('left', 'l', 'critical', NULL, NULL, 'bob', 'todo', 0, '2', 'root', 'task'),
+               ('mine', 'm', 'low', NULL, NULL, 'bob', 'todo', 0, '3', NULL, 'task');
+             INSERT INTO task_stop_requests VALUES ('root');",
+        )
+        .unwrap();
+        let pick = |has_stops: bool| -> String {
+            c.query_row(
+                &todo_query(has_stops, "AND kind IN ('task','goal')"),
+                rusqlite::params!["bob"],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(pick(true), "mine");
+        // Without the stop table the old ordering applies.
+        assert_eq!(pick(false), "left");
+    }
+
+    /// P2-A L4-1: repeated task-board failures reach the Activity Feed once.
+    #[test]
+    fn repeated_task_board_failures_are_reported_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = rusqlite::Connection::open(dir.path().join("tasks.db")).unwrap();
+        c.execute_batch(
+            "CREATE TABLE activity (id TEXT PRIMARY KEY, event_type TEXT NOT NULL,
+                agent_id TEXT NOT NULL, task_id TEXT, summary TEXT NOT NULL,
+                timestamp TEXT NOT NULL, metadata TEXT);",
+        )
+        .unwrap();
+        let rows = || -> i64 {
+            c.query_row(
+                "SELECT COUNT(*) FROM activity WHERE event_type = 'heartbeat.task_board_unavailable'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let err: Result<(), String> = Err("query todo: disk I/O error".into());
+        super::note_task_board_poll(dir.path(), "bob", &err);
+        super::note_task_board_poll(dir.path(), "bob", &err);
+        assert_eq!(rows(), 0, "below the threshold");
+        super::note_task_board_poll(dir.path(), "bob", &err);
+        assert_eq!(rows(), 1);
+        super::note_task_board_poll(dir.path(), "bob", &Ok(()));
+        for _ in 0..5 {
+            super::note_task_board_poll(dir.path(), "bob", &err);
+        }
+        assert_eq!(rows(), 1, "once per process per employee");
+    }
+}
+
+/// The explore-lane `--mcp-config` for a proactive check: third-party stdio
+/// servers wrapped in `duduclaw mcp-proxy` (tool gate only). `Ok(None)` ⇒
+/// nothing to wrap, use the file as is.
+fn explore_lane_mcp_config(
+    home_dir: &std::path::Path,
+    agent_id: &str,
+    mcp_json: &std::path::Path,
+) -> Result<Option<tempfile::TempPath>, String> {
+    use duduclaw_core::mcp_proxy_rewrite::{ProxyPurpose, rewrite_mcp_config_for_gate};
+    let raw = std::fs::read_to_string(mcp_json).map_err(|e| format!("cannot read .mcp.json: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("malformed .mcp.json: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate the duduclaw binary: {e}"))?;
+    let rewrite = rewrite_mcp_config_for_gate(
+        &parsed,
+        &exe,
+        ProxyPurpose { redaction: false, tool_gate: true },
+    );
+    // Direct `url` / `type` entries cannot be gated; they were removed.
+    for server in &rewrite.dropped_remote {
+        duduclaw_security::audit::append_audit_event(
+            home_dir,
+            &duduclaw_security::audit::AuditEvent::new(
+                "third_party_remote_entry_dropped",
+                agent_id,
+                duduclaw_security::audit::Severity::Warning,
+                serde_json::json!({
+                    "server": server,
+                    "explore_lane": true,
+                    "path": "heartbeat_proactive",
+                    "fix": "connect it with mcp.remote_connect so it runs through the bridge",
+                }),
+            ),
+        );
+    }
+    let rewritten = rewrite.config;
+    if rewritten == parsed {
+        return Ok(None);
+    }
+    let mut file = tempfile::Builder::new()
+        .prefix("duduclaw-mcp-")
+        .suffix(".json")
+        .tempfile()
+        .map_err(|e| format!("cannot create the gated MCP config: {e}"))?;
+    {
+        use std::io::Write;
+        let body = serde_json::to_string_pretty(&rewritten).map_err(|e| e.to_string())?;
+        file.write_all(body.as_bytes()).map_err(|e| format!("cannot write the gated MCP config: {e}"))?;
+        file.flush().map_err(|e| e.to_string())?;
+    }
+    let path = file.into_temp_path();
+    duduclaw_core::platform::set_owner_only(&path).ok();
+    Ok(Some(path))
 }

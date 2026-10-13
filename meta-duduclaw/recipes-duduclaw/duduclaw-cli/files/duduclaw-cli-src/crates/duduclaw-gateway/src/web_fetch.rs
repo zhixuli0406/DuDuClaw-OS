@@ -151,35 +151,17 @@ pub fn validate_url(url: &str) -> Result<reqwest::Url, FetchError> {
     Ok(parsed)
 }
 
-/// Returns `true` if the IP address belongs to a private/reserved range.
+/// Returns `true` if the IP address is not a public internet address.
 ///
-/// `pub(crate)` so every outbound path in the gateway classifies an address
-/// with ONE implementation — a second copy of "which ranges are internal" is
-/// exactly how an SSRF gate rots out of sync with itself.
+/// Delegates to [`duduclaw_core::net_addr::is_public_ip`], the single
+/// workspace-wide classifier (private, shared/CGNAT, loopback, link-local,
+/// documentation, benchmarking, multicast, reserved, and IPv6 forms that
+/// embed one of those IPv4 addresses). `pub(crate)` so every outbound path in
+/// the gateway classifies an address with ONE implementation — a second copy
+/// of "which ranges are internal" is exactly how an SSRF gate rots out of
+/// sync with itself.
 pub(crate) fn is_internal_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let octets = v4.octets();
-            // 127.0.0.0/8
-            octets[0] == 127
-            // 10.0.0.0/8
-            || octets[0] == 10
-            // 172.16.0.0/12
-            || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-            // 192.168.0.0/16
-            || (octets[0] == 192 && octets[1] == 168)
-            // 169.254.0.0/16 (link-local)
-            || (octets[0] == 169 && octets[1] == 254)
-            // 0.0.0.0
-            || (octets[0] == 0 && octets[1] == 0 && octets[2] == 0 && octets[3] == 0)
-        }
-        IpAddr::V6(v6) => {
-            // ::1
-            v6.is_loopback()
-            // fc00::/7 (unique local)
-            || (v6.segments()[0] & 0xfe00) == 0xfc00
-        }
-    }
+    !duduclaw_core::net_addr::is_public_ip(ip)
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +396,37 @@ pub async fn web_fetch_cached(
     ttl_seconds: u64,
     cache_dir: &Path,
 ) -> Result<FetchResult, FetchError> {
+    web_fetch_inner(url, ttl_seconds, cache_dir, false).await
+}
+
+/// Workflow-only public-page read: same URL/DNS/SSRF limits, no redirects,
+/// no credential forwarding and no stale cache or disk effect.
+/// The CLI validates the exact URL against its immutable workflow step first.
+pub fn validate_workflow_public_url(url: &str) -> Result<reqwest::Url, FetchError> {
+    // Reject userinfo before URL logging, DNS, HTTP or source evidence. Reqwest
+    // otherwise extracts it and automatically sends HTTP Basic Authorization.
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| FetchError::SsrfBlocked("invalid workflow public URL".into()))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(FetchError::SsrfBlocked(
+            "workflow public URL must not contain userinfo".into(),
+        ));
+    }
+    // Preserve the existing scheme/host/IP policy. Its errors contain only a
+    // classified reason, never the supplied full credential-bearing URL.
+    validate_url(url)
+}
+pub async fn web_fetch_workflow(url: &str) -> Result<FetchResult, FetchError> {
+    validate_workflow_public_url(url)?;
+    web_fetch_inner(url, 0, Path::new(""), true).await
+}
+
+async fn web_fetch_inner(
+    url: &str,
+    ttl_seconds: u64,
+    cache_dir: &Path,
+    workflow: bool,
+) -> Result<FetchResult, FetchError> {
     // 1. SSRF check.
     let validated = validate_url(url)?;
 
@@ -424,9 +437,11 @@ pub async fn web_fetch_cached(
         ttl_seconds
     };
 
-    if let Some(hit) = load_cache(url, ttl, cache_dir) {
-        info!(url, "web_fetch cache hit");
-        return Ok(hit);
+    if !workflow {
+        if let Some(hit) = load_cache(url, ttl, cache_dir) {
+            info!(url, "web_fetch cache hit");
+            return Ok(hit);
+        }
     }
 
     // 3. Live fetch.
@@ -455,7 +470,10 @@ pub async fn web_fetch_cached(
     // target for SSRF. The default `limited(5)` follows redirects blindly and
     // can be used to bypass the initial SSRF check (e.g. open-redirect to
     // http://169.254.169.254/).
-    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+    let redirect_policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if workflow {
+            return attempt.stop();
+        }
         let url = attempt.url();
         // Block non-http(s) schemes in redirects.
         if url.scheme() != "http" && url.scheme() != "https" {
@@ -499,7 +517,7 @@ pub async fn web_fetch_cached(
         .build()
         .map_err(|e| FetchError::IoError(format!("failed to build pinned client: {e}")))?;
 
-    let response = pinned_client
+    let mut response = pinned_client
         .get(validated.as_str())
         .header("User-Agent", "DuDuClaw/1.0")
         // Blocks GCP metadata server from responding to SSRF requests.
@@ -531,13 +549,32 @@ pub async fn web_fetch_cached(
         }
     }
 
-    let bytes = response.bytes().await.map_err(|e| {
-        if e.is_timeout() {
-            FetchError::Timeout
-        } else {
-            FetchError::IoError(e.to_string())
+    let bytes = if workflow {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| FetchError::IoError(e.to_string()))?
+        {
+            if bytes.len().saturating_add(chunk.len()) as u64 > MAX_RESPONSE_SIZE {
+                return Err(FetchError::TooLarge);
+            }
+            bytes.extend_from_slice(&chunk);
         }
-    })?;
+        bytes
+    } else {
+        response
+            .bytes()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    FetchError::Timeout
+                } else {
+                    FetchError::IoError(e.to_string())
+                }
+            })?
+            .to_vec()
+    };
 
     if bytes.len() as u64 > MAX_RESPONSE_SIZE {
         return Err(FetchError::TooLarge);
@@ -550,7 +587,12 @@ pub async fn web_fetch_cached(
         ));
     }
 
-    let body = String::from_utf8_lossy(&bytes).into_owned();
+    let body = if workflow {
+        String::from_utf8(bytes)
+            .map_err(|_| FetchError::IoError("workflow page body is not UTF-8".into()))?
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
 
     let result = FetchResult {
         url: url.to_string(),
@@ -562,8 +604,10 @@ pub async fn web_fetch_cached(
     };
 
     // 4. Persist to cache (best-effort).
-    if let Err(e) = save_cache(&result, cache_dir) {
-        warn!(%e, "failed to save web_fetch cache");
+    if !workflow {
+        if let Err(e) = save_cache(&result, cache_dir) {
+            warn!(%e,"failed to save web_fetch cache");
+        }
     }
 
     Ok(result)
@@ -576,6 +620,28 @@ pub async fn web_fetch_cached(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workflow_public_url_refuses_userinfo_without_echoing_credentials() {
+        for url in [
+            "https://fixture-user:fixture-password@example.com/page",
+            "https://fixture-user@example.com/page",
+            "https://:fixture-password@example.com/page",
+            "https://fixture-user:@example.com/page",
+            "https://%66ixture-user:%66ixture-password@example.com/page",
+            "https://:%66ixture-password@example.com/page",
+        ] {
+            let error = validate_workflow_public_url(url).unwrap_err().to_string();
+            assert!(
+                !error.contains("fixture-user")
+                    && !error.contains("fixture-password")
+                    && !error.contains(url)
+            );
+        }
+        assert!(validate_workflow_public_url("https://example.com/page").is_ok());
+        assert!(validate_workflow_public_url("http://127.0.0.1/page").is_err());
+        // Ordinary behavior remains the existing URL policy.
+        assert!(validate_url("https://fixture-user:fixture-password@example.com/page").is_ok());
+    }
 
     // -- DNS re-pin (shared with the resident-sensing tick sources) --
 
@@ -698,6 +764,57 @@ mod tests {
     fn blocks_ipv6_loopback() {
         let err = validate_url("http://[::1]/").unwrap_err();
         assert!(matches!(err, FetchError::SsrfBlocked(_)));
+    }
+
+    /// S1 regression: IPv6 spellings that embed an internal IPv4 (mapped,
+    /// NAT64, 6to4) and the IPv4 ranges the old check missed are refused by
+    /// the real URL gate.
+    #[test]
+    fn blocks_embedded_ipv4_and_previously_missed_ranges() {
+        for url in [
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:127.0.0.1]:8080/",
+            "http://[::ffff:a9fe:a9fe]/latest/meta-data/",
+            "http://[::127.0.0.1]/",
+            "http://[64:ff9b::a9fe:a9fe]/",
+            "http://[2002:7f00:1::]/",
+            "http://[2001::1]/",
+            "http://[fe80::1]/",
+            "http://[ff02::1]/",
+            "http://[::]/",
+            "http://0.1.2.3/",
+            "http://100.64.0.1/",
+            "http://100.100.100.100/",
+            "http://192.0.0.1/",
+            "http://192.0.2.1/",
+            "http://198.18.0.1/",
+            "http://198.51.100.1/",
+            "http://203.0.113.1/",
+            "http://224.0.0.1/",
+            "http://240.0.0.1/",
+            "http://255.255.255.255/",
+        ] {
+            let err = validate_url(url).expect_err(url);
+            assert!(matches!(err, FetchError::SsrfBlocked(_)), "{url} → {err}");
+        }
+    }
+
+    /// S1 regression: a resolved answer of `::ffff:169.254.169.254` (an
+    /// AAAA record pointing at the metadata service) is refused by the
+    /// vetting step and by the re-pin entry point that dials it.
+    #[tokio::test]
+    async fn resolved_ipv4_mapped_metadata_is_refused() {
+        let err = vet_resolved_addrs("evil.example", vec![addr("[::ffff:169.254.169.254]:80")])
+            .expect_err("mapped metadata must be refused");
+        assert!(matches!(err, FetchError::SsrfBlocked(_)), "{err}");
+        let err = vet_resolved_addrs("evil.example", vec![addr("[::ffff:127.0.0.1]:443")])
+            .expect_err("mapped loopback must be refused");
+        assert!(matches!(err, FetchError::SsrfBlocked(_)), "{err}");
+        // A bracketed literal goes through `to_socket_addrs` without DNS.
+        let err = resolve_public_addrs("[::ffff:169.254.169.254]", 80)
+            .await
+            .expect_err("re-pin must refuse a mapped metadata address");
+        assert!(matches!(err, FetchError::SsrfBlocked(_)), "{err}");
     }
 
     #[test]

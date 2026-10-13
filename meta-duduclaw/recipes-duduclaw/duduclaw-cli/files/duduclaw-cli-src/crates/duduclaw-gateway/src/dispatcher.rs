@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::claude_runner::{call_claude_for_agent_with_type};
+use crate::claude_runner::call_claude_for_agent_with_type;
 use duduclaw_agent::registry::AgentRegistry;
-use duduclaw_container::sandbox;
 
-use duduclaw_core::{MAX_DELEGATION_DEPTH, ENV_DELEGATION_DEPTH, ENV_DELEGATION_ORIGIN, ENV_DELEGATION_SENDER, ENV_HOP_DEPTH, is_valid_discord_snowflake, truncate_bytes};
+use duduclaw_core::{
+    ENV_DELEGATION_DEPTH, ENV_DELEGATION_ORIGIN, ENV_DELEGATION_SENDER, ENV_HOP_DEPTH,
+    MAX_DELEGATION_DEPTH, is_valid_discord_snowflake, truncate_bytes,
+};
 
 /// Message envelope stored in `bus_queue.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +73,14 @@ struct BusMessage {
     /// Originating channel session id — used by the per-conversation cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    /// P2-B: the sender dropped a half upstream turn identity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    upstream_unknown: bool,
+    /// Lane of the run that wrote this delegation (`explore` ⇒ the receiving
+    /// run is read-only too, like `message_queue.lane`; any other present
+    /// value is read as explore as well). Absent ⇒ normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lane: Option<String>,
 }
 
 /// Starts the agent dispatcher as a background task.
@@ -84,8 +94,12 @@ pub fn start_agent_dispatcher(
     start_agent_dispatcher_with_crypto(home_dir, registry, None, None, None, None)
 }
 
-/// Start the dispatcher with optional encryption key for deferred GVU (review #30)
-/// and optional SQLite message queue (Phase 3 Hybrid TaskPipeline).
+/// Start the dispatcher with an optional encryption key and an optional
+/// SQLite message queue (Phase 3 Hybrid TaskPipeline).
+///
+/// `encryption_key` is retained in the signature for callers that still pass
+/// the home keyfile; its only consumer used to be the deferred-GVU retry
+/// poller, removed with the legacy SOUL path in S11 (2026-09-29).
 ///
 /// `prediction_engine` (BUG-5 fix): when supplied, every successful sub-agent
 /// dispatch records a synthetic prediction cycle so sub-agents accumulate
@@ -156,10 +170,6 @@ pub fn start_agent_dispatcher_with_crypto(
                 }
             }
 
-            // Deferred GVU polling every 60 ticks (~5 min)
-            if tick % 60 == 0 {
-                poll_deferred_gvu(&home_dir, encryption_key.as_ref()).await;
-            }
             // Clean up orphaned delegation callbacks every 720 ticks (~1 hour)
             if tick % 720 == 0 {
                 cleanup_stale_delegation_callbacks(&home_dir).await;
@@ -194,7 +204,7 @@ pub fn start_agent_dispatcher_with_crypto(
 }
 
 /// Poll the SQLite message queue for pending messages and dispatch them.
-async fn poll_and_dispatch_sqlite(
+pub(crate) async fn poll_and_dispatch_sqlite(
     queue: &Arc<crate::message_queue::MessageQueue>,
     home_dir: &Path,
     registry: &Arc<RwLock<AgentRegistry>>,
@@ -206,11 +216,76 @@ async fn poll_and_dispatch_sqlite(
         return Ok(());
     }
 
-    info!(count = messages.len(), "SQLite queue: dispatching pending messages");
+    info!(
+        count = messages.len(),
+        "SQLite queue: dispatching pending messages"
+    );
 
     for msg in messages {
+        // R-M1: workflow messages belong to the gateway holding this home's
+        // instance lock; a second gateway leaves them untouched (not acked).
+        if crate::workflow::queue_task::is_workflow_message(&msg)
+            && !duduclaw_core::gateway_instance::held(home_dir)
+        {
+            continue;
+        }
         // ACK immediately to prevent double-pickup
         queue.ack(&msg.id).await?;
+        // Workflow queue rows are authorized by the server-owned handoff outbox,
+        // never by a sender spelling or a user-controlled JSON payload alone.
+        // A run executes in its own task so this loop keeps serving other
+        // employees; the run lease keeps executions of one run apart.
+        if crate::workflow::queue_task::is_workflow_message(&msg) {
+            crate::workflow::queue_task::spawn(queue.clone(), home_dir.to_path_buf(), msg);
+            continue;
+        }
+
+        // ── P2-A fence: a fixed-id durable goal round (`goal:<task>:<iter>`)
+        //    is re-checked against the task store before anything is
+        //    spawned — stopped, paused or moved-on tasks never get a turn.
+        //    Every other message is untouched. ──
+        if msg.id.starts_with("goal:") {
+            if let Err(reason) = crate::responsibility::fence_goal_message(home_dir, &msg.id).await {
+                warn!(msg_id = %msg.id, %reason, "SQLite queue: stale goal round fenced");
+                queue.fail(&msg.id, &reason).await?;
+                // E-M2: the directions this round carried were never
+                // delivered — back to pending for the next round.
+                crate::responsibility::return_unrun_round(home_dir, &msg.id).await;
+                continue;
+            }
+            crate::responsibility::test_hooks::pause_point("after_fence", &msg.id).await;
+        } else if msg.sender == crate::responsibility::HEARTBEAT_SENDER {
+            // M-2: a heartbeat task-board wake-up for a task inside a stopped
+            // tree never gets its turn.
+            if let Some(task_id) = extract_heartbeat_task_id(&msg.payload) {
+                match crate::responsibility::fence_heartbeat_message(home_dir, task_id).await {
+                    Ok(()) => {}
+                    Err(crate::responsibility::HeartbeatFence::Stopped(reason)) => {
+                        warn!(msg_id = %msg.id, %reason, "SQLite queue: stopped task's wake-up fenced");
+                        queue.fail(&msg.id, &reason).await?;
+                        continue;
+                    }
+                    Err(crate::responsibility::HeartbeatFence::Unreadable(reason)) => {
+                        warn!(msg_id = %msg.id, %reason, "SQLite queue: stop check unreadable — wake-up postponed");
+                        queue.reset_to_pending(&msg.id).await?;
+                        continue;
+                    }
+                }
+            }
+        } else if msg.sender == crate::responsibility::GOAL_LOOP_SENDER {
+            // E-H2: every goal round the driver sent (random id included) is
+            // re-checked: a task stopped or moved on after the driver read it
+            // never gets the round.
+            if let Some((task_id, _)) = extract_goal_loop_task_id_and_round(&msg.payload) {
+                if let Err(reason) =
+                    crate::responsibility::fence_plain_goal_message(home_dir, task_id).await
+                {
+                    warn!(msg_id = %msg.id, %reason, "SQLite queue: stale goal round fenced");
+                    queue.fail(&msg.id, &reason).await?;
+                    continue;
+                }
+            }
+        }
 
         // ── WP21 C1: same gate as the JSONL rail ──────────────────────────
         // `send_to_agent` enqueues here, so this is the choke point for the
@@ -259,20 +334,110 @@ async fn poll_and_dispatch_sqlite(
         // covers plain `send_to_agent` delegation callbacks AND goal-loop
         // work items (which have no callback of their own; see the
         // fallback in `build_typing_guard_for_sqlite_message`).
-        let typing_guard = build_typing_guard_for_sqlite_message(
-            home_dir, &msg.id, msg.origin_agent.as_deref(), &msg.target, &msg.payload,
-        ).await;
+        // One explore lane (`crate::explore_lane`), two sources: a goal-loop
+        // round of a responsibility whose contract has `lane = "explore"`
+        // (P5) and a message woken by an external event (`message_queue.lane`).
+        // Either way the run starts only on a runtime that can carry the
+        // lane; anything else (or an unreadable lane) fails it before it
+        // starts, and a refused goal round is returned unrun.
+        // The responsibility source covers the occurrence's whole task tree:
+        // a goal round of the occurrence or of a sub-goal under it, and a
+        // heartbeat task-board wake-up for any task under it.
+        let lane_task_id = if msg.sender == crate::responsibility::GOAL_LOOP_SENDER {
+            extract_goal_loop_task_id_and_round(&msg.payload).map(|(task_id, _)| task_id)
+        } else if msg.sender == crate::responsibility::HEARTBEAT_SENDER {
+            extract_heartbeat_task_id(&msg.payload)
+        } else {
+            None
+        };
+        let responsibility_lane = match lane_task_id {
+            Some(task_id) => crate::responsibility::round_requires_explore_lane(home_dir, task_id)
+                .await
+                .map_err(|e| format!("explore_lane_unreadable: {e}")),
+            None => Ok(false),
+        };
+        let explore_lane = match resolve_dispatch_lane(
+            home_dir,
+            &msg.target,
+            responsibility_lane,
+            msg.lane.as_deref(),
+        ) {
+            Ok(v) => v,
+            Err(reason) => {
+                warn!(msg_id = %msg.id, agent = %msg.target, reason = %reason, "SQLite queue: explore-lane run refused");
+                queue.fail(&msg.id, &reason).await?;
+                if msg.id.starts_with("goal:") {
+                    crate::responsibility::return_unrun_round(home_dir, &msg.id).await;
+                } else {
+                    forward_delegation_response(home_dir, &msg.id, &reason, &msg.target).await;
+                }
+                continue;
+            }
+        };
 
+        // M3-1: a durable round records that it is being handed to a runtime
+        // before anything is started; cost accounting treats a round with
+        // this mark as one that ran, whatever its queue message does later.
+        if msg.id.starts_with("goal:") {
+            if let Err(e) = crate::responsibility::mark_round_started(home_dir, &msg.id).await {
+                warn!(msg_id = %msg.id, error = %e, "SQLite queue: round start not recorded — round not started");
+                queue
+                    .fail(&msg.id, &format!("round start could not be recorded: {e}"))
+                    .await?;
+                crate::responsibility::return_unrun_round(home_dir, &msg.id).await;
+                continue;
+            }
+        }
+
+        // L4-3: only the goal-loop driver's own messages may point the typing
+        // indicator at a goal task's source chat.
+        let typing_payload = if msg.sender == crate::responsibility::GOAL_LOOP_SENDER {
+            msg.payload.as_str()
+        } else {
+            ""
+        };
+        let typing_guard = build_typing_guard_for_sqlite_message(
+            home_dir,
+            &msg.id,
+            msg.origin_agent.as_deref(),
+            &msg.target,
+            typing_payload,
+        )
+        .await;
+
+        // P2-B: half an upstream turn identity is not refused here; the run's
+        // memory writes record the upstream as unknown. Audited once.
+        let half_pair = crate::memory_provenance::incomplete_upstream(
+            msg.turn_id.as_deref(),
+            msg.session_id.as_deref(),
+        );
+        // The sender's explicit marker (it dropped a half pair) or a half
+        // pair received as-is: either way the upstream is unknown, not absent.
+        let upstream_unknown = msg.upstream_unknown || half_pair.is_some();
+        if let Some(missing) = half_pair {
+            crate::memory_provenance::audit_upstream_identity(
+                home_dir,
+                crate::memory_provenance::AUDIT_UPSTREAM_INCOMPLETE,
+                &msg.target,
+                &msg.id,
+                missing,
+            );
+        }
         let dispatch_fut =
-            dispatch_to_agent(home_dir, registry, &msg.target, &msg.payload, &delegation);
+            dispatch_to_agent_outcome(home_dir, registry, &msg.target, &msg.payload, &delegation);
         // v1.10: scope wiki RL trust feedback context so the sub-agent's
         // wiki RAG citations land in the same tracker bucket as the
         // originating turn. Pulled from `message_queue.{turn_id, session_id}`
         // — populated by the MCP `send_to_agent` tool from env vars.
         let dispatch_fut = duduclaw_memory::feedback::CURRENT_SESSION_ID
             .scope(msg.session_id.clone(), dispatch_fut);
-        let dispatch_fut = duduclaw_memory::feedback::CURRENT_TURN_ID
-            .scope(msg.turn_id.clone(), dispatch_fut);
+        let dispatch_fut =
+            duduclaw_memory::feedback::CURRENT_TURN_ID.scope(msg.turn_id.clone(), dispatch_fut);
+        let dispatch_fut =
+            crate::memory_provenance::UPSTREAM_UNKNOWN.scope(upstream_unknown, dispatch_fut);
+        // Every spawn of this run (Claude CLI, the openai-compat tool loop's
+        // MCP child) carries the read-only lane; other runtimes refuse.
+        let dispatch_fut = crate::explore_lane::EXPLORE.scope(explore_lane, dispatch_fut);
 
         // WP-A4/A5/T10: only goal-loop dispatches get a native-tool
         // collector scoped — the design's A3 forward model only observes
@@ -281,23 +446,81 @@ async fn poll_and_dispatch_sqlite(
         // via the same `[goal-loop task_id=... iter=...]` marker
         // `build_typing_guard_for_sqlite_message` above already parses for
         // its own (unrelated) purpose.
-        let goal_loop_ref = extract_goal_loop_task_id_and_round(&msg.payload);
-        let native_collector = goal_loop_ref
-            .map(|_| Arc::new(std::sync::Mutex::new(Vec::<crate::runtime::NativeToolEvent>::new())));
+        // M3-3: only the goal-loop driver's own messages carry a round.
+        let goal_loop_ref = (msg.sender == crate::responsibility::GOAL_LOOP_SENDER)
+            .then(|| extract_goal_loop_task_id_and_round(&msg.payload))
+            .flatten();
+        let native_collector = goal_loop_ref.map(|_| {
+            Arc::new(std::sync::Mutex::new(
+                Vec::<crate::runtime::NativeToolEvent>::new(),
+            ))
+        });
 
-        let result = match (native_collector.clone(), msg.reply_channel.clone()) {
-            (Some(collector), Some(rc)) if !rc.is_empty() => {
+        // A1-3 ledger: attribute this goal round's token usage to the task
+        // (`episode_id`) and its `task_iterations.round`. The marker's
+        // `iter=` is the driver's dispatch ordinal, not the round (they
+        // diverge on stall re-dispatches and after a restart), so the round
+        // is read from `tasks.revision_round` — stable while the task waits
+        // in pending/revising. Lookup failure keeps the task id and leaves
+        // the round NULL. Recording only; the dispatch itself is unchanged.
+        //
+        // The same lookup keys the native-evidence bridge below: the settle
+        // side takes evidence for `revision_round + 1`, so filing it under the
+        // marker's `iter=` lost it after any stall re-dispatch or restart.
+        let goal_revision_round = match goal_loop_ref {
+            Some((task_id, _)) => lookup_task_revision_round(home_dir, task_id).await,
+            None => None,
+        };
+        let goal_attr = goal_loop_ref.map(|(task_id, _)| crate::runtime::GoalRoundAttribution {
+            episode_id: task_id.to_string(),
+            round: goal_revision_round.map(|r| r + 1),
+        });
+        // P2-A H-2(b): a heartbeat task-board wake-up's tokens are attributed
+        // to the task it wakes, so a sub-task of a responsibility run counts
+        // toward that run's spend (and tasks created in it hang under it).
+        let heartbeat_attr = if goal_attr.is_none()
+            && msg.sender == crate::responsibility::HEARTBEAT_SENDER
+        {
+            extract_heartbeat_task_id(&msg.payload).map(|task_id| {
+                crate::runtime::GoalRoundAttribution {
+                    episode_id: task_id.to_string(),
+                    round: None,
+                }
+            })
+        } else {
+            None
+        };
+        let result = match (native_collector.clone().zip(goal_attr), msg.reply_channel.clone()) {
+            (Some((collector, attr)), Some(rc)) if !rc.is_empty() => {
                 crate::runtime::NATIVE_TOOL_COLLECTOR
-                    .scope(collector, crate::claude_runner::REPLY_CHANNEL.scope(rc, dispatch_fut))
+                    .scope(
+                        collector,
+                        crate::runtime::GOAL_ROUND_ATTRIBUTION.scope(
+                            attr,
+                            crate::claude_runner::REPLY_CHANNEL.scope(rc, dispatch_fut),
+                        ),
+                    )
                     .await
             }
-            (Some(collector), _) => {
-                crate::runtime::NATIVE_TOOL_COLLECTOR.scope(collector, dispatch_fut).await
+            (Some((collector, attr)), _) => {
+                crate::runtime::NATIVE_TOOL_COLLECTOR
+                    .scope(
+                        collector,
+                        crate::runtime::GOAL_ROUND_ATTRIBUTION.scope(attr, dispatch_fut),
+                    )
+                    .await
             }
             (None, Some(rc)) if !rc.is_empty() => {
-                crate::claude_runner::REPLY_CHANNEL.scope(rc, dispatch_fut).await
+                let fut = crate::claude_runner::REPLY_CHANNEL.scope(rc, dispatch_fut);
+                match heartbeat_attr {
+                    Some(attr) => crate::runtime::GOAL_ROUND_ATTRIBUTION.scope(attr, fut).await,
+                    None => fut.await,
+                }
             }
-            (None, _) => dispatch_fut.await,
+            (None, _) => match heartbeat_attr {
+                Some(attr) => crate::runtime::GOAL_ROUND_ATTRIBUTION.scope(attr, dispatch_fut).await,
+                None => dispatch_fut.await,
+            },
         };
         drop(typing_guard);
 
@@ -335,7 +558,8 @@ async fn poll_and_dispatch_sqlite(
         // Best-effort: a poisoned mutex or empty batch degrades silently
         // (`record_native_evidence`/`extend_native_tool_events` never
         // panic), never affects the dispatch result already computed above.
-        if let (Some((task_id, round)), Some(collector)) = (goal_loop_ref, native_collector) {
+        if let (Some((task_id, marker_iter)), Some(collector)) = (goal_loop_ref, native_collector) {
+            let round = goal_evidence_round(goal_revision_round, marker_iter);
             let events = collector.lock().map(|g| g.clone()).unwrap_or_default();
             // WP-F (P2-c): the in-memory bridge above is remove-once and
             // process-lifetime, so it is long gone by the time a human opens
@@ -343,7 +567,11 @@ async fn poll_and_dispatch_sqlite(
             // only point where native (non-MCP) tool evidence exists for a
             // goal-loop round. Best-effort, same contract as the bridge.
             crate::task_changes::record_round_changes(
-                home_dir, task_id, &msg.target, round, &events,
+                home_dir,
+                task_id,
+                &msg.target,
+                round,
+                &events,
             );
             crate::prediction::task_observe::record_native_evidence(task_id, round, events);
         }
@@ -372,28 +600,69 @@ async fn poll_and_dispatch_sqlite(
                 );
             }
             Err(e) => {
-                queue.fail(&msg.id, &e).await?;
+                let host_text = e.host_text();
+                queue.fail(&msg.id, &host_text).await?;
                 warn!(
                     msg_id = %msg.id,
                     target = %msg.target,
-                    error = %e,
+                    error = %host_text,
                     "SQLite queue: message dispatch failed"
                 );
                 // Best-effort user-facing fallback: previously a terminal dispatch
                 // failure was only logged, so a delegation callback (if any) sat
                 // unconsumed forever and the requester never learned their
-                // sub-task died (silent drop). Classify the error the same way
-                // `channel_reply` does for the main-line CLI failure path and
-                // forward a short, non-leaking zh-TW notice — never the raw `e`
-                // (which may contain stderr text or internal paths).
-                let label = short_failure_label(crate::channel_reply::classify_cli_failure(&e));
-                let fallback_text = format!("⚠️ 子任務處理失敗：{label}。請稍後再試或改寫指令。");
+                // sub-task died (silent drop). See `dispatch_failure_reply`:
+                // ordinary errors become a classified, non-leaking zh-TW notice;
+                // task-sandbox refusals carry their own operator-safe message.
+                let fallback_text = dispatch_failure_reply(&e);
                 forward_delegation_response(home_dir, &msg.id, &fallback_text, &msg.target).await;
             }
         }
     }
 
     Ok(())
+}
+
+/// Why a dispatch failed, as the two delegation reply paths need it.
+#[derive(Debug)]
+enum DispatchError {
+    /// The task sandbox refused or failed the task. Its `message` is built
+    /// by `task_sandbox` without CLI output or host paths, so it may be
+    /// forwarded to the requester.
+    Sandbox(crate::task_sandbox::SandboxFailure),
+    /// Any other error. May carry raw CLI stderr or internal paths: never
+    /// forwarded as is.
+    Other(String),
+}
+
+impl DispatchError {
+    /// Full text for host-local records (logs, the queue row).
+    fn host_text(&self) -> String {
+        match self {
+            Self::Sandbox(failure) => failure.host_text(),
+            Self::Other(e) => e.clone(),
+        }
+    }
+}
+
+/// The notice forwarded to the requester when a delegated task failed.
+///
+/// A task-sandbox failure forwards its own message (reason code, and the
+/// remedy such as `docker pull <image>`). Every other error keeps the
+/// classified, non-leaking fallback: the raw text never leaves the host.
+fn dispatch_failure_reply(error: &DispatchError) -> String {
+    match error {
+        DispatchError::Sandbox(failure) if failure.unavailable => {
+            format!("⚠️ 子任務未執行（任務沙箱）：{}", failure.message)
+        }
+        DispatchError::Sandbox(failure) => {
+            format!("⚠️ 子任務失敗（任務沙箱，{}）：{}", failure.code, failure.message)
+        }
+        DispatchError::Other(e) => {
+            let label = short_failure_label(crate::channel_reply::classify_cli_failure(e));
+            format!("⚠️ 子任務處理失敗：{label}。請稍後再試或改寫指令。")
+        }
+    }
 }
 
 /// Short zh-TW category label for a classified dispatch failure, used only in
@@ -445,103 +714,6 @@ async fn sweep_stale_messages(
         }
     }
     Ok(())
-}
-
-/// Poll deferred GVU entries from evolution.db and write bus messages for retry.
-///
-/// Runs every ~5 min from the dispatcher loop. Checks all agents for pending
-/// deferred GVU tasks whose retry_after has elapsed.
-async fn poll_deferred_gvu(home_dir: &Path, encryption_key: Option<&[u8; 32]>) {
-    let db_path = home_dir.join("evolution.db");
-    if !db_path.exists() {
-        return;
-    }
-
-    let vs = crate::gvu::version_store::VersionStore::with_crypto(&db_path, encryption_key);
-
-    // Get all agent IDs that have pending deferrals by scanning the table
-    // (VersionStore::get_pending_deferred requires an agent_id, so we do a broader check)
-    let conn = match rusqlite::Connection::open(&db_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let agent_ids: Vec<String> = conn
-        .prepare("SELECT DISTINCT agent_id FROM deferred_gvu WHERE status = 'pending' AND retry_after <= ?1")
-        .ok()
-        .and_then(|mut stmt| {
-            stmt.query_map(
-                rusqlite::params![chrono::Utc::now().to_rfc3339()],
-                |row| row.get(0),
-            )
-            .ok()
-            .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        })
-        .unwrap_or_default();
-
-    drop(conn);
-
-    for agent_id in &agent_ids {
-        let pending = vs.get_pending_deferred(agent_id);
-        for deferred in &pending {
-            info!(
-                agent = %agent_id,
-                deferred_id = %deferred.id,
-                retry_count = deferred.retry_count,
-                gradients = deferred.gradients.len(),
-                "Deferred GVU ready for retry — injecting bus message"
-            );
-
-            let trigger = format!(
-                "## Deferred GVU Retry (attempt {})\n\
-                 Accumulated {} gradients from previous failed attempts.\n\
-                 Previous feedback:\n{}",
-                deferred.retry_count,
-                deferred.gradients.len(),
-                deferred.gradients.iter()
-                    .map(|g| format!("- [{}] {}", g.source_layer, g.critique))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-
-            // Write bus message FIRST, then mark completed (review issue #33).
-            // If bus write fails, the deferral stays pending and will be retried.
-            let queue_path = home_dir.join("bus_queue.jsonl");
-            let msg = serde_json::json!({
-                "type": "agent_message",
-                "message_id": uuid::Uuid::new_v4().to_string(),
-                "agent_id": agent_id,
-                "payload": trigger,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "delegation_depth": 0,
-                "origin_agent": "__deferred_gvu__",
-                "sender_agent": "__deferred_gvu__",
-            });
-            let bus_written = if let Ok(line) = serde_json::to_string(&msg) {
-                match append_line(&queue_path, &line).await {
-                    Ok(()) => true,
-                    Err(e) => {
-                        warn!(agent = %agent_id, "Failed to write deferred GVU bus message: {e} — will retry next poll");
-                        false
-                    }
-                }
-            } else {
-                false
-            };
-
-            // Only mark completed if bus message was written successfully
-            if bus_written {
-                if let Err(e) = vs.mark_deferred_completed(&deferred.id) {
-                    warn!(
-                        agent = %agent_id,
-                        deferred_id = %deferred.id,
-                        error = %e,
-                        "Failed to mark deferred GVU as completed — may re-process"
-                    );
-                }
-            }
-        }
-    }
 }
 
 /// Read the queue, extract pending `agent_message` entries, process them,
@@ -635,6 +807,8 @@ async fn poll_and_dispatch(
                         coalesced_ids: vec![],
                         turn_id: msg.turn_id.clone(),
                         session_id: msg.session_id.clone(),
+                        upstream_unknown: false,
+                        lane: None,
                     };
                     consumed_without_dispatch += 1;
                     match serde_json::to_string(&err_response) {
@@ -700,6 +874,8 @@ async fn poll_and_dispatch(
             coalesced_ids: vec![],
             turn_id: msg.turn_id.clone(),
             session_id: msg.session_id.clone(),
+            upstream_unknown: false,
+            lane: None,
         };
         match serde_json::to_string(&err_response) {
             Ok(json) => synthetic_responses.push(json),
@@ -723,7 +899,10 @@ async fn poll_and_dispatch(
     // (we batch within a single poll cycle which is 5 seconds).
     let to_dispatch = coalesce_messages(to_dispatch);
 
-    info!(count = to_dispatch.len(), "Dispatching agent messages (after coalescing)");
+    info!(
+        count = to_dispatch.len(),
+        "Dispatching agent messages (after coalescing)"
+    );
 
     // Rewrite the queue without the messages we're about to process.
     // Uses write→rename for atomicity — prevents data loss if process crashes mid-write.
@@ -795,7 +974,11 @@ async fn poll_and_dispatch(
 
     let mut handles = Vec::new();
     for msg in to_dispatch {
-        let permit = semaphore.clone().acquire_owned().await.map_err(|e| e.to_string())?;
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| e.to_string())?;
         let home = home.clone();
         let reg = reg.clone();
         let queue = queue.clone();
@@ -809,6 +992,20 @@ async fn poll_and_dispatch(
         // feedback for sub-agents is silently no-op.
         let turn_id_for_scope = msg.turn_id.clone();
         let session_id_for_scope = msg.session_id.clone();
+        let half_pair = crate::memory_provenance::incomplete_upstream(
+            turn_id_for_scope.as_deref(),
+            session_id_for_scope.as_deref(),
+        );
+        let upstream_unknown = msg.upstream_unknown || half_pair.is_some();
+        if let Some(missing) = half_pair {
+            crate::memory_provenance::audit_upstream_identity(
+                &home,
+                crate::memory_provenance::AUDIT_UPSTREAM_INCOMPLETE,
+                &msg.agent_id,
+                &msg.message_id,
+                missing,
+            );
+        }
 
         handles.push(tokio::spawn(async move {
             let dispatch_start = Utc::now().to_rfc3339();
@@ -831,12 +1028,24 @@ async fn poll_and_dispatch(
             // "Stop blocks late spawns" analog). See the invalidation call
             // after this dispatch resolves.
             let turn_id_for_admission_invalidate = turn_id_for_scope.clone();
-            let dispatch_fut = dispatch_to_agent(&home, &reg, &msg.agent_id, &msg.payload, &delegation_env);
+            let dispatch_fut = dispatch_to_agent_outcome(&home, &reg, &msg.agent_id, &msg.payload, &delegation_env);
             let dispatch_fut = duduclaw_memory::feedback::CURRENT_SESSION_ID
                 .scope(session_id_for_scope, dispatch_fut);
             let dispatch_fut = duduclaw_memory::feedback::CURRENT_TURN_ID
                 .scope(turn_id_for_scope, dispatch_fut);
-            let result = dispatch_fut.await;
+            let dispatch_fut =
+                crate::memory_provenance::UPSTREAM_UNKNOWN.scope(upstream_unknown, dispatch_fut);
+            // The delegation's lane (written by a run in the explore lane,
+            // `spawn_agent` / `spawn_ephemeral`): the receiving run stays
+            // read-only too, or is refused when the employee cannot carry
+            // the lane (fail closed, same rule as `message_queue.lane`).
+            let result = match resolve_dispatch_lane(&home, &msg.agent_id, Ok(false), msg.lane.as_deref()) {
+                Ok(lane) => crate::explore_lane::EXPLORE.scope(lane, dispatch_fut).await,
+                Err(reason) => {
+                    warn!(id = %msg.message_id, agent = %msg.agent_id, reason = %reason, "bus queue: explore-lane run refused");
+                    Err(DispatchError::Other(reason))
+                }
+            };
 
             // H19: this turn has concluded — any ephemeral spawn tickets it
             // enqueued while over capacity are now moot (the turn that would
@@ -873,14 +1082,8 @@ async fn poll_and_dispatch(
 
             let mut response_text = match &result {
                 Ok(text) => text.clone(),
-                Err(e) => {
-                    // Same non-leaking fallback as the SQLite queue path: the raw
-                    // error may carry stderr text or internal paths, so forward a
-                    // classified zh-TW notice instead.
-                    let label =
-                        short_failure_label(crate::channel_reply::classify_cli_failure(e));
-                    format!("⚠️ 子任務處理失敗：{label}。請稍後再試或改寫指令。")
-                }
+                // Same reply as the SQLite queue path (`dispatch_failure_reply`).
+                Err(e) => dispatch_failure_reply(e),
             };
 
             // ── L2+L4: Post-Action Hallucination Audit ──────────
@@ -1024,6 +1227,8 @@ async fn poll_and_dispatch(
                 coalesced_ids: vec![],
                 turn_id: msg.turn_id.clone(),
                 session_id: msg.session_id.clone(),
+                upstream_unknown: false,
+                lane: None,
             };
 
             if let Ok(json) = serde_json::to_string(&response_entry) {
@@ -1100,7 +1305,9 @@ impl DelegationEnv {
     }
 }
 
-/// Dispatch a task to an agent — L0 worktree → L1 sandbox → direct call.
+/// Dispatch a task to an agent — task sandbox (when enabled) → direct call.
+/// Errors flattened to host text, for callers that never reply to a
+/// requester (TaskSpec steps, the replanner).
 async fn dispatch_to_agent(
     home_dir: &std::path::Path,
     registry: &Arc<RwLock<AgentRegistry>>,
@@ -1108,6 +1315,31 @@ async fn dispatch_to_agent(
     prompt: &str,
     delegation: &DelegationEnv,
 ) -> Result<String, String> {
+    dispatch_to_agent_outcome(home_dir, registry, agent_id, prompt, delegation)
+        .await
+        .map_err(|e| e.host_text())
+}
+
+/// [`dispatch_to_agent`] with a typed error, so the delegation reply paths
+/// can tell a task-sandbox failure from any other error.
+async fn dispatch_to_agent_outcome(
+    home_dir: &std::path::Path,
+    registry: &Arc<RwLock<AgentRegistry>>,
+    agent_id: &str,
+    prompt: &str,
+    delegation: &DelegationEnv,
+) -> Result<String, DispatchError> {
+    #[cfg(test)]
+    {
+        crate::model_call_probe::record("dispatch_to_agent_outcome");
+        if crate::model_call_probe::dry_run() {
+            crate::model_call_probe::set_last_round(
+                crate::runtime::round_task_env().map(|(_, v)| v),
+            );
+            crate::model_call_probe::set_last_lane(crate::explore_lane::in_explore());
+            return Ok("model-call-probe dry run".to_string());
+        }
+    }
     // O2: ephemeral synthesized agents (`eph-*`) live under
     // `<home>/agents/.ephemeral/` and are invisible to the registry scan.
     // Route them through the ephemeral loader; everything downstream
@@ -1121,10 +1353,11 @@ async fn dispatch_to_agent(
                 env_map,
                 crate::ephemeral::dispatch(home_dir, registry, agent_id, prompt),
             )
-            .await;
+            .await
+            .map_err(DispatchError::Other);
     }
     // Read isolation flags from agent config.
-    let (use_sandbox, use_worktree, worktree_cfg) = {
+    let use_sandbox = {
         let reg = registry.read().await;
         let agent = if agent_id == "default" {
             reg.main_agent()
@@ -1132,17 +1365,8 @@ async fn dispatch_to_agent(
             reg.get(agent_id)
         };
         match agent {
-            Some(a) => (
-                a.config.container.sandbox_enabled,
-                a.config.container.worktree_enabled,
-                WorktreeCfg {
-                    auto_merge: a.config.container.worktree_auto_merge,
-                    cleanup: a.config.container.worktree_cleanup_on_exit,
-                    copy_files: a.config.container.worktree_copy_files.clone(),
-                    agent_dir: a.dir.clone(),
-                },
-            ),
-            None => (false, false, WorktreeCfg::default()),
+            Some(a) => a.config.container.sandbox_enabled,
+            None => false,
         }
     };
 
@@ -1150,262 +1374,45 @@ async fn dispatch_to_agent(
     // inject it as per-subprocess env vars (thread-safe, no global state).
     let env_map = delegation.to_env_map();
 
-    let env_map_clone = env_map.clone();
-    crate::claude_runner::DELEGATION_ENV.scope(env_map, async {
-        if use_worktree {
-            info!(agent = agent_id, "Dispatching via worktree (L0)");
-            dispatch_in_worktree(home_dir, registry, agent_id, prompt, &worktree_cfg).await
-        } else if use_sandbox && sandbox::is_sandbox_available().await {
-            info!(agent = agent_id, "Dispatching via sandbox (L1)");
-            dispatch_sandboxed(home_dir, registry, agent_id, prompt, &env_map_clone).await
-        } else {
-            call_claude_for_agent_with_type(
-                home_dir, registry, agent_id, prompt,
-                crate::cost_telemetry::RequestType::Dispatch,
-            ).await
-        }
-    }).await
-}
-
-/// Per-agent worktree configuration snapshot (avoids holding registry lock).
-#[derive(Debug, Clone, Default)]
-struct WorktreeCfg {
-    auto_merge: bool,
-    cleanup: bool,
-    copy_files: Vec<String>,
-    agent_dir: PathBuf,
-}
-
-/// Execute a task in an isolated git worktree (L0 isolation).
-///
-/// Flow: create worktree → copy env files → call Claude CLI → inspect result
-///       → snap decision (merge / cleanup / keep) → return response.
-async fn dispatch_in_worktree(
-    home_dir: &Path,
-    registry: &Arc<RwLock<AgentRegistry>>,
-    agent_id: &str,
-    prompt: &str,
-    cfg: &WorktreeCfg,
-) -> Result<String, String> {
-    let manager = crate::worktree::WorktreeManager::new(home_dir);
-
-    // Use the agent directory as repo root (it should be a git repo or
-    // inside one). Fall back to the agent dir itself.
-    let repo_root = find_git_root(&cfg.agent_dir).await.unwrap_or_else(|| cfg.agent_dir.clone());
-
-    // Create worktree.
-    let wt = manager.create(&repo_root, agent_id).await?;
-    info!(
-        agent = agent_id,
-        branch = %wt.branch,
-        path = %wt.path.display(),
-        "Worktree created for task"
-    );
-
-    // Copy environment files.
-    if let Err(e) = manager.copy_env_files(&cfg.agent_dir, &wt.path, &cfg.copy_files).await {
-        warn!(agent = agent_id, err = %e, "Failed to copy env files to worktree");
-    }
-
-    // Call Claude CLI with worktree as working directory.
-    // We use WORKTREE_PATH task-local to communicate the override to claude_runner.
-    let result = crate::claude_runner::WORKTREE_PATH.scope(
-        Some(wt.path.clone()),
-        call_claude_for_agent_with_type(
-            home_dir, registry, agent_id, prompt,
-            crate::cost_telemetry::RequestType::Dispatch,
-        ),
-    ).await;
-
-    // Snap: inspect and decide what to do with the worktree.
-    let response_text = result.unwrap_or_else(|e| format!("Error: {e}"));
-
-    if cfg.auto_merge || cfg.cleanup {
-        let status = manager.inspect_worktree(&wt.path, &repo_root).await;
-        // HC6: pass `auto_merge` so commits are merged into the target branch
-        // only with explicit consent. With cleanup-on-exit but no auto-merge,
-        // the snap downgrades to a non-merging cleanup.
-        let action = crate::worktree::determine_snap_action(&status, cfg.auto_merge);
-
-        let target_branch = get_main_branch(&repo_root).await;
-        match manager.execute_snap(&action, &repo_root, &wt.path, &wt.branch, &target_branch).await {
-            Ok(outcome) => {
-                info!(agent = agent_id, ?outcome, "Worktree snap completed");
-            }
-            Err(e) => {
-                warn!(agent = agent_id, err = %e, "Worktree snap failed — keeping worktree");
-            }
-        }
-    } else {
-        info!(
-            agent = agent_id,
-            path = %wt.path.display(),
-            branch = %wt.branch,
-            "Worktree kept (auto_merge and cleanup both disabled) — run cleanup_stale to reclaim"
-        );
-    }
-
-    Ok(response_text)
-}
-
-/// Find the git repository root using `git rev-parse --show-toplevel`.
-///
-/// Uses git itself instead of manually walking directories, which avoids
-/// TOCTOU races with `.git` existence checks and handles gitdir files.
-async fn find_git_root(start: &Path) -> Option<PathBuf> {
-    let output = tokio::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(start)
-        .output()
-        .await
-        .ok()?;
-    if output.status.success() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Some(PathBuf::from(path));
-        }
-    }
-    None
-}
-
-/// Detect the main/master/default branch of the repo.
-///
-/// Validates output to only contain safe branch name characters.
-async fn get_main_branch(repo_root: &Path) -> String {
-    let is_safe_branch = |s: &str| -> bool {
-        !s.is_empty()
-            && !s.starts_with('-')
-            && !s.contains("..")
-            && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
-    };
-
-    // Try symbolic-ref for the default branch.
-    let output = tokio::process::Command::new("git")
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
-        .current_dir(repo_root)
-        .output()
-        .await;
-    if let Ok(o) = output {
-        if o.status.success() {
-            let s = String::from_utf8_lossy(&o.stdout);
-            if let Some(branch) = s.trim().strip_prefix("refs/remotes/origin/") {
-                if is_safe_branch(branch) {
-                    return branch.to_string();
+    crate::claude_runner::DELEGATION_ENV
+        .scope(env_map, async {
+            if use_sandbox {
+                info!(agent = agent_id, "Dispatching via task sandbox");
+                match dispatch_sandboxed(home_dir, registry, agent_id, prompt).await {
+                    crate::task_sandbox::SandboxDispatch::Completed(result) => {
+                        return result.map_err(DispatchError::Sandbox);
+                    }
+                    crate::task_sandbox::SandboxDispatch::RunUnsandboxed => {}
                 }
             }
-        }
-    }
-    // Fallback: check if "main" or "master" exists.
-    for candidate in &["main", "master"] {
-        let check = tokio::process::Command::new("git")
-            .args(["rev-parse", "--verify", candidate])
-            .current_dir(repo_root)
-            .output()
-            .await;
-        if check.map(|o| o.status.success()).unwrap_or(false) {
-            return candidate.to_string();
-        }
-    }
-    "main".to_string()
+            call_claude_for_agent_with_type(
+                home_dir,
+                registry,
+                agent_id,
+                prompt,
+                crate::cost_telemetry::RequestType::Dispatch,
+            )
+            .await
+            .map_err(DispatchError::Other)
+        })
+        .await
 }
 
-/// Execute a task inside a sandboxed Docker container.
+/// Execute a task inside the per-agent task sandbox (`crate::task_sandbox`).
+///
+/// Fail closed: when the sandbox cannot run, the task fails with a reason
+/// (audited as `task_sandbox_unavailable`). Only the operator escape hatch
+/// `config.toml [container.sandbox] when_unavailable = "run_unsandboxed"`
+/// returns [`crate::task_sandbox::SandboxDispatch::RunUnsandboxed`], audited
+/// as `task_sandbox_bypassed` on every task. The sandbox has no platform MCP
+/// tools, so the delegation env (depth / origin / hop) has no reader inside.
 async fn dispatch_sandboxed(
     home_dir: &std::path::Path,
     registry: &Arc<RwLock<AgentRegistry>>,
     agent_id: &str,
     prompt: &str,
-    delegation_env: &std::collections::HashMap<String, String>,
-) -> Result<String, String> {
-    let reg = registry.read().await;
-    let agent = if agent_id == "default" {
-        reg.main_agent()
-    } else {
-        reg.get(agent_id)
-    };
-    let agent = agent.ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
-
-    let agent_dir = agent.dir.clone();
-    let model = agent.config.model.preferred.clone();
-    let network = agent.config.container.network_access;
-    let timeout_ms = agent.config.container.timeout_ms;
-    let capabilities = agent.config.capabilities.clone();
-
-    // Build system prompt
-    let mut parts = Vec::new();
-    if let Some(soul) = &agent.soul {
-        parts.push(format!("# Soul\n{soul}"));
-    }
-    if let Some(identity) = &agent.identity {
-        parts.push(format!("# Identity\n{identity}"));
-    }
-    let system_prompt = parts.join("\n\n---\n\n");
-    drop(reg);
-
-    // O1: confidence-aware delegation routing (opt-in, default OFF). The
-    // sandboxed dispatch path resolves its model here (it bypasses
-    // call_claude_for_agent_with_type), so apply the same tier routing
-    // symmetrically. When off this returns `model` byte-identically.
-    // Tier routing only applies to Claude runtimes (multi-model doctrine —
-    // tier models are Claude ids; a codex/gemini agent keeps its own model).
-    let delegation_settings = crate::runtime_config::load_runtime_settings(&agent_dir);
-    let model = crate::delegation_router::resolve_delegation_model(
-        home_dir,
-        &agent_dir,
-        agent_id,
-        prompt,
-        &model,
-        &delegation_settings.utility_model,
-        delegation_settings.non_claude_provider().is_none(),
-    );
-
-    // Get API key
-    let api_key = crate::claude_runner::get_api_key_from_home(home_dir).await;
-    if api_key.is_empty() {
-        return Err("No API key configured for sandbox".to_string());
-    }
-
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    let extra_env: Vec<(String, String)> = delegation_env
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let denied_tools = capabilities.disallowed_tools();
-    // W1.7: the in-container argv follows the agent's `[runtime] provider`
-    // flag dialect (claude default; codex/gemini/agy per their CLIs).
-    let runtime = crate::runtime_config::agent_runtime_provider(&agent_dir);
-    let result = sandbox::run_sandboxed_for_runtime(
-        runtime,
-        &agent_dir,
-        prompt,
-        &model,
-        &system_prompt,
-        &api_key,
-        timeout,
-        network,
-        &extra_env,
-        &denied_tools,
-    )
-    .await?;
-
-    if result.timed_out {
-        return Err("Sandbox execution timed out".to_string());
-    }
-
-    if result.exit_code != 0 {
-        return Err(format!(
-            "Sandbox exit code {}: {}",
-            result.exit_code,
-            result.stderr.chars().take(200).collect::<String>()
-        ));
-    }
-
-    let text = result.stdout.trim().to_string();
-    if text.is_empty() {
-        Ok("(empty response from sandbox)".to_string())
-    } else {
-        Ok(text)
-    }
+) -> crate::task_sandbox::SandboxDispatch {
+    crate::task_sandbox::dispatch(home_dir, registry, agent_id, prompt).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,10 +1423,7 @@ async fn dispatch_sandboxed(
 ///
 /// A TaskSpec is picked up if its `status` is `Planned`. It is immediately
 /// marked `Running` to prevent double-pickup by concurrent poll cycles.
-async fn poll_pending_taskspecs(
-    home_dir: &Path,
-    registry: &Arc<RwLock<AgentRegistry>>,
-) {
+async fn poll_pending_taskspecs(home_dir: &Path, registry: &Arc<RwLock<AgentRegistry>>) {
     let agents_dir = home_dir.join("agents");
     let entries = match std::fs::read_dir(&agents_dir) {
         Ok(e) => e,
@@ -1617,30 +1621,39 @@ pub async fn dispatch_taskspec(
             sender: spec.agent_id.clone(),
             hop_depth: 0,
         };
-        let result = dispatch_to_agent(home_dir, registry, &target_agent, &prompt, &delegation).await;
+        let result =
+            dispatch_to_agent(home_dir, registry, &target_agent, &prompt, &delegation).await;
 
         match result {
             Ok(output) => {
                 // Verify with Auto criteria
                 let criteria_results = verify_step_auto(&spec.steps[step_index], &output);
-                let all_passed = criteria_results.is_empty() || criteria_results.iter().all(|r| r.passed);
+                let all_passed =
+                    criteria_results.is_empty() || criteria_results.iter().all(|r| r.passed);
 
                 if all_passed {
-                    spec.mark_passed(step_index, StepResult {
-                        output: output.clone(),
-                        artifacts: Vec::new(),
-                        criteria_results,
-                        self_confidence: None,
-                        completed_at: Utc::now(),
-                    });
+                    spec.mark_passed(
+                        step_index,
+                        StepResult {
+                            output: output.clone(),
+                            artifacts: Vec::new(),
+                            criteria_results,
+                            self_confidence: None,
+                            completed_at: Utc::now(),
+                        },
+                    );
                     info!(task = %spec.task_id, step = step_index, "Step passed");
                 } else {
-                    let failed_criteria: Vec<String> = criteria_results.iter()
+                    let failed_criteria: Vec<String> = criteria_results
+                        .iter()
                         .filter(|r| !r.passed)
                         .map(|r| r.description.clone())
                         .collect();
                     let error_msg = format!("Criteria not met: {}", failed_criteria.join(", "));
-                    handle_step_failure(spec, step_index, &error_msg, home_dir, registry, agent_dir).await?;
+                    handle_step_failure(
+                        spec, step_index, &error_msg, home_dir, registry, agent_dir,
+                    )
+                    .await?;
                 }
             }
             Err(e) => {
@@ -1652,7 +1665,8 @@ pub async fn dispatch_taskspec(
     }
 
     // Final save
-    spec.save(agent_dir).map_err(|e| format!("Final save: {e}"))?;
+    spec.save(agent_dir)
+        .map_err(|e| format!("Final save: {e}"))?;
 
     info!(
         task = %spec.task_id,
@@ -1680,7 +1694,11 @@ async fn handle_step_failure(
     spec.save(agent_dir).ok();
 
     match action {
-        FailureAction::Retry { step_index, attempt, error } => {
+        FailureAction::Retry {
+            step_index,
+            attempt,
+            error,
+        } => {
             // Exponential backoff: 5s, 10s, 20s (review issue #31)
             let delay_secs = 5u64 * (1 << attempt.min(3));
             info!(
@@ -1708,7 +1726,10 @@ async fn handle_step_failure(
                 "The original plan for '{}' failed at step {}. Error: {}\n\n\
                  Completed steps so far:\n{}\n\n\
                  Please provide a new plan for the remaining work.",
-                spec.goal, failed_step, error, spec.completed_steps_briefing(),
+                spec.goal,
+                failed_step,
+                error,
+                spec.completed_steps_briefing(),
             );
 
             let delegation = DelegationEnv {
@@ -1718,8 +1739,13 @@ async fn handle_step_failure(
                 hop_depth: 0,
             };
             let planner_response = dispatch_to_agent(
-                home_dir, registry, &spec.agent_id, &replan_prompt, &delegation,
-            ).await?;
+                home_dir,
+                registry,
+                &spec.agent_id,
+                &replan_prompt,
+                &delegation,
+            )
+            .await?;
 
             match parse_planner_response(&planner_response) {
                 Ok(new_steps) => {
@@ -1761,7 +1787,9 @@ fn coalesce_messages(messages: Vec<BusMessage>) -> Vec<BusMessage> {
     let mut order: Vec<String> = Vec::new();
 
     for msg in messages {
-        let key = msg.agent_id.clone();
+        // A read-only (lane) delegation is never merged with an ordinary one:
+        // the merged run would take the lane of whichever came first.
+        let key = format!("{}\u{0}{}", msg.agent_id, if msg.lane.is_some() { "L" } else { "" });
         let entry = groups.entry(key.clone()).or_default();
         if entry.is_empty() {
             order.push(key);
@@ -1793,7 +1821,10 @@ fn coalesce_messages(messages: Vec<BusMessage>) -> Vec<BusMessage> {
 
             let mut coalesced_payload = coalesced_payload;
             if coalesced_payload.len() > 200_000 {
-                warn!(size = coalesced_payload.len(), "Coalesced payload too large, truncating");
+                warn!(
+                    size = coalesced_payload.len(),
+                    "Coalesced payload too large, truncating"
+                );
                 coalesced_payload.truncate(200_000);
             }
 
@@ -1813,7 +1844,8 @@ fn coalesce_messages(messages: Vec<BusMessage>) -> Vec<BusMessage> {
 
             // Collect message_ids from non-first messages so their delegation
             // callbacks can also be consumed when the coalesced response arrives.
-            let extra_ids: Vec<String> = chunk.iter().skip(1).map(|m| m.message_id.clone()).collect();
+            let extra_ids: Vec<String> =
+                chunk.iter().skip(1).map(|m| m.message_id.clone()).collect();
 
             result.push(BusMessage {
                 msg_type: "agent_message".to_string(),
@@ -1830,6 +1862,8 @@ fn coalesce_messages(messages: Vec<BusMessage>) -> Vec<BusMessage> {
                 coalesced_ids: extra_ids,
                 turn_id: first.turn_id.clone(),
                 session_id: first.session_id.clone(),
+                upstream_unknown: first.upstream_unknown,
+                lane: first.lane.clone(),
             });
         }
     }
@@ -1845,8 +1879,12 @@ pub async fn append_line(path: &Path, line: &str) -> Result<(), String> {
     let line = line.to_string();
     tokio::task::spawn_blocking(move || {
         use std::io::Write;
+        // `read(true)`: on Windows an append-only handle lacks FILE_WRITE_DATA,
+        // and LockFileEx needs read or write access, so the lock (and with it
+        // every bus response) failed there.
         let mut file = std::fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&path)
             .map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
@@ -1932,7 +1970,10 @@ async fn reconcile_orphan_responses(home_dir: &Path) {
         return;
     }
 
-    info!(count = orphans.len(), "Scanning for orphan delegation responses");
+    info!(
+        count = orphans.len(),
+        "Scanning for orphan delegation responses"
+    );
     for (in_reply_to, payload, sender) in orphans {
         // forward_delegation_response deletes the callback row atomically;
         // if no row exists we silently skip.
@@ -1953,8 +1994,10 @@ async fn cleanup_stale_delegation_callbacks(home_dir: &Path) {
         conn.execute(
             "DELETE FROM delegation_callbacks WHERE created_at < ?1",
             rusqlite::params![cutoff],
-        ).ok()
-    }).await;
+        )
+        .ok()
+    })
+    .await;
     if let Ok(Some(count)) = result {
         if count > 0 {
             info!(removed = count, "Cleaned up stale delegation callbacks");
@@ -2204,7 +2247,9 @@ pub async fn reforward_message(
 fn parse_reply_channel(rc: &str) -> Result<(String, String, Option<String>), String> {
     let parts: Vec<&str> = rc.splitn(3, ':').collect();
     if parts.len() < 2 {
-        return Err(format!("malformed reply_channel '{rc}': expected <type>:<id>[:<thread>]"));
+        return Err(format!(
+            "malformed reply_channel '{rc}': expected <type>:<id>[:<thread>]"
+        ));
     }
     let ch_type = parts[0].to_string();
     // Special marker `<type>:thread:<id>` (e.g. `discord:thread:123`)
@@ -2303,10 +2348,15 @@ async fn forward_delegation_response(
                     row.get::<_, i32>(5)?,
                 ))
             },
-        ).ok()
-    }).await.ok().flatten();
+        )
+        .ok()
+    })
+    .await
+    .ok()
+    .flatten();
 
-    let Some((_, callback_agent_id, channel_type, channel_id, thread_id, retry_count)) = callback else {
+    let Some((_, callback_agent_id, channel_type, channel_id, thread_id, retry_count)) = callback
+    else {
         // No callback registered — this is the legitimate case for purely
         // internal delegations (cron/reminder/heartbeat), but it is ALSO
         // what happened pre-v1.8.16 when a nested sub-agent's reply was
@@ -2349,10 +2399,17 @@ async fn forward_delegation_response(
     );
 
     match forward_to_channel(
-        home_dir, &channel_type, &channel_id, thread_id.as_deref(),
-        response_text, responder_agent, &callback_agent_id,
+        home_dir,
+        &channel_type,
+        &channel_id,
+        thread_id.as_deref(),
+        response_text,
+        responder_agent,
+        &callback_agent_id,
         chain_root.as_deref(),
-    ).await {
+    )
+    .await
+    {
         Ok(()) => {
             // v1.8.17 Fix 2 (Option A): forward succeeded — also persist the
             // sub-agent's reply into the PARENT agent's session history so
@@ -2375,7 +2432,8 @@ async fn forward_delegation_response(
                 chain_root.as_deref(),
                 responder_agent,
                 response_text,
-            ).await;
+            )
+            .await;
         }
         Err(e) => {
             let next_retry = retry_count + 1;
@@ -2533,6 +2591,43 @@ async fn append_subagent_reply_to_parent_session(
     responder_agent: &str,
     response_text: &str,
 ) {
+    append_subagent_reply_to_parent_session_with(
+        home_dir,
+        channel_type,
+        channel_id,
+        thread_id,
+        parent_agent_id,
+        chain_root_agent,
+        responder_agent,
+        response_text,
+        crate::redaction_sources::current(),
+    )
+    .await
+}
+
+/// [`append_subagent_reply_to_parent_session`] with an explicit redaction
+/// manager (the live one in production, a test manager in tests).
+///
+/// RFC-23 `[redaction.sources] sub_agent`: the reply is passed through the
+/// rule engine of the agent that OWNS the session it lands in (the direct
+/// parent, or the chain root on a relayed append), keyed by that agent and
+/// that session id, so the tokens it mints restore through the same
+/// `(agent, session)` vault lookup the owner's channel reply already uses.
+/// The channel delivery in `forward_to_channel` is the end user's own view
+/// and stays unredacted. Fail closed: when the pass errors, the raw reply is
+/// not written; the turn carries [`crate::redaction_sources::SUB_AGENT_REPLY_WITHHELD`].
+#[allow(clippy::too_many_arguments)]
+async fn append_subagent_reply_to_parent_session_with(
+    home_dir: &Path,
+    channel_type: &str,
+    channel_id: &str,
+    thread_id: Option<&str>,
+    parent_agent_id: &str,
+    chain_root_agent: Option<&str>,
+    responder_agent: &str,
+    response_text: &str,
+    redaction: Option<std::sync::Arc<duduclaw_redaction::RedactionManager>>,
+) {
     let db_path = home_dir.join("sessions.db");
     if !db_path.exists() {
         // Brand-new install / no sessions yet — nothing to append to.
@@ -2546,15 +2641,11 @@ async fn append_subagent_reply_to_parent_session(
     let responder_for_tag = safe_agent_tag(responder_agent);
     let via_for_tag = safe_agent_tag(parent_agent_id);
 
-    // Two variants of the content — direct vs relayed. Both are built
-    // up-front so the spawn_blocking closure doesn't need the
-    // responder/parent strings by reference.
-    let direct_content = format!(
-        "<subagent_reply agent=\"{responder_for_tag}\">\n{response_text}\n</subagent_reply>"
-    );
-    let relayed_content = format!(
-        "<subagent_reply agent=\"{responder_for_tag}\" via=\"{via_for_tag}\">\n{response_text}\n</subagent_reply>"
-    );
+    // Two variants of the content — direct vs relayed. The reply body is
+    // redacted per owning agent inside the closure (the owner is only known
+    // once the session row is read), so only the owned strings move in.
+    let response_owned = response_text.to_string();
+    let responder_owned = responder_agent.to_string();
 
     let candidates = candidate_session_ids(channel_type, channel_id, thread_id);
     let parent = parent_agent_id.to_string();
@@ -2567,8 +2658,8 @@ async fn append_subagent_reply_to_parent_session(
     let responder_for_log = responder_agent.to_string();
 
     let result = tokio::task::spawn_blocking(move || -> Result<Option<(String, bool)>, String> {
-        let conn = rusqlite::Connection::open(&db_path)
-            .map_err(|e| format!("open sessions.db: {e}"))?;
+        let conn =
+            rusqlite::Connection::open(&db_path).map_err(|e| format!("open sessions.db: {e}"))?;
         let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;");
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -2576,18 +2667,20 @@ async fn append_subagent_reply_to_parent_session(
         // owner matches either the direct parent OR the chain root.
         // Direct match wins if both are available for the same session.
         for sid in &candidates {
-            let existing: Option<String> = conn.query_row(
-                "SELECT agent_id FROM sessions WHERE id = ?1",
-                rusqlite::params![sid],
-                |row| row.get(0),
-            ).ok();
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT agent_id FROM sessions WHERE id = ?1",
+                    rusqlite::params![sid],
+                    |row| row.get(0),
+                )
+                .ok();
 
             let Some(owner) = existing else { continue };
 
-            let (content, is_relayed) = if owner == parent {
-                (&direct_content, false)
+            let is_relayed = if owner == parent {
+                false
             } else if root.as_deref() == Some(owner.as_str()) {
-                (&relayed_content, true)
+                true
             } else {
                 tracing::debug!(
                     session_id = %sid,
@@ -2599,24 +2692,37 @@ async fn append_subagent_reply_to_parent_session(
                 continue;
             };
 
+            let content = subagent_reply_turn_content(
+                redaction.as_ref(),
+                &owner,
+                sid,
+                &responder_owned,
+                &responder_for_tag,
+                is_relayed.then_some(via_for_tag.as_str()),
+                &response_owned,
+            );
+            let content = &content;
             let tokens = subagent_reply_token_estimate(content);
             conn.execute(
                 "INSERT INTO session_messages (session_id, role, content, tokens, timestamp) \
                  VALUES (?1, 'assistant', ?2, ?3, ?4)",
                 rusqlite::params![sid, content, tokens, now],
-            ).map_err(|e| format!("insert session_messages: {e}"))?;
+            )
+            .map_err(|e| format!("insert session_messages: {e}"))?;
 
             conn.execute(
                 "UPDATE sessions SET total_tokens = total_tokens + ?1, last_active = ?2 \
                  WHERE id = ?3",
                 rusqlite::params![tokens, now, sid],
-            ).map_err(|e| format!("update sessions: {e}"))?;
+            )
+            .map_err(|e| format!("update sessions: {e}"))?;
 
             return Ok(Some((sid.clone(), is_relayed)));
         }
 
         Ok(None)
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(Some((sid, is_relayed)))) => {
@@ -2662,6 +2768,50 @@ async fn append_subagent_reply_to_parent_session(
                  (forward still succeeded)"
             );
         }
+    }
+}
+
+/// Build the `<subagent_reply>` turn written into the owner's session.
+///
+/// `[redaction.sources] sub_agent` decides the body: `inherit` / `off` /
+/// `selective` (and no manager at all) leave it byte-identical to the
+/// pre-wiring format; `on` replaces values matched by the owner's rules with
+/// tokens minted under `(owner, session_id)`. A redaction error never lets
+/// the raw body through: the turn carries the fixed withheld notice instead,
+/// so the owner still sees that a reply arrived.
+fn subagent_reply_turn_content(
+    redaction: Option<&std::sync::Arc<duduclaw_redaction::RedactionManager>>,
+    owner_agent: &str,
+    session_id: &str,
+    responder_agent: &str,
+    responder_tag: &str,
+    via_tag: Option<&str>,
+    response_text: &str,
+) -> String {
+    let body = match crate::redaction_sources::redact_sub_agent_reply(
+        redaction,
+        owner_agent,
+        session_id,
+        responder_agent,
+        response_text,
+    ) {
+        Ok(body) => body,
+        Err(e) => {
+            warn!(
+                owner = %owner_agent,
+                session_id = %session_id,
+                responder = %responder_agent,
+                error = %e,
+                "redaction of sub-agent reply failed — reply withheld from parent session"
+            );
+            crate::redaction_sources::SUB_AGENT_REPLY_WITHHELD.to_string()
+        }
+    };
+    match via_tag {
+        None => format!("<subagent_reply agent=\"{responder_tag}\">\n{body}\n</subagent_reply>"),
+        Some(via) => format!(
+            "<subagent_reply agent=\"{responder_tag}\" via=\"{via}\">\n{body}\n</subagent_reply>"
+        ),
     }
 }
 
@@ -2724,7 +2874,8 @@ fn sanitize_for_channel(text: &str) -> String {
                 let mut result = line.to_string();
                 for prefix in &["/Users/", "/home/"] {
                     while let Some(start) = result.find(prefix) {
-                        let end = result[start..].find(|c: char| c.is_whitespace() || c == '\'' || c == '"' || c == ')')
+                        let end = result[start..]
+                            .find(|c: char| c.is_whitespace() || c == '\'' || c == '"' || c == ')')
                             .map(|e| start + e)
                             .unwrap_or(result.len());
                         result.replace_range(start..end, "[path]");
@@ -2752,21 +2903,29 @@ fn validate_channel_id(channel_type: &str, id: &str) -> Result<(), String> {
     let valid = match channel_type {
         "googlechat" => {
             id.starts_with("spaces/")
-                && id.chars().all(|c| c.is_alphanumeric() || c == '/' || c == '-' || c == '_')
+                && id
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '/' || c == '-' || c == '_')
         }
-        "teams" => id.chars().all(|c| {
-            c.is_alphanumeric() || matches!(c, ':' | '@' | ';' | '=' | '-' | '_' | '.')
-        }),
-        _ => id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.'),
+        "teams" => id
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, ':' | '@' | ';' | '=' | '-' | '_' | '.')),
+        _ => id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.'),
     };
     if !valid {
-        return Err(format!("channel_id contains invalid characters for {channel_type}: {id}"));
+        return Err(format!(
+            "channel_id contains invalid characters for {channel_type}: {id}"
+        ));
     }
     // Discord snowflakes: 17-20 digit numbers (WP-4C — unified with the
     // duduclaw-core validator; only this check's implementation changed,
     // the rest of `validate_channel_id` is untouched).
     if channel_type == "discord" && !is_valid_discord_snowflake(id) {
-        return Err(format!("Discord channel_id must be numeric snowflake, got: {id}"));
+        return Err(format!(
+            "Discord channel_id must be numeric snowflake, got: {id}"
+        ));
     }
     // Telegram chat_id: signed integer (can be negative for groups)
     if channel_type == "telegram" && id.parse::<i64>().is_err() {
@@ -2881,9 +3040,15 @@ async fn forward_to_channel(
     match channel_type {
         "telegram" => {
             let token = resolve_forward_token(
-                home_dir, originating_agent, chain_root_agent, "telegram",
-                &config, "telegram_bot_token_enc", "telegram_bot_token",
-            ).await;
+                home_dir,
+                originating_agent,
+                chain_root_agent,
+                "telegram",
+                &config,
+                "telegram_bot_token_enc",
+                "telegram_bot_token",
+            )
+            .await;
             if token.is_empty() {
                 return Err("telegram_bot_token not configured".into());
             }
@@ -2899,8 +3064,14 @@ async fn forward_to_channel(
                         payload["message_thread_id"] = serde_json::json!(tid_num);
                     }
                 }
-                let resp = http.post(&url).json(&payload).send().await
-                    .map_err(|e| format!("telegram send chunk {}/{}: {}", i + 1, total, crate::secret_redact::redact_secrets(&e.to_string())))?;
+                let resp = http.post(&url).json(&payload).send().await.map_err(|e| {
+                    format!(
+                        "telegram send chunk {}/{}: {}",
+                        i + 1,
+                        total,
+                        crate::secret_redact::redact_secrets(&e.to_string())
+                    )
+                })?;
                 if !resp.status().is_success() {
                     // Retry without parse_mode in case Markdown causes issues on this chunk.
                     // A failure here (network error or non-2xx) MUST propagate as Err —
@@ -2914,40 +3085,65 @@ async fn forward_to_channel(
                         "chat_id": channel_id,
                         "text": body,
                     });
-                    let fallback_resp = http.post(&url).json(&fallback_payload).send().await
-                        .map_err(|e| format!("telegram fallback send chunk {}/{}: {e}", i + 1, total))?;
+                    let fallback_resp = http
+                        .post(&url)
+                        .json(&fallback_payload)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            format!("telegram fallback send chunk {}/{}: {e}", i + 1, total)
+                        })?;
                     if !fallback_resp.status().is_success() {
                         return Err(format!(
                             "Telegram API returned {} on chunk {}/{} (markdown and plain-text attempts both failed)",
-                            fallback_resp.status(), i + 1, total
+                            fallback_resp.status(),
+                            i + 1,
+                            total
                         ));
                     }
                 }
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "line" => {
             let token = resolve_forward_token(
-                home_dir, originating_agent, chain_root_agent, "line",
-                &config, "line_channel_token_enc", "line_channel_token",
-            ).await;
+                home_dir,
+                originating_agent,
+                chain_root_agent,
+                "line",
+                &config,
+                "line_channel_token_enc",
+                "line_channel_token",
+            )
+            .await;
             if token.is_empty() {
                 return Err("line_channel_token not configured".into());
             }
             let url = "https://api.line.me/v2/bot/message/push";
             for (i, body) in chunks.iter().enumerate() {
-                let resp = http.post(url)
+                let resp = http
+                    .post(url)
                     .header("Authorization", format!("Bearer {}", token))
                     .json(&serde_json::json!({
                         "to": channel_id,
                         "messages": [{"type": "text", "text": body}]
                     }))
-                    .send().await
+                    .send()
+                    .await
                     .map_err(|e| format!("line send chunk {}/{}: {e}", i + 1, total))?;
                 if !resp.status().is_success() {
-                    return Err(format!("LINE API returned {} on chunk {}/{}", resp.status(), i + 1, total));
+                    return Err(format!(
+                        "LINE API returned {} on chunk {}/{}",
+                        resp.status(),
+                        i + 1,
+                        total
+                    ));
                 }
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "discord" => {
@@ -2963,55 +3159,91 @@ async fn forward_to_channel(
             // the chain root (e.g. agnes) so only her bot can post into
             // it; inheriting her token here prevents the 401 loop.
             let token = resolve_forward_token(
-                home_dir, originating_agent, chain_root_agent, "discord",
-                &config, "discord_bot_token_enc", "discord_bot_token",
-            ).await;
+                home_dir,
+                originating_agent,
+                chain_root_agent,
+                "discord",
+                &config,
+                "discord_bot_token_enc",
+                "discord_bot_token",
+            )
+            .await;
             if token.is_empty() {
                 return Err("discord_bot_token not configured".into());
             }
             let target_channel = thread_id.unwrap_or(channel_id);
-            let url = format!("https://discord.com/api/v10/channels/{}/messages", target_channel);
+            let url = format!(
+                "https://discord.com/api/v10/channels/{}/messages",
+                target_channel
+            );
             for (i, body) in chunks.iter().enumerate() {
-                let resp = http.post(&url)
+                let resp = http
+                    .post(&url)
                     .header("Authorization", format!("Bot {}", token))
                     .json(&serde_json::json!({ "content": body }))
-                    .send().await
+                    .send()
+                    .await
                     .map_err(|e| format!("discord send chunk {}/{}: {e}", i + 1, total))?;
                 if !resp.status().is_success() {
-                    return Err(format!("Discord API returned {} on chunk {}/{}", resp.status(), i + 1, total));
+                    return Err(format!(
+                        "Discord API returned {} on chunk {}/{}",
+                        resp.status(),
+                        i + 1,
+                        total
+                    ));
                 }
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "slack" => {
             let token = resolve_forward_token(
-                home_dir, originating_agent, chain_root_agent, "slack",
-                &config, "slack_bot_token_enc", "slack_bot_token",
-            ).await;
+                home_dir,
+                originating_agent,
+                chain_root_agent,
+                "slack",
+                &config,
+                "slack_bot_token_enc",
+                "slack_bot_token",
+            )
+            .await;
             if token.is_empty() {
                 return Err("slack_bot_token not configured".into());
             }
             let url = "https://slack.com/api/chat.postMessage";
             for (i, body) in chunks.iter().enumerate() {
-                let resp = http.post(url)
+                let resp = http
+                    .post(url)
                     .header("Authorization", format!("Bearer {}", token))
                     .json(&serde_json::json!({
                         "channel": channel_id,
                         "text": body,
                         "thread_ts": thread_id,
                     }))
-                    .send().await
+                    .send()
+                    .await
                     .map_err(|e| format!("slack send chunk {}/{}: {e}", i + 1, total))?;
                 if !resp.status().is_success() {
-                    return Err(format!("Slack API returned {} on chunk {}/{}", resp.status(), i + 1, total));
+                    return Err(format!(
+                        "Slack API returned {} on chunk {}/{}",
+                        resp.status(),
+                        i + 1,
+                        total
+                    ));
                 }
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "whatsapp" => {
             let config_table = config.as_table().ok_or("config.toml is not a table")?;
             let token = crate::config_crypto::decrypt_config_field_async(
-                config_table, "channels", "whatsapp_access_token", home_dir,
+                config_table,
+                "channels",
+                "whatsapp_access_token",
+                home_dir,
             )
             .await
             .map(|s| s.expose_owned())
@@ -3023,12 +3255,15 @@ async fn forward_to_channel(
                 .unwrap_or("")
                 .to_string();
             if token.is_empty() || phone_id.is_empty() {
-                return Err("whatsapp_access_token / whatsapp_phone_number_id not configured".into());
+                return Err(
+                    "whatsapp_access_token / whatsapp_phone_number_id not configured".into(),
+                );
             }
             let url = format!("https://graph.facebook.com/v20.0/{phone_id}/messages");
             for (i, body) in chunks.iter().enumerate() {
                 let text = crate::markdown_render::to_whatsapp_text(body);
-                let resp = http.post(&url)
+                let resp = http
+                    .post(&url)
                     .bearer_auth(&token)
                     .json(&serde_json::json!({
                         "messaging_product": "whatsapp",
@@ -3036,24 +3271,38 @@ async fn forward_to_channel(
                         "type": "text",
                         "text": { "body": text }
                     }))
-                    .send().await
+                    .send()
+                    .await
                     .map_err(|e| format!("whatsapp send chunk {}/{}: {e}", i + 1, total))?;
                 if !resp.status().is_success() {
-                    return Err(format!("WhatsApp API returned {} on chunk {}/{}", resp.status(), i + 1, total));
+                    return Err(format!(
+                        "WhatsApp API returned {} on chunk {}/{}",
+                        resp.status(),
+                        i + 1,
+                        total
+                    ));
                 }
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "feishu" => {
             let config_table = config.as_table().ok_or("config.toml is not a table")?;
             let app_id = crate::config_crypto::decrypt_config_field_async(
-                config_table, "channels", "feishu_app_id", home_dir,
+                config_table,
+                "channels",
+                "feishu_app_id",
+                home_dir,
             )
             .await
             .map(|s| s.expose_owned())
             .unwrap_or_default();
             let app_secret = crate::config_crypto::decrypt_config_field_async(
-                config_table, "channels", "feishu_app_secret", home_dir,
+                config_table,
+                "channels",
+                "feishu_app_secret",
+                home_dir,
             )
             .await
             .map(|s| s.expose_owned())
@@ -3066,9 +3315,12 @@ async fn forward_to_channel(
             let token_resp = http
                 .post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal")
                 .json(&serde_json::json!({ "app_id": app_id, "app_secret": app_secret }))
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("feishu token: {e}"))?;
-            let token_body: serde_json::Value = token_resp.json().await
+            let token_body: serde_json::Value = token_resp
+                .json()
+                .await
                 .map_err(|e| format!("feishu token parse: {e}"))?;
             let token = token_body
                 .get("tenant_access_token")
@@ -3085,12 +3337,20 @@ async fn forward_to_channel(
                         "msg_type": "text",
                         "content": content,
                     }))
-                    .send().await
+                    .send()
+                    .await
                     .map_err(|e| format!("feishu send chunk {}/{}: {e}", i + 1, total))?;
                 if !resp.status().is_success() {
-                    return Err(format!("Feishu API returned {} on chunk {}/{}", resp.status(), i + 1, total));
+                    return Err(format!(
+                        "Feishu API returned {} on chunk {}/{}",
+                        resp.status(),
+                        i + 1,
+                        total
+                    ));
                 }
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "googlechat" => {
@@ -3098,7 +3358,9 @@ async fn forward_to_channel(
                 crate::googlechat::send_text_to_space(home_dir, channel_id, body)
                     .await
                     .map_err(|e| format!("googlechat send chunk {}/{}: {e}", i + 1, total))?;
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "teams" => {
@@ -3106,7 +3368,9 @@ async fn forward_to_channel(
                 crate::msteams::send_text_to_conversation(home_dir, channel_id, body)
                     .await
                     .map_err(|e| format!("teams send chunk {}/{}: {e}", i + 1, total))?;
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "wecom" => {
@@ -3116,7 +3380,9 @@ async fn forward_to_channel(
                 crate::wecom::send_text_via_config(home_dir, channel_id, body)
                     .await
                     .map_err(|e| format!("wecom send chunk {}/{}: {e}", i + 1, total))?;
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         "dingtalk" => {
@@ -3126,7 +3392,9 @@ async fn forward_to_channel(
                 crate::dingtalk::send_text_to_conversation(home_dir, channel_id, body)
                     .await
                     .map_err(|e| format!("dingtalk send chunk {}/{}: {e}", i + 1, total))?;
-                if i + 1 < total { tokio::time::sleep(chunk_gap).await; }
+                if i + 1 < total {
+                    tokio::time::sleep(chunk_gap).await;
+                }
             }
         }
         other => {
@@ -3185,7 +3453,9 @@ async fn resolve_forward_token(
         home_dir,
         callback_agent_id,
         channel,
-    ).await {
+    )
+    .await
+    {
         return tok.expose_owned();
     }
     // 3: origin_agent + its reports_to cascade (covers the case where
@@ -3193,7 +3463,9 @@ async fn resolve_forward_token(
     if let Some(root) = origin_agent.filter(|s| !s.is_empty() && *s != callback_agent_id) {
         if let Some(tok) = crate::config_crypto::resolve_agent_channel_token_via_reports_to(
             home_dir, root, channel,
-        ).await {
+        )
+        .await
+        {
             return tok.expose_owned();
         }
     }
@@ -3234,7 +3506,12 @@ fn lookup_origin_agent(home_dir: &Path, message_id: &str) -> Option<String> {
 /// global channel token that is itself a network-backed `secret://` reference
 /// resolves instead of failing closed (the caller already parsed `config`, so
 /// this reuses it rather than re-reading `config.toml`).
-async fn get_config_token(config: &toml::Value, enc_key: &str, plain_key: &str, home_dir: &Path) -> String {
+async fn get_config_token(
+    config: &toml::Value,
+    enc_key: &str,
+    plain_key: &str,
+    home_dir: &Path,
+) -> String {
     debug_assert_eq!(
         enc_key,
         format!("{plain_key}_enc"),
@@ -3301,13 +3578,16 @@ async fn peek_callback(
 /// Parse the `[goal-loop task_id=<id> iter=<n>]` marker that
 /// `goal_loop.rs::enqueue_work` stamps at the front of its payload.
 /// Returns `None` for any message that isn't a goal-loop dispatch.
+///
+/// M3-3: the marker must be the very start of the payload (the driver always
+/// writes it there); the same text later in a message, in a task title or in
+/// a colleague's `send_to_agent` body is not a marker. Callers that act on it
+/// (attribution, round information, fence) also require the goal-loop sender.
 fn extract_goal_loop_task_id(payload: &str) -> Option<&str> {
-    const MARKER: &str = "[goal-loop task_id=";
-    let start = payload.find(MARKER)? + MARKER.len();
-    let rest = &payload[start..];
-    let end = rest.find(' ')?;
-    let id = &rest[..end];
-    if id.is_empty() { None } else { Some(id) }
+    let rest = payload.strip_prefix("[goal-loop task_id=")?;
+    let inner = &rest[..rest.find(']')?];
+    let id = inner.split(' ').next().unwrap_or("");
+    (!id.is_empty()).then_some(id)
 }
 
 /// Like [`extract_goal_loop_task_id`] but also parses the `iter=<n>` round
@@ -3317,14 +3597,68 @@ fn extract_goal_loop_task_id(payload: &str) -> Option<&str> {
 /// `dispatch_engine.rs::settle_forward_model` computes on the review side
 /// (`task.revision_round + 1`, the same value `goal_loop.rs::enqueue_work`
 /// stamps here as `next_iter`).
-pub(crate) fn extract_goal_loop_task_id_and_round(payload: &str) -> Option<(&str, u32)> {
-    let task_id = extract_goal_loop_task_id(payload)?;
-    const ITER_MARKER: &str = " iter=";
-    let start = payload.find(ITER_MARKER)? + ITER_MARKER.len();
-    let rest = &payload[start..];
+/// The task a heartbeat task-board wake-up (`[heartbeat-pull task_id=…]` or
+/// `[heartbeat-stall task_id=…]` at the start of the payload) is about.
+pub(crate) fn extract_heartbeat_task_id(payload: &str) -> Option<&str> {
+    let rest = payload
+        .strip_prefix("[heartbeat-pull task_id=")
+        .or_else(|| payload.strip_prefix("[heartbeat-stall task_id="))?;
     let end = rest.find(']')?;
-    let round: u32 = rest[..end].parse().ok()?;
+    let id = &rest[..end];
+    (!id.is_empty() && !id.contains(char::is_whitespace)).then_some(id)
+}
+
+/// Whether a queued run goes in the read-only explore lane, folding the
+/// lane's two sources into the one flag (`crate::explore_lane::EXPLORE`):
+/// `responsibility` is the P5 contract lane of a goal-loop round (an error
+/// when it could not be read), `msg_lane` the external-event lane on the
+/// message. `Err` (fail closed) when the lane cannot be read or `target`
+/// cannot carry it (`crate::explore_lane::dispatch_refusal`), the same rule
+/// for both sources.
+pub(crate) fn resolve_dispatch_lane(
+    home_dir: &Path,
+    target: &str,
+    responsibility: Result<bool, String>,
+    msg_lane: Option<&str>,
+) -> Result<bool, String> {
+    let lane = responsibility? || crate::explore_lane::is_explore(msg_lane);
+    if lane {
+        if let Some(reason) = crate::explore_lane::dispatch_refusal(home_dir, target) {
+            return Err(reason);
+        }
+    }
+    Ok(lane)
+}
+
+pub(crate) fn extract_goal_loop_task_id_and_round(payload: &str) -> Option<(&str, u32)> {
+    let rest = payload.strip_prefix("[goal-loop task_id=")?;
+    let inner = &rest[..rest.find(']')?];
+    let (task_id, round) = inner.split_once(" iter=")?;
+    if task_id.is_empty() || task_id.contains(char::is_whitespace) {
+        return None;
+    }
+    let round: u32 = round.parse().ok()?;
     Some((task_id, round))
+}
+
+/// Display-only linkage for the run history (`run_steps`): the goal marker
+/// wherever it sits in a recorded prompt. Never used for attribution,
+/// round information or a fence (those use the anchored parse above).
+pub(crate) fn goal_marker_linkage_for_display(prompt: &str) -> Option<(&str, u32)> {
+    let start = prompt.find("[goal-loop task_id=")?;
+    extract_goal_loop_task_id_and_round(&prompt[start..])
+}
+
+/// Round under which a goal-loop dispatch's native tool evidence (and its
+/// persisted file changes) is filed: the settle side's key
+/// (`task_observe::evidence_round_for_revision`) when the task's
+/// `revision_round` could be read, else the marker's `iter=` as a last
+/// resort (the pre-fix behavior, right whenever no re-dispatch happened).
+fn goal_evidence_round(revision_round: Option<i64>, marker_iter: u32) -> u32 {
+    match revision_round {
+        Some(r) => crate::prediction::task_observe::evidence_round_for_revision(r),
+        None => marker_iter,
+    }
 }
 
 /// Read a task's originating channel (`source_channel`/`source_chat_id`,
@@ -3344,7 +3678,12 @@ async fn lookup_task_source_channel(home_dir: &Path, task_id: &str) -> Option<(S
         conn.query_row(
             "SELECT source_channel, source_chat_id FROM tasks WHERE id = ?1",
             rusqlite::params![id],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
         )
         .ok()
     })
@@ -3357,9 +3696,35 @@ async fn lookup_task_source_channel(home_dir: &Path, task_id: &str) -> Option<(S
     })
 }
 
+/// A1-3 ledger: a goal task's current `revision_round` from `tasks.db`,
+/// read-only and best-effort (same bare-query shape as
+/// [`lookup_task_source_channel`]). `None` on any failure.
+async fn lookup_task_revision_round(home_dir: &Path, task_id: &str) -> Option<i64> {
+    let db_path = home_dir.join("tasks.db");
+    if !db_path.exists() {
+        return None;
+    }
+    let id = task_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(&db_path).ok()?;
+        let _ = conn.execute_batch("PRAGMA busy_timeout=5000;");
+        conn.query_row(
+            "SELECT revision_round FROM tasks WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .ok()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Read + parse `config.toml`. Shared by the typing-guard resolvers below.
 async fn read_config_toml(home_dir: &Path) -> Option<toml::Value> {
-    let config_str = tokio::fs::read_to_string(home_dir.join("config.toml")).await.ok()?;
+    let config_str = tokio::fs::read_to_string(home_dir.join("config.toml"))
+        .await
+        .ok()?;
     config_str.parse().ok()
 }
 
@@ -3385,15 +3750,27 @@ async fn build_typing_guard_for_message(
     }
     let config = read_config_toml(home_dir).await?;
     let token = resolve_forward_token(
-        home_dir, &callback_agent, origin_agent, "telegram",
-        &config, "telegram_bot_token_enc", "telegram_bot_token",
-    ).await;
+        home_dir,
+        &callback_agent,
+        origin_agent,
+        "telegram",
+        &config,
+        "telegram_bot_token_enc",
+        "telegram_bot_token",
+    )
+    .await;
     let guard = crate::channel_typing::typing_guard_for(
-        forward_http().clone(), "telegram", &channel_id, thread_id.as_deref(), &token,
+        forward_http().clone(),
+        "telegram",
+        &channel_id,
+        thread_id.as_deref(),
+        &token,
     );
     if guard.is_none() {
         tracing::debug!(
-            message_id, channel_id, has_token = !token.is_empty(),
+            message_id,
+            channel_id,
+            has_token = !token.is_empty(),
             "typing guard: could not start telegram indicator for dispatched message"
         );
     }
@@ -3429,13 +3806,27 @@ async fn build_typing_guard_for_sqlite_message(
     }
     let config = read_config_toml(home_dir).await?;
     let token = resolve_forward_token(
-        home_dir, assigned_agent, None, "telegram",
-        &config, "telegram_bot_token_enc", "telegram_bot_token",
-    ).await;
+        home_dir,
+        assigned_agent,
+        None,
+        "telegram",
+        &config,
+        "telegram_bot_token_enc",
+        "telegram_bot_token",
+    )
+    .await;
     crate::channel_typing::typing_guard_for(
-        forward_http().clone(), "telegram", &source_chat_id, None, &token,
+        forward_http().clone(),
+        "telegram",
+        &source_chat_id,
+        None,
+        &token,
     )
 }
+
+#[cfg(test)]
+#[path = "dispatcher_fence_tests.rs"]
+mod fence_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3452,9 +3843,15 @@ mod tests {
              ⏵⏵ auto mode on (shift+tab to cycle)";
         let out = prepare_channel_text(input);
         assert!(out.contains("任務完成，共處理 3 筆。"));
-        assert!(!out.contains("CLAUDE_CODE_CHILD_SESSION"), "runtime chrome survived: {out}");
+        assert!(
+            !out.contains("CLAUDE_CODE_CHILD_SESSION"),
+            "runtime chrome survived: {out}"
+        );
         assert!(!out.contains("auto mode on"), "mode footer survived: {out}");
-        assert!(!out.contains("DUDUCLAW_SYSTEM"), "internal marker survived: {out}");
+        assert!(
+            !out.contains("DUDUCLAW_SYSTEM"),
+            "internal marker survived: {out}"
+        );
     }
 
     /// Same path, negative case: an ordinary answer that merely discusses the
@@ -3513,7 +3910,9 @@ mod tests {
         let registry = Arc::new(RwLock::new(AgentRegistry::new(home.join("agents"))));
         // Returns without spawning anything: a denied message never reaches
         // `to_dispatch`, so no Claude CLI process is started.
-        poll_and_dispatch(&home, &registry, None, None).await.unwrap();
+        poll_and_dispatch(&home, &registry, None, None)
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(&queue_path).unwrap();
         let lines: Vec<serde_json::Value> = content
@@ -3521,7 +3920,11 @@ mod tests {
             .filter(|l| !l.trim().is_empty())
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
-        assert_eq!(lines.len(), 1, "expected exactly the denial response: {content}");
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected exactly the denial response: {content}"
+        );
         let resp = &lines[0];
         assert_eq!(resp["type"], "agent_response");
         assert_eq!(resp["in_reply_to"], "forged-1");
@@ -3529,11 +3932,20 @@ mod tests {
         // WP21 collateral fix: the requester-facing notice is now the short
         // human sentence (no "委派遭拒" / config.toml / reports_to jargon) —
         // the full explanation stays in the audit record below.
-        assert!(payload.contains("這項委派未執行"), "zh-TW notice missing: {payload}");
+        assert!(
+            payload.contains("這項委派未執行"),
+            "zh-TW notice missing: {payload}"
+        );
         assert!(payload.contains("sales_rep") && payload.contains("mkt_rep"));
-        assert!(!payload.contains("config.toml"), "internal jargon leaked: {payload}");
+        assert!(
+            !payload.contains("config.toml"),
+            "internal jargon leaked: {payload}"
+        );
         // The original task is gone — a denial is terminal, not a retry loop.
-        assert!(!content.contains("\"agent_message\""), "task survived: {content}");
+        assert!(
+            !content.contains("\"agent_message\""),
+            "task survived: {content}"
+        );
 
         let audit = std::fs::read_to_string(home.join("security_audit.jsonl")).unwrap();
         let event: serde_json::Value = serde_json::from_str(audit.lines().next().unwrap()).unwrap();
@@ -3542,7 +3954,9 @@ mod tests {
         assert_eq!(event["details"]["reason"], "different_department");
 
         // Second poll: nothing left to gate, so no second denial is emitted.
-        poll_and_dispatch(&home, &registry, None, None).await.unwrap();
+        poll_and_dispatch(&home, &registry, None, None)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(home.join("security_audit.jsonl"))
                 .unwrap()
@@ -3551,6 +3965,67 @@ mod tests {
             1,
             "denial must not repeat on the next poll cycle"
         );
+    }
+
+    /// A bus delegation written by a run in the explore lane carries
+    /// `lane`; the dispatcher runs it in the lane like `message_queue.lane`,
+    /// refuses it for an employee whose runtime cannot carry the lane (no
+    /// model call is made), and never merges it with an ordinary message.
+    #[tokio::test]
+    async fn bus_delegation_lane_is_honoured_and_never_coalesced_away() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        for (name, extra) in [("reader", ""), ("coder", "[runtime]\nprovider = \"gemini\"\n")] {
+            let dir = home.join("agents").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("agent.toml"),
+                format!("[agent]\nname = \"{name}\"\nrole = \"worker\"\nreports_to = \"\"\n{extra}"),
+            )
+            .unwrap();
+        }
+        let line = |id: &str, agent: &str, lane: Option<&str>| {
+            let mut v = serde_json::json!({
+                "type": "agent_message", "message_id": id, "agent_id": agent, "payload": "look",
+                "timestamp": "2026-10-08T00:00:00Z", "delegation_depth": 0,
+            });
+            if let Some(l) = lane {
+                v["lane"] = serde_json::json!(l);
+            }
+            v.to_string()
+        };
+        // Coalescing keeps the two lanes apart.
+        let a: BusMessage = serde_json::from_str(&line("m1", "reader", Some("explore"))).unwrap();
+        let b: BusMessage = serde_json::from_str(&line("m2", "reader", None)).unwrap();
+        let c: BusMessage = serde_json::from_str(&line("m3", "reader", Some("explore"))).unwrap();
+        let merged = coalesce_messages(vec![a.clone(), b.clone(), c]);
+        assert_eq!(merged.len(), 2, "lane and ordinary messages stay separate");
+        assert!(merged.iter().any(|m| m.lane.is_some() && m.payload.contains("[Message 2]")));
+        assert!(merged.iter().any(|m| m.lane.is_none() && m.message_id == "m2"));
+        assert!(serde_json::to_string(&b).unwrap().find("lane").is_none());
+
+        crate::model_call_probe::set_dry_run(true);
+        let queue_path = home.join("bus_queue.jsonl");
+        let registry = Arc::new(RwLock::new(AgentRegistry::new(home.join("agents"))));
+        let mut answered = Vec::new();
+        for (id, agent, lane, expect_call, expect_lane) in [
+            ("l1", "reader", Some("explore"), true, Some(true)),
+            ("l3", "coder", None, true, Some(false)),
+            ("l2", "coder", Some("explore"), false, None),
+        ] {
+            std::fs::write(&queue_path, format!("{}\n", line(id, agent, lane))).unwrap();
+            let before = crate::model_call_probe::calls();
+            poll_and_dispatch(&home, &registry, None, None).await.unwrap();
+            let called = crate::model_call_probe::calls() - before;
+            assert_eq!(called, usize::from(expect_call), "{id}: model call made = {expect_call}");
+            if expect_call {
+                assert_eq!(crate::model_call_probe::last_lane(), expect_lane, "{id}: lane flag");
+            }
+            let content = std::fs::read_to_string(&queue_path).unwrap();
+            answered.push(content.contains(&format!("\"in_reply_to\":\"{id}\"")));
+        }
+        crate::model_call_probe::set_dry_run(false);
+        assert_eq!(answered, vec![true, true, true], "each is answered, the refused one with a failure reply");
     }
 
     /// `[delegation] policy = "open"` is the escape hatch: the same forged line
@@ -3617,7 +4092,10 @@ mod tests {
         // WP21 collateral fix: task-status write-back is the short human
         // notice, not the internal-jargon-laden `message_zh()` text.
         assert!(err.contains("這項委派未執行"), "{err}");
-        assert!(!err.contains("config.toml"), "internal jargon leaked: {err}");
+        assert!(
+            !err.contains("config.toml"),
+            "internal jargon leaked: {err}"
+        );
         assert_eq!(spec.status, TaskStatus::Failed);
         assert_eq!(spec.steps[0].status, StepStatus::Failed);
         // Terminal, not a retry ladder — the relation will not change by waiting.
@@ -3685,6 +4163,8 @@ mod tests {
             coalesced_ids: vec![],
             turn_id: None,
             session_id: None,
+            upstream_unknown: false,
+            lane: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         // None fields with skip_serializing_if should be absent
@@ -3720,7 +4200,9 @@ mod tests {
         let sm = SessionManager::new(&db_path).unwrap();
         sm.get_or_create(session_id, parent_agent).await.unwrap();
         // Seed a user turn so the parent's history isn't empty.
-        sm.append_message(session_id, "user", "parent turn", 5).await.unwrap();
+        sm.append_message(session_id, "user", "parent turn", 5)
+            .await
+            .unwrap();
         (tmp, home)
     }
 
@@ -3737,15 +4219,128 @@ mod tests {
             None,
             "duduclaw-tl",
             "方案 A / B / C — which do you prefer?",
-        ).await;
+        )
+        .await;
 
         // Re-open the session store and verify the turn landed.
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let msgs = sm.get_messages("telegram:42").await.unwrap();
-        assert_eq!(msgs.len(), 2, "expected user turn + appended assistant turn");
+        assert_eq!(
+            msgs.len(),
+            2,
+            "expected user turn + appended assistant turn"
+        );
         assert_eq!(msgs[1].role, "assistant");
         assert!(msgs[1].content.contains("方案 A / B / C"));
         assert!(msgs[1].tokens > 0, "tokens should be estimated > 0");
+    }
+
+    fn sub_agent_redaction_manager(
+        home: &std::path::Path,
+        sources: &str,
+    ) -> std::sync::Arc<duduclaw_redaction::RedactionManager> {
+        let src = format!("enabled = true\nprofiles = [\"general\"]\n[sources]\n{sources}\n");
+        let cfg: duduclaw_redaction::RedactionConfig = toml::from_str(&src).unwrap();
+        std::sync::Arc::new(
+            duduclaw_redaction::RedactionManager::open(
+                cfg,
+                duduclaw_redaction::ManagerPaths::under_home(home),
+            )
+            .unwrap(),
+        )
+    }
+
+    /// RFC-23 `sub_agent = "on"`: a sub-agent reply carrying a value the
+    /// parent's rules match lands in the parent's session as a token, and the
+    /// parent's channel-reply restore (owner, same session) gives it back.
+    #[tokio::test]
+    async fn sub_agent_reply_is_redacted_into_parent_session_and_restores() {
+        let (_tmp, home) = setup_parent_session("telegram:77", "agnes").await;
+        let m = sub_agent_redaction_manager(&home, "sub_agent = \"on\"");
+        append_subagent_reply_to_parent_session_with(
+            &home,
+            "telegram",
+            "77",
+            None,
+            "agnes",
+            None,
+            "duduclaw-tl",
+            "客戶信箱是 alice@example.com",
+            Some(m.clone()),
+        )
+        .await;
+        let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
+        let msgs = sm.get_messages("telegram:77").await.unwrap();
+        let appended = &msgs.last().unwrap().content;
+        assert!(!appended.contains("alice@example.com"), "{appended}");
+        assert!(appended.contains(duduclaw_redaction::token::TOKEN_PREFIX));
+        assert!(appended.starts_with("<subagent_reply agent=\"duduclaw-tl\">"));
+        // Where the parent's reply is restored for its user (owner, session).
+        let restored = crate::redaction_sources::restore_for_user(
+            Some(&m),
+            "agnes",
+            Some("telegram:77"),
+            appended.clone(),
+        );
+        assert!(restored.contains("alice@example.com"), "{restored}");
+    }
+
+    /// Default mode (`inherit`) keeps the turn byte-identical to the
+    /// pre-wiring format, and a failing pass under `on` withholds the body.
+    #[tokio::test]
+    async fn sub_agent_reply_default_is_identical_and_errors_withhold() {
+        let (_tmp, home) = setup_parent_session("telegram:78", "agnes").await;
+        let m = sub_agent_redaction_manager(&home, "");
+        append_subagent_reply_to_parent_session_with(
+            &home,
+            "telegram",
+            "78",
+            None,
+            "agnes",
+            None,
+            "duduclaw-tl",
+            "客戶信箱是 alice@example.com",
+            Some(m),
+        )
+        .await;
+        let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
+        let msgs = sm.get_messages("telegram:78").await.unwrap();
+        assert_eq!(
+            msgs.last().unwrap().content,
+            "<subagent_reply agent=\"duduclaw-tl\">\n客戶信箱是 alice@example.com\n</subagent_reply>"
+        );
+
+        let (_tmp2, home2) = setup_parent_session("telegram:79", "agnes").await;
+        let m2 = sub_agent_redaction_manager(&home2, "sub_agent = \"on\"");
+        let keys = home2.join("redaction/keys");
+        std::fs::create_dir_all(&keys).unwrap();
+        std::fs::write(keys.join("agnes.key"), b"short").unwrap();
+        append_subagent_reply_to_parent_session_with(
+            &home2,
+            "telegram",
+            "79",
+            None,
+            "agnes",
+            None,
+            "duduclaw-tl",
+            "客戶信箱是 alice@example.com",
+            Some(m2),
+        )
+        .await;
+        let sm2 = SessionManager::new(&home2.join("sessions.db")).unwrap();
+        let last = sm2
+            .get_messages("telegram:79")
+            .await
+            .unwrap()
+            .last()
+            .unwrap()
+            .content
+            .clone();
+        assert!(!last.contains("alice@example.com"), "{last}");
+        assert!(
+            last.contains(crate::redaction_sources::SUB_AGENT_REPLY_WITHHELD),
+            "{last}"
+        );
     }
 
     #[tokio::test]
@@ -3761,7 +4356,8 @@ mod tests {
             None,
             "duduclaw-tl",
             "Here are three options.",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let msgs = sm.get_messages("telegram:99").await.unwrap();
@@ -3820,7 +4416,8 @@ mod tests {
             None,
             "duduclaw-tl",
             "reply text",
-        ).await;
+        )
+        .await;
         // Reaching this line == test passes.
     }
 
@@ -3840,7 +4437,8 @@ mod tests {
             None,
             "duduclaw-tl",
             "reply",
-        ).await;
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -3858,7 +4456,8 @@ mod tests {
             None,
             "duduclaw-tl",
             "thread reply",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let msgs = sm.get_messages("discord:thread:9876").await.unwrap();
@@ -3877,11 +4476,12 @@ mod tests {
             "telegram",
             "100",
             None,
-            "agnes",  // ← expected parent, but session belongs to other_agent
-            None,     // no chain root provided
+            "agnes", // ← expected parent, but session belongs to other_agent
+            None,    // no chain root provided
             "duduclaw-tl",
             "should not be appended",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let msgs = sm.get_messages("telegram:100").await.unwrap();
@@ -3910,19 +4510,25 @@ mod tests {
             "discord",
             "555",
             None,
-            "duduclaw-tl",           // parent agent (callback.agent_id) — no session
-            Some("agnes"),           // chain root (message.origin_agent) — has session
+            "duduclaw-tl", // parent agent (callback.agent_id) — no session
+            Some("agnes"), // chain root (message.origin_agent) — has session
             "duduclaw-eng-agent",
             "Engineer report: infrastructure ready",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let msgs = sm.get_messages("discord:thread:555").await.unwrap();
-        assert_eq!(msgs.len(), 2, "engineer reply should land in agnes's session");
+        assert_eq!(
+            msgs.len(),
+            2,
+            "engineer reply should land in agnes's session"
+        );
         assert_eq!(msgs[1].role, "assistant");
         assert!(
             msgs[1].content.contains("Engineer report"),
-            "content preserved: {}", msgs[1].content
+            "content preserved: {}",
+            msgs[1].content
         );
     }
 
@@ -3943,12 +4549,17 @@ mod tests {
             Some("agnes"),
             "duduclaw-eng-infra",
             "infra topology finalised",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let content = sm
-            .get_messages("discord:thread:42").await.unwrap()
-            .pop().unwrap().content;
+            .get_messages("discord:thread:42")
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+            .content;
         assert!(
             content.contains("agent=\"duduclaw-eng-infra\""),
             "responder must be in `agent=...`: {content}"
@@ -3972,16 +4583,21 @@ mod tests {
             "discord",
             "1",
             None,
-            "agnes",          // parent_agent_id == session owner → direct path
-            Some("agnes"),    // chain_root == parent (self-loop)
+            "agnes",       // parent_agent_id == session owner → direct path
+            Some("agnes"), // chain_root == parent (self-loop)
             "duduclaw-tl",
             "dispatch ack",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let content = sm
-            .get_messages("discord:thread:1").await.unwrap()
-            .pop().unwrap().content;
+            .get_messages("discord:thread:1")
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+            .content;
         assert!(content.contains("<subagent_reply agent=\"duduclaw-tl\">"));
         assert!(
             !content.contains("via="),
@@ -4000,16 +4616,18 @@ mod tests {
             "telegram",
             "200",
             None,
-            "duduclaw-tl",       // parent — no session match
-            Some("agnes"),       // chain root — no session match either
+            "duduclaw-tl", // parent — no session match
+            Some("agnes"), // chain root — no session match either
             "duduclaw-eng-agent",
             "leaked content",
-        ).await;
+        )
+        .await;
 
         let sm = SessionManager::new(&home.join("sessions.db")).unwrap();
         let msgs = sm.get_messages("telegram:200").await.unwrap();
         assert_eq!(
-            msgs.len(), 1,
+            msgs.len(),
+            1,
             "third-agent's session must stay untouched (cross-agent bleed guard)"
         );
         assert_eq!(msgs[0].role, "user");
@@ -4058,6 +4676,8 @@ mod tests {
                 coalesced_ids: vec![],
                 turn_id: None,
                 session_id: None,
+                upstream_unknown: false,
+                lane: None,
             },
             BusMessage {
                 msg_type: "agent_message".to_string(),
@@ -4074,6 +4694,8 @@ mod tests {
                 coalesced_ids: vec![],
                 turn_id: None,
                 session_id: None,
+                upstream_unknown: false,
+                lane: None,
             },
         ];
         let coalesced = coalesce_messages(msgs);
@@ -4128,13 +4750,21 @@ bot_token = "{token}"
         write_agent_with_channel_token(tmp.path(), "duduclaw-tl", "discord", "TL_OWN_TOKEN");
         write_agent_with_channel_token(tmp.path(), "agnes", "discord", "AGNES_TOKEN");
         write_global_config(tmp.path(), "discord_bot_token", "GLOBAL_STALE");
-        let config: toml::Value =
-            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap().parse().unwrap();
+        let config: toml::Value = std::fs::read_to_string(tmp.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
 
         let token = resolve_forward_token(
-            tmp.path(), "duduclaw-tl", Some("agnes"), "discord",
-            &config, "discord_bot_token_enc", "discord_bot_token",
-        ).await;
+            tmp.path(),
+            "duduclaw-tl",
+            Some("agnes"),
+            "discord",
+            &config,
+            "discord_bot_token_enc",
+            "discord_bot_token",
+        )
+        .await;
         assert_eq!(token, "TL_OWN_TOKEN");
     }
 
@@ -4147,13 +4777,21 @@ bot_token = "{token}"
         write_agent_with_channel_token(tmp.path(), "agnes", "discord", "AGNES_TOKEN");
         // Intentionally no duduclaw-tl/agent.toml at all.
         write_global_config(tmp.path(), "discord_bot_token", "GLOBAL_STALE_401");
-        let config: toml::Value =
-            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap().parse().unwrap();
+        let config: toml::Value = std::fs::read_to_string(tmp.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
 
         let token = resolve_forward_token(
-            tmp.path(), "duduclaw-tl", Some("agnes"), "discord",
-            &config, "discord_bot_token_enc", "discord_bot_token",
-        ).await;
+            tmp.path(),
+            "duduclaw-tl",
+            Some("agnes"),
+            "discord",
+            &config,
+            "discord_bot_token_enc",
+            "discord_bot_token",
+        )
+        .await;
         assert_eq!(
             token, "AGNES_TOKEN",
             "Nested sub-agent forward should inherit chain-root's per-agent token, \
@@ -4166,13 +4804,21 @@ bot_token = "{token}"
         let tmp = tempfile::tempdir().unwrap();
         // Neither agent has a [channels.discord] block.
         write_global_config(tmp.path(), "discord_bot_token", "GLOBAL_ONLY");
-        let config: toml::Value =
-            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap().parse().unwrap();
+        let config: toml::Value = std::fs::read_to_string(tmp.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
 
         let token = resolve_forward_token(
-            tmp.path(), "duduclaw-tl", Some("agnes"), "discord",
-            &config, "discord_bot_token_enc", "discord_bot_token",
-        ).await;
+            tmp.path(),
+            "duduclaw-tl",
+            Some("agnes"),
+            "discord",
+            &config,
+            "discord_bot_token_enc",
+            "discord_bot_token",
+        )
+        .await;
         assert_eq!(token, "GLOBAL_ONLY");
     }
 
@@ -4183,13 +4829,21 @@ bot_token = "{token}"
         // chain-root tier and go straight to global.
         let tmp = tempfile::tempdir().unwrap();
         write_global_config(tmp.path(), "discord_bot_token", "GLOBAL_TOKEN");
-        let config: toml::Value =
-            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap().parse().unwrap();
+        let config: toml::Value = std::fs::read_to_string(tmp.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
 
         let token = resolve_forward_token(
-            tmp.path(), "agnes", Some("agnes"), "discord",
-            &config, "discord_bot_token_enc", "discord_bot_token",
-        ).await;
+            tmp.path(),
+            "agnes",
+            Some("agnes"),
+            "discord",
+            &config,
+            "discord_bot_token_enc",
+            "discord_bot_token",
+        )
+        .await;
         assert_eq!(token, "GLOBAL_TOKEN");
     }
 
@@ -4200,13 +4854,21 @@ bot_token = "{token}"
         // (no root hop) → global.
         let tmp = tempfile::tempdir().unwrap();
         write_global_config(tmp.path(), "discord_bot_token", "GLOBAL_TOKEN");
-        let config: toml::Value =
-            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap().parse().unwrap();
+        let config: toml::Value = std::fs::read_to_string(tmp.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
 
         let token = resolve_forward_token(
-            tmp.path(), "duduclaw-tl", None, "discord",
-            &config, "discord_bot_token_enc", "discord_bot_token",
-        ).await;
+            tmp.path(),
+            "duduclaw-tl",
+            None,
+            "discord",
+            &config,
+            "discord_bot_token_enc",
+            "discord_bot_token",
+        )
+        .await;
         assert_eq!(token, "GLOBAL_TOKEN");
     }
 
@@ -4229,10 +4891,14 @@ bot_token = "{token}"
             VALUES ('m1','duduclaw-tl','duduclaw-marketing','hi','2026-04-21T12:34:25','agnes');
             INSERT INTO message_queue (id, sender, target, payload, created_at)
             VALUES ('m2','duduclaw-tl','duduclaw-marketing','hi','2026-04-21T12:34:25');",
-        ).unwrap();
+        )
+        .unwrap();
         drop(conn);
 
-        assert_eq!(lookup_origin_agent(tmp.path(), "m1").as_deref(), Some("agnes"));
+        assert_eq!(
+            lookup_origin_agent(tmp.path(), "m1").as_deref(),
+            Some("agnes")
+        );
         assert_eq!(lookup_origin_agent(tmp.path(), "m2"), None);
         assert_eq!(lookup_origin_agent(tmp.path(), "nonexistent"), None);
     }
@@ -4308,14 +4974,16 @@ bot_token = "{token}"
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );",
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO message_queue (id, sender, target, payload, status, \
              response, created_at, completed_at, reply_channel, origin_agent) \
              VALUES (?1, ?2, ?3, 'payload', 'done', ?4, '2026-04-21T12:34:25', \
              '2026-04-21T12:35:48', ?5, ?2)",
             rusqlite::params![id, sender, target, response, reply_channel],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -4323,7 +4991,14 @@ bot_token = "{token}"
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let mid = "peek-test-1";
-        setup_done_message(home, mid, "duduclaw-tl", "duduclaw-marketing", "the report", None);
+        setup_done_message(
+            home,
+            mid,
+            "duduclaw-tl",
+            "duduclaw-marketing",
+            "the report",
+            None,
+        );
 
         let conn = rusqlite::Connection::open(home.join("message_queue.db")).unwrap();
         conn.execute(
@@ -4333,20 +5008,30 @@ bot_token = "{token}"
         ).unwrap();
         drop(conn);
 
-        let peeked = peek_callback(home, mid).await.expect("callback row present");
-        assert_eq!(peeked, (
-            "duduclaw-marketing".to_string(),
-            "telegram".to_string(),
-            "12345".to_string(),
-            Some("7".to_string()),
-        ));
+        let peeked = peek_callback(home, mid)
+            .await
+            .expect("callback row present");
+        assert_eq!(
+            peeked,
+            (
+                "duduclaw-marketing".to_string(),
+                "telegram".to_string(),
+                "12345".to_string(),
+                Some("7".to_string()),
+            )
+        );
 
         // Unlike `forward_delegation_response`'s DELETE RETURNING, the row
         // must still be there — `forward_delegation_response` still needs
         // to consume it later once the response is ready.
-        let count: i64 = rusqlite::Connection::open(home.join("message_queue.db")).unwrap()
-            .query_row("SELECT COUNT(*) FROM delegation_callbacks WHERE message_id=?1",
-                rusqlite::params![mid], |r| r.get(0)).unwrap();
+        let count: i64 = rusqlite::Connection::open(home.join("message_queue.db"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM delegation_callbacks WHERE message_id=?1",
+                rusqlite::params![mid],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1, "peek_callback must not consume the row");
 
         // A message with no registered callback yields None (expected for
@@ -4360,13 +5045,64 @@ bot_token = "{token}"
         assert_eq!(extract_goal_loop_task_id(payload), Some("abc-123"));
 
         // Non-goal-loop payloads (plain send_to_agent messages) yield None.
-        assert_eq!(extract_goal_loop_task_id("just a normal delegation payload"), None);
+        assert_eq!(
+            extract_goal_loop_task_id("just a normal delegation payload"),
+            None
+        );
     }
 
     #[test]
     fn extract_goal_loop_task_id_and_round_parses_both() {
         let payload = "[goal-loop task_id=abc-123 iter=2] 你有一個自主目標任務要推進:\n...";
-        assert_eq!(extract_goal_loop_task_id_and_round(payload), Some(("abc-123", 2)));
+        assert_eq!(
+            extract_goal_loop_task_id_and_round(payload),
+            Some(("abc-123", 2))
+        );
+    }
+
+    #[test]
+    fn goal_evidence_round_falls_back_to_marker_only_without_lookup() {
+        assert_eq!(goal_evidence_round(Some(0), 2), 1);
+        assert_eq!(goal_evidence_round(Some(3), 1), 4);
+        assert_eq!(goal_evidence_round(None, 2), 2);
+    }
+
+    /// FX4: a stall re-dispatch sends marker `iter=2` while the task's
+    /// `revision_round` is still 0. The dispatcher's bridge write must land
+    /// under the key the settle side (`dispatch_engine/review.rs`) takes.
+    #[tokio::test]
+    async fn stall_redispatch_evidence_is_found_by_the_settle_side() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let c = rusqlite::Connection::open(dir.path().join("tasks.db")).unwrap();
+            c.execute_batch(
+                "CREATE TABLE tasks (id TEXT PRIMARY KEY, revision_round INTEGER NOT NULL);
+                 INSERT INTO tasks VALUES ('fx4-stall-task', 0);",
+            )
+            .unwrap();
+        }
+        let payload = "[goal-loop task_id=fx4-stall-task iter=2] 你有一個自主目標任務要推進";
+        let (task_id, marker_iter) = extract_goal_loop_task_id_and_round(payload).unwrap();
+        assert_eq!(marker_iter, 2);
+
+        // Producer side, exactly as the dispatch branch computes it.
+        let revision = lookup_task_revision_round(dir.path(), task_id).await;
+        assert_eq!(revision, Some(0));
+        let round = goal_evidence_round(revision, marker_iter);
+        let event = crate::runtime::NativeToolEvent {
+            tool_name: "Bash".to_string(),
+            success: true,
+            result_text: None,
+            input_text: None,
+        };
+        crate::prediction::task_observe::record_native_evidence(task_id, round, vec![event]);
+
+        // Settle side: `revision_round` is still 0 when the round is reviewed.
+        let settle_round = crate::prediction::task_observe::evidence_round_for_revision(0);
+        let taken = crate::prediction::task_observe::take_native_evidence(task_id, settle_round);
+        assert_eq!(taken.map(|v| v.len()), Some(1));
+        // Nothing was filed under the stale marker ordinal.
+        assert!(crate::prediction::task_observe::take_native_evidence(task_id, 2).is_none());
     }
 
     #[test]
@@ -4425,10 +5161,18 @@ bot_token = "{token}"
         row2.source_channel = None;
         row2.source_chat_id = None;
         store.insert_task(&row2).await.expect("insert task");
-        assert!(lookup_task_source_channel(home, "plain-task-1").await.is_none());
+        assert!(
+            lookup_task_source_channel(home, "plain-task-1")
+                .await
+                .is_none()
+        );
 
         // Unknown task id yields None.
-        assert!(lookup_task_source_channel(home, "no-such-task").await.is_none());
+        assert!(
+            lookup_task_source_channel(home, "no-such-task")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -4436,7 +5180,14 @@ bot_token = "{token}"
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let mid = "78fbcfc8-735b-4053-9ee0-a03543fd904f";
-        setup_done_message(home, mid, "duduclaw-tl", "duduclaw-marketing", "the report", None);
+        setup_done_message(
+            home,
+            mid,
+            "duduclaw-tl",
+            "duduclaw-marketing",
+            "the report",
+            None,
+        );
 
         // A live callback exists (the dispatcher re-inserted it after the
         // HTTP POST got 401). Dry-run should surface it without mutating
@@ -4451,7 +5202,12 @@ bot_token = "{token}"
 
         let outcome = reforward_message(home, mid, true).await.expect("dry-run");
         match outcome {
-            ReforwardOutcome::DryRun { channel_type, channel_id, thread_id, has_existing_callback } => {
+            ReforwardOutcome::DryRun {
+                channel_type,
+                channel_id,
+                thread_id,
+                has_existing_callback,
+            } => {
                 assert_eq!(channel_type, "discord");
                 assert_eq!(channel_id, "1496095418805780591");
                 assert_eq!(thread_id, None);
@@ -4461,9 +5217,14 @@ bot_token = "{token}"
         }
 
         // Dry-run must NOT have consumed the callback.
-        let count: i64 = rusqlite::Connection::open(home.join("message_queue.db")).unwrap()
-            .query_row("SELECT COUNT(*) FROM delegation_callbacks WHERE message_id=?1",
-                rusqlite::params![mid], |r| r.get(0)).unwrap();
+        let count: i64 = rusqlite::Connection::open(home.join("message_queue.db"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM delegation_callbacks WHERE message_id=?1",
+                rusqlite::params![mid],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1, "dry-run must not touch delegation_callbacks");
     }
 
@@ -4477,13 +5238,22 @@ bot_token = "{token}"
         let home = tmp.path();
         let mid = "m1";
         setup_done_message(
-            home, mid, "duduclaw-tl", "duduclaw-marketing", "the report",
+            home,
+            mid,
+            "duduclaw-tl",
+            "duduclaw-marketing",
+            "the report",
             Some("discord:thread:1496095418805780591"),
         );
 
         let outcome = reforward_message(home, mid, true).await.expect("dry-run");
         match outcome {
-            ReforwardOutcome::DryRun { channel_type, channel_id, has_existing_callback, .. } => {
+            ReforwardOutcome::DryRun {
+                channel_type,
+                channel_id,
+                has_existing_callback,
+                ..
+            } => {
                 assert_eq!(channel_type, "discord");
                 assert_eq!(channel_id, "1496095418805780591");
                 assert!(!has_existing_callback);
@@ -4510,12 +5280,14 @@ bot_token = "{token}"
                 created_at TEXT NOT NULL, acked_at TEXT, completed_at TEXT,
                 reply_channel TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO message_queue (id, sender, target, payload, status, created_at) \
              VALUES (?1, 'a', 'b', 'p', 'pending', '2026-01-01T00:00:00Z')",
             rusqlite::params![mid],
-        ).unwrap();
+        )
+        .unwrap();
         drop(conn);
 
         let err = reforward_message(home, mid, true).await.unwrap_err();
@@ -4526,7 +5298,9 @@ bot_token = "{token}"
     async fn reforward_rejects_missing_message() {
         let tmp = tempfile::tempdir().unwrap();
         setup_done_message(tmp.path(), "exists", "a", "b", "hi", None);
-        let err = reforward_message(tmp.path(), "does-not-exist", true).await.unwrap_err();
+        let err = reforward_message(tmp.path(), "does-not-exist", true)
+            .await
+            .unwrap_err();
         assert!(err.contains("No message with id"), "got: {err}");
     }
 
@@ -4545,7 +5319,10 @@ bot_token = "{token}"
         let tmp = tempfile::tempdir().unwrap();
         setup_done_message(tmp.path(), "m1", "a", "b", "ok", None);
         let err = reforward_message(tmp.path(), "m1", true).await.unwrap_err();
-        assert!(err.contains("Cannot determine where to forward"), "got: {err}");
+        assert!(
+            err.contains("Cannot determine where to forward"),
+            "got: {err}"
+        );
     }
 
     // ── WP-OS: proactive_notification consumption ──
@@ -4609,7 +5386,14 @@ bot_token = "{token}"
         // Control: with no config.toml the forward fails loudly, proving the
         // test actually reaches the send path.
         let control = forward_to_channel(
-            dir.path(), "telegram", "12345", None, "回報", "bob", "alice", None,
+            dir.path(),
+            "telegram",
+            "12345",
+            None,
+            "回報",
+            "bob",
+            "alice",
+            None,
         )
         .await;
         assert!(control.is_err(), "control: unconfigured forward must error");
@@ -4617,7 +5401,14 @@ bot_token = "{token}"
         begin_takeover(dir.path(), "telegram", "12345");
         assert!(
             forward_to_channel(
-                dir.path(), "telegram", "12345", None, "回報", "bob", "alice", None,
+                dir.path(),
+                "telegram",
+                "12345",
+                None,
+                "回報",
+                "bob",
+                "alice",
+                None,
             )
             .await
             .is_ok(),
@@ -4631,11 +5422,20 @@ bot_token = "{token}"
         // Holding the parent chat also holds forwards addressed at a thread
         // inside it — the safe direction is silence.
         begin_takeover(dir.path(), "telegram", "12345");
-        assert!(forward_to_channel(
-            dir.path(), "telegram", "12345", Some("77"), "回報", "bob", "alice", None,
-        )
-        .await
-        .is_ok());
+        assert!(
+            forward_to_channel(
+                dir.path(),
+                "telegram",
+                "12345",
+                Some("77"),
+                "回報",
+                "bob",
+                "alice",
+                None,
+            )
+            .await
+            .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -4644,11 +5444,149 @@ bot_token = "{token}"
         begin_takeover(dir.path(), "telegram", "12345");
         assert!(
             forward_to_channel(
-                dir.path(), "telegram", "99999", None, "回報", "bob", "alice", None,
+                dir.path(),
+                "telegram",
+                "99999",
+                None,
+                "回報",
+                "bob",
+                "alice",
+                None,
             )
             .await
             .is_err(),
             "a takeover must not mute unrelated conversations"
         );
+    }
+
+    // ── delegation failure reply (task sandbox vs. ordinary errors) ──
+
+    fn sandbox_spec(home: &std::path::Path) -> crate::task_sandbox::TaskSpec {
+        crate::task_sandbox::TaskSpec {
+            agent_id: "worker".into(),
+            agent_dir: home.join("agents/worker"),
+            runtime: duduclaw_core::types::RuntimeType::Claude,
+            model: "claude-sonnet-4-6".into(),
+            system_prompt: String::new(),
+            prompt: "hi".into(),
+            network_access: true,
+            timeout: std::time::Duration::from_secs(60),
+            disallowed_tools: vec![],
+            explicit_denied_tools: vec![],
+            account_pool: vec![],
+        }
+    }
+
+    /// The live defect: a missing sandbox image reached the requester as
+    /// 「未知錯誤」. The reply now carries the reason code and the remedy.
+    #[test]
+    fn sandbox_unavailable_reaches_the_reply_with_code_and_remedy() {
+        use crate::task_sandbox::{SandboxDispatch, SandboxError, Unavailable, settings::WhenUnavailable};
+        let home = tempfile::tempdir().unwrap();
+        let image = "ghcr.io/zhixuli0406/duduclaw:1.66.1";
+        let outcome = crate::task_sandbox::settle(
+            home.path(),
+            &sandbox_spec(home.path()),
+            WhenUnavailable::Fail,
+            Err(SandboxError::Unavailable(Unavailable::ImageMissing(image.into()))),
+        );
+        let SandboxDispatch::Completed(Err(failure)) = outcome else { panic!("expected a failed task") };
+        let reply = dispatch_failure_reply(&DispatchError::Sandbox(failure));
+        assert!(reply.starts_with("⚠️ 子任務未執行（任務沙箱）："), "{reply}");
+        assert!(reply.contains("Task sandbox unavailable (image_missing)"), "{reply}");
+        assert!(reply.contains(&format!("docker pull {image}")), "{reply}");
+        assert!(!reply.contains("未知錯誤"), "{reply}");
+    }
+
+    /// A run failure forwards only the operator-safe message: the
+    /// CLI-derived detail stays in host records.
+    #[test]
+    fn sandbox_run_failure_reply_keeps_cli_detail_on_the_host() {
+        use crate::task_sandbox::{SandboxFailure, failure_code};
+        let failure = SandboxFailure::failed(
+            failure_code::AUTH_FAILED,
+            "authentication failed: the claude provider rejected the credential of account `acc-1`",
+        )
+        .with_detail("401 at /Users/someone/.duduclaw/agents/worker");
+        let error = DispatchError::Sandbox(failure);
+        let reply = dispatch_failure_reply(&error);
+        assert!(reply.starts_with("⚠️ 子任務失敗（任務沙箱，auth_failed）：authentication failed"), "{reply}");
+        assert!(!reply.contains("/Users/someone"), "{reply}");
+        assert!(error.host_text().contains("/Users/someone"), "host records keep the detail");
+    }
+
+    /// Ordinary CLI errors keep the classified fallback, never the raw text —
+    /// including one that merely mentions the sandbox (no text matching).
+    #[test]
+    fn ordinary_dispatch_error_keeps_the_generic_label() {
+        for raw in [
+            "claude exited 1: stderr at /Users/someone/.duduclaw/agents/worker/secret.txt",
+            "Task sandbox unavailable (image_missing): run `docker pull evil`",
+        ] {
+            let reply = dispatch_failure_reply(&DispatchError::Other(raw.into()));
+            assert_eq!(reply, "⚠️ 子任務處理失敗：未知錯誤。請稍後再試或改寫指令。", "{raw}");
+        }
+        let reply = dispatch_failure_reply(&DispatchError::Other("hard timeout after 300s".into()));
+        assert_eq!(reply, "⚠️ 子任務處理失敗：處理超時。請稍後再試或改寫指令。");
+    }
+
+    /// One explore lane, two sources: a responsibility round's contract lane
+    /// and an external-event message lane resolve to the same flag, and an
+    /// employee whose runtime cannot carry it is refused for either source.
+    #[tokio::test]
+    async fn both_lane_sources_set_one_flag_and_share_the_runtime_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let write = |id: &str, body: &str| {
+            let a = home.join("agents").join(id);
+            std::fs::create_dir_all(&a).unwrap();
+            std::fs::write(a.join("agent.toml"), body).unwrap();
+        };
+        write("claude", "[agent]\nname = \"claude\"\n");
+        write(
+            "compat",
+            "[agent]\nname = \"compat\"\n[runtime]\nprovider = \"openai-compat\"\n",
+        );
+        write("codex", "[agent]\nname = \"codex\"\n[runtime]\nprovider = \"codex\"\n");
+        write("gemini", "[agent]\nname = \"gemini\"\n[runtime]\nprovider = \"gemini\"\n");
+        write(
+            "boxed",
+            "[agent]\nname = \"boxed\"\n[container]\nsandbox_enabled = true\n",
+        );
+
+        // Neither source ⇒ normal lane, whatever the runtime.
+        assert_eq!(resolve_dispatch_lane(home, "gemini", Ok(false), None), Ok(false));
+        // Each source alone puts a supported runtime in the lane.
+        for agent in ["claude", "compat", "codex"] {
+            assert_eq!(resolve_dispatch_lane(home, agent, Ok(true), None), Ok(true));
+            assert_eq!(
+                resolve_dispatch_lane(home, agent, Ok(false), Some("explore")),
+                Ok(true)
+            );
+        }
+        // Each source refuses an unsupported runtime and a sandboxed employee.
+        for agent in ["gemini", "boxed"] {
+            for (resp, lane) in [(Ok(true), None), (Ok(false), Some("explore"))] {
+                let err = resolve_dispatch_lane(home, agent, resp, lane).unwrap_err();
+                assert!(err.starts_with("explore_lane_unsupported"), "{agent}: {err}");
+            }
+        }
+        // An unreadable responsibility lane fails closed even with no message lane.
+        assert!(resolve_dispatch_lane(home, "claude", Err("x".into()), None).is_err());
+
+        // The resolved value is the one task-local every spawn reads.
+        for (resp, lane) in [(Ok(true), None), (Ok(false), Some("explore"))] {
+            let v = resolve_dispatch_lane(home, "claude", resp, lane).unwrap();
+            let seen = crate::explore_lane::EXPLORE
+                .scope(v, async {
+                    (
+                        crate::explore_lane::in_explore(),
+                        crate::explore_lane::lane_env().is_some(),
+                        crate::explore_lane::refuse_unsupported_runtime("gemini").is_err(),
+                    )
+                })
+                .await;
+            assert_eq!(seen, (true, true, true));
+        }
     }
 }

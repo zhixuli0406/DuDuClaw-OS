@@ -27,10 +27,34 @@
 //! Identity of "our" hook entry is tracked by the `"_duduclaw_hook"` tag
 //! on the hook descriptor, so the installer can update the command path
 //! without leaving stale duplicates behind.
+//!
+//! # Second hook: `data-file-guard` (RFC-23 §14.4)
+//!
+//! The same installer also registers `duduclaw hook data-file-guard` as a
+//! PreToolUse hook for `Read` and `Bash`. Where `agent-file-guard` protects
+//! DuDuClaw's own structure files, this one protects the *customer's* data:
+//! `Read`/`Bash` are built-in tools, so a CSV read through them never passes
+//! the MCP redaction choke point. The hook is inert unless the gateway sets
+//! `DUDUCLAW_DATA_FILE_GUARD` at spawn time, which it only does when redaction
+//! is actually active for that agent — so an install on a gateway with
+//! redaction off changes no behavior at all.
+//!
+//! Two tagged entries now share `hooks.PreToolUse`, distinguished by the
+//! `_duduclaw_hook` value ([`HOOK_ID`] vs [`DATA_FILE_HOOK_ID`]); the merge is
+//! per-entry, so a user's own hooks and the other tagged entry are never
+//! disturbed.
+//!
+//! **H10 (2026-09 feature audit)**: this used to be a POSIX shell script
+//! dropped at `<agent_dir>/.claude/hooks/data-file-guard.sh`, which was inert
+//! on a Windows host with no bash on PATH — the hook command failed and Claude
+//! Code treats a non-2 exit as allow, so the guard was missing exactly where
+//! nobody would notice. It is now the same kind of Rust subcommand
+//! `agent-file-guard` has always been, and the installer deletes any leftover
+//! script on upgrade so a stale copy cannot be mistaken for the live guard.
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 /// Tag embedded in the hook descriptor so we can find + update our own
@@ -39,6 +63,18 @@ const HOOK_TAG: &str = "_duduclaw_hook";
 
 /// Sentinel value identifying the agent-file-guard hook specifically.
 const HOOK_ID: &str = "agent-file-guard";
+
+/// Tools the agent-file-guard hook sees. `NotebookEdit` joined in G1 round 2:
+/// it writes any `.ipynb` path (including through a link), and the hook judges
+/// its `notebook_path` like a Write.
+const AGENT_FILE_GUARD_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
+
+/// Sentinel for the RFC-23 §14.4 data-file guard entry.
+const DATA_FILE_HOOK_ID: &str = "data-file-guard";
+
+/// The pre-H10 shell script's filename, kept only so an upgrade can delete
+/// the leftover file. Nothing writes it any more.
+const LEGACY_DATA_FILE_HOOK_SCRIPT: &str = "data-file-guard.sh";
 
 /// Ensure `<agent_dir>/.claude/settings.json` contains the agent-file-guard
 /// PreToolUse hook pointing at `duduclaw_bin`.
@@ -101,10 +137,22 @@ pub async fn ensure_agent_hook_settings(
         .and_then(|n| n.to_str())
         .unwrap_or_default();
 
-    // Merge our hook descriptor into hooks.PreToolUse.
-    let updated = merge_agent_file_guard_hook(&mut root, duduclaw_bin, agent_id);
+    // H10 — remove the pre-H10 shell script if this agent still carries one.
+    // It is no longer referenced by any hook entry, and leaving it on disk
+    // invites someone to "fix" the guard by editing a file that does nothing.
+    remove_legacy_data_file_guard_script(agent_dir).await;
+
+    // Merge our hook descriptors into hooks.PreToolUse. Both run: a `false`
+    // from either only means "already up to date".
+    // G1 round 2 — the agent's CLI runs with a scrubbed environment that has
+    // no `DUDUCLAW_HOME`, so the hook would fall back to `$HOME/.duduclaw`.
+    // The home is derived from the agent directory and baked in as `--home`.
+    let home = home_of_agent_dir(agent_dir);
+    let mut updated =
+        merge_agent_file_guard_hook(&mut root, duduclaw_bin, agent_id, home.as_deref());
+    updated |= merge_data_file_guard_hook(&mut root, duduclaw_bin);
     if !updated {
-        debug!(path = %settings_path.display(), "Hook already up to date");
+        debug!(path = %settings_path.display(), "Hooks already up to date");
         return Ok(());
     }
 
@@ -113,17 +161,98 @@ pub async fn ensure_agent_hook_settings(
         tokio::fs::create_dir_all(parent).await?;
     }
     let tmp = settings_path.with_extension("json.tmp");
-    let pretty = serde_json::to_string_pretty(&root)
-        .unwrap_or_else(|_| "{}".to_string());
+    let pretty = serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string());
     tokio::fs::write(&tmp, pretty).await?;
     tokio::fs::rename(&tmp, &settings_path).await?;
 
     debug!(
         path = %settings_path.display(),
         bin = %duduclaw_bin.display(),
-        "Installed agent-file-guard PreToolUse hook"
+        "Installed agent-file-guard + data-file-guard PreToolUse hooks"
     );
     Ok(())
+}
+
+/// Delete a leftover pre-H10 `data-file-guard.sh` (and the now-empty
+/// `.claude/hooks/` directory, if we emptied it).
+///
+/// Best-effort and silent on absence — the overwhelmingly common case is a
+/// fresh agent that never had one.
+async fn remove_legacy_data_file_guard_script(agent_dir: &Path) {
+    let hooks_dir = agent_dir.join(".claude").join("hooks");
+    let script = hooks_dir.join(LEGACY_DATA_FILE_HOOK_SCRIPT);
+    if tokio::fs::try_exists(&script).await.unwrap_or(false) {
+        match tokio::fs::remove_file(&script).await {
+            Ok(()) => debug!(
+                path = %script.display(),
+                "Removed the legacy data-file-guard shell script (superseded by `duduclaw hook data-file-guard`)"
+            ),
+            Err(e) => warn!(
+                path = %script.display(),
+                error = %e,
+                "Could not remove the legacy data-file-guard script — it is unused, but should be deleted by hand"
+            ),
+        }
+    }
+    // Only succeeds when the directory is empty, which is exactly the
+    // condition under which removing it is safe.
+    let _ = tokio::fs::remove_dir(&hooks_dir).await;
+}
+
+/// Merge the RFC-23 §14.4 data-file-guard descriptor into
+/// `root["hooks"]["PreToolUse"]`, matched on `Read|Bash`.
+///
+/// Structurally identical to [`merge_agent_file_guard_hook`] but keyed on its
+/// own [`DATA_FILE_HOOK_ID`], so the two entries coexist and each upgrades
+/// independently. Since H10 both point at the same `duduclaw` binary — the
+/// difference is only which subcommand runs.
+fn merge_data_file_guard_hook(root: &mut Value, duduclaw_bin: &Path) -> bool {
+    let Some(arr) = pre_tool_use_array(root) else {
+        return false;
+    };
+    let desired_entry = json!({
+        HOOK_TAG: DATA_FILE_HOOK_ID,
+        // Read is the direct route to a data file; Bash is the way around it
+        // (`head customers.csv`). Write/Edit are deliberately absent — this
+        // guard is about reading customer data, not about writing files.
+        "matcher": "Read|Bash",
+        "hooks": [{
+            "type": "command",
+            "command": format!("\"{}\" hook data-file-guard", duduclaw_bin.display()),
+        }]
+    });
+    for item in arr.iter_mut() {
+        if item.get(HOOK_TAG).and_then(|v| v.as_str()) == Some(DATA_FILE_HOOK_ID) {
+            if item == &desired_entry {
+                return false;
+            }
+            *item = desired_entry;
+            return true;
+        }
+    }
+    arr.push(desired_entry);
+    true
+}
+
+/// Get `root["hooks"]["PreToolUse"]` as an array, creating (and repairing) the
+/// containers on the way down. `None` only when `root` is not an object.
+fn pre_tool_use_array(root: &mut Value) -> Option<&mut Vec<Value>> {
+    let hooks = root
+        .as_object_mut()?
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+    if !hooks.is_object() {
+        *hooks = json!({});
+    }
+    let pre_tool_use = hooks
+        .as_object_mut()
+        .expect("just normalized to an object")
+        .entry("PreToolUse")
+        .or_insert_with(|| json!([]));
+    if !pre_tool_use.is_array() {
+        *pre_tool_use = json!([]);
+    }
+    pre_tool_use.as_array_mut()
 }
 
 /// Merge the hook descriptor into `root["hooks"]["PreToolUse"]`.
@@ -139,47 +268,30 @@ pub async fn ensure_agent_hook_settings(
 /// it against `desired_entry` for byte-for-byte equality. An old-format
 /// command never equals the new `--agent`-suffixed one, so the existing
 /// "found but different → overwrite in place" branch upgrades it for free.
-fn merge_agent_file_guard_hook(root: &mut Value, duduclaw_bin: &Path, agent_id: &str) -> bool {
-    let hooks = root
-        .as_object_mut()
-        .expect("root must be object — checked by caller")
-        .entry("hooks")
-        .or_insert_with(|| json!({}));
-
-    if !hooks.is_object() {
-        *hooks = json!({});
-    }
-
-    let pre_tool_use = hooks
-        .as_object_mut()
-        .unwrap()
-        .entry("PreToolUse")
-        .or_insert_with(|| json!([]));
-
-    if !pre_tool_use.is_array() {
-        *pre_tool_use = json!([]);
-    }
-
-    let desired_command = build_hook_command(duduclaw_bin, agent_id);
+fn merge_agent_file_guard_hook(
+    root: &mut Value,
+    duduclaw_bin: &Path,
+    agent_id: &str,
+    home: Option<&Path>,
+) -> bool {
+    let desired_command = build_hook_command(duduclaw_bin, agent_id, home);
     // Bash is included so the guard can catch agents that bypass Write/Edit
     // by running `mkdir -p /project/.claude/agents/foo` or `cat > .../agent.toml`
     // via the shell. The CLI handler dispatches on tool name internally.
     let desired_entry = json!({
         HOOK_TAG: HOOK_ID,
-        "matcher": "Write|Edit|MultiEdit|Bash",
+        "matcher": AGENT_FILE_GUARD_MATCHER,
         "hooks": [{
             "type": "command",
             "command": desired_command,
         }]
     });
 
-    let arr = pre_tool_use.as_array_mut().unwrap();
+    let Some(arr) = pre_tool_use_array(root) else {
+        return false;
+    };
     for item in arr.iter_mut() {
-        if item
-            .get(HOOK_TAG)
-            .and_then(|v| v.as_str())
-            == Some(HOOK_ID)
-        {
+        if item.get(HOOK_TAG).and_then(|v| v.as_str()) == Some(HOOK_ID) {
             if item == &desired_entry {
                 return false; // already up to date
             }
@@ -209,18 +321,58 @@ fn merge_agent_file_guard_hook(root: &mut Value, duduclaw_bin: &Path, agent_id: 
 /// or malformed directory name (should not happen for a real agent directory)
 /// falls back to the pre-T2 command rather than injecting an unquoted-looking
 /// oddity, which is no worse than the previous inert state.
-fn build_hook_command(duduclaw_bin: &Path, agent_id: &str) -> String {
+///
+/// # G1 round 2 — `--home`
+///
+/// `home` (when known and absolute) is appended as `--home "<path>"`, or
+/// single-quoted when it holds a character that is special inside double
+/// quotes. A non-UTF-8 home is left out; the hook then infers the home from
+/// its working directory or refuses an employee caller.
+/// An upgrade needs no special case: the existing "found but different →
+/// overwrite in place" branch rewrites an entry without it on the next
+/// `ensure_agent_hook_settings` call (every spawn and every boot).
+fn build_hook_command(duduclaw_bin: &Path, agent_id: &str, home: Option<&Path>) -> String {
     // Claude Code hook commands are executed via the user's shell, so
     // quote both the binary path and the agent id defensively — the path
     // may contain spaces, and the id, while already validated, gets the
     // same treatment on general principle (defense in depth, not because
     // `is_valid_agent_id` currently allows anything shell-special).
-    let base = format!("\"{}\" hook agent-file-guard", duduclaw_bin.display());
+    let mut cmd = format!("\"{}\" hook agent-file-guard", duduclaw_bin.display());
     if duduclaw_core::is_valid_agent_id(agent_id) {
-        format!("{base} --agent \"{agent_id}\"")
-    } else {
-        base
+        cmd.push_str(&format!(" --agent \"{agent_id}\""));
     }
+    if let Some(h) = home.filter(|h| h.is_absolute()).and_then(|h| h.to_str()) {
+        if h.chars().any(|c| matches!(c, '"' | '$' | '`' | '\\' | '\n' | '\r' | '\'')) {
+            // POSIX single quotes take everything literally; a `'` inside is
+            // closed, escaped and reopened. Never omitted (round 3): without
+            // `--home` the hook would have to infer the home.
+            cmd.push_str(&format!(" --home '{}'", h.replace('\'', "'\\''")));
+        } else {
+            cmd.push_str(&format!(" --home \"{h}\""));
+        }
+    }
+    cmd
+}
+
+/// `<home>` for `<home>/agents/<id>` or `<home>/agents/.ephemeral/<id>`;
+/// `None` for any other shape.
+fn home_of_agent_dir(agent_dir: &Path) -> Option<PathBuf> {
+    let parent = agent_dir.parent()?;
+    let agents = if parent
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case(".ephemeral"))
+    {
+        parent.parent()?
+    } else {
+        parent
+    };
+    if !agents
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case("agents"))
+    {
+        return None;
+    }
+    agents.parent().map(Path::to_path_buf)
 }
 
 /// Resolve the absolute path to the currently running `duduclaw` binary.
@@ -246,7 +398,9 @@ mod tests {
     async fn creates_settings_when_absent() {
         let tmp = tempfile::tempdir().unwrap();
         let agent_dir = tmp.path().join("myagent");
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
 
         let settings: Value = serde_json::from_str(
             &std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap(),
@@ -257,9 +411,13 @@ mod tests {
             .pointer("/hooks/PreToolUse")
             .and_then(|v| v.as_array())
             .expect("PreToolUse must be array");
-        assert_eq!(arr.len(), 1);
+        // Two tagged entries since RFC-23 §14.4: agent-file-guard first,
+        // data-file-guard appended after it.
+        assert_eq!(arr.len(), 2);
         assert_eq!(arr[0][HOOK_TAG], HOOK_ID);
-        assert_eq!(arr[0]["matcher"], "Write|Edit|MultiEdit|Bash");
+        assert_eq!(arr[0]["matcher"], "Write|Edit|MultiEdit|NotebookEdit|Bash");
+        assert_eq!(arr[1][HOOK_TAG], DATA_FILE_HOOK_ID);
+        assert_eq!(arr[1]["matcher"], "Read|Bash");
         let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("hook agent-file-guard"));
         // WP22 T2 — the agent directory's own basename is baked into the
@@ -291,7 +449,9 @@ mod tests {
         )
         .unwrap();
 
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
 
         let settings: Value = serde_json::from_str(
             &std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap(),
@@ -303,19 +463,24 @@ mod tests {
 
         // Both hooks present.
         let arr = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(arr.len(), 2);
+        assert_eq!(arr.len(), 3, "user hook + our two");
         assert_eq!(arr[0]["matcher"], "Bash", "user hook must come first");
         assert_eq!(arr[1][HOOK_TAG], HOOK_ID, "our hook must be appended");
+        assert_eq!(arr[2][HOOK_TAG], DATA_FILE_HOOK_ID);
     }
 
     #[tokio::test]
     async fn is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let agent_dir = tmp.path().join("myagent");
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
         let first = std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap();
 
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
         let second = std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap();
 
         assert_eq!(first, second, "second run must not mutate the file");
@@ -342,7 +507,7 @@ mod tests {
         .unwrap();
 
         let arr = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(arr.len(), 1, "must not duplicate our tagged entry");
+        assert_eq!(arr.len(), 2, "must not duplicate our tagged entries");
         let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("/new/path/duduclaw"));
         assert!(!cmd.contains("/old/path/duduclaw"));
@@ -360,7 +525,9 @@ mod tests {
         .unwrap();
 
         // Must not panic, must not overwrite with `{}`.
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap();
         assert_eq!(content.trim(), "[1, 2, 3]", "corrupt file left untouched");
@@ -371,14 +538,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let agent_dir = tmp.path().join("myagent");
         std::fs::create_dir_all(agent_dir.join(".claude")).unwrap();
-        std::fs::write(
-            agent_dir.join(".claude/settings.json"),
-            "{ not valid json",
-        )
-        .unwrap();
+        std::fs::write(agent_dir.join(".claude/settings.json"), "{ not valid json").unwrap();
 
         // Must not panic.
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap();
         assert_eq!(content, "{ not valid json", "invalid file left untouched");
@@ -386,7 +551,7 @@ mod tests {
 
     #[test]
     fn build_hook_command_quotes_path() {
-        let cmd = build_hook_command(Path::new("/path with spaces/duduclaw"), "myagent");
+        let cmd = build_hook_command(Path::new("/path with spaces/duduclaw"), "myagent", None);
         assert!(cmd.starts_with('"'));
         assert!(cmd.contains("/path with spaces/duduclaw"));
         assert!(cmd.contains("hook agent-file-guard"));
@@ -394,7 +559,7 @@ mod tests {
 
     #[test]
     fn build_hook_command_quotes_the_agent_id_too() {
-        let cmd = build_hook_command(Path::new("/usr/local/bin/duduclaw"), "sales-rep");
+        let cmd = build_hook_command(Path::new("/usr/local/bin/duduclaw"), "sales-rep", None);
         assert!(cmd.contains("--agent \"sales-rep\""), "command: {cmd}");
     }
 
@@ -405,7 +570,7 @@ mod tests {
         // shell command) fall back to the pre-T2 shape — no worse than the
         // inert state this fix replaces.
         for bad_id in ["", "has spaces", "has/slash", "semi;colon"] {
-            let cmd = build_hook_command(Path::new("/usr/local/bin/duduclaw"), bad_id);
+            let cmd = build_hook_command(Path::new("/usr/local/bin/duduclaw"), bad_id, None);
             assert!(!cmd.contains("--agent"), "id={bad_id:?} cmd={cmd}");
             assert!(cmd.contains("hook agent-file-guard"));
         }
@@ -437,28 +602,36 @@ mod tests {
         )
         .unwrap();
 
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
 
         let settings: Value = serde_json::from_str(
             &std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap(),
         )
         .unwrap();
         let arr = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(arr.len(), 1, "must upgrade in place, not append a duplicate");
+        assert_eq!(
+            arr.len(),
+            2,
+            "must upgrade in place (+ the §14.4 entry), not append a duplicate"
+        );
         let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("--agent \"myagent\""), "command: {cmd}");
     }
 
     #[tokio::test]
-    async fn installed_hook_command_carries_the_agent_flag_and_the_settings_file_is_a_protected_surface(
-    ) {
+    async fn installed_hook_command_carries_the_agent_flag_and_the_settings_file_is_a_protected_surface()
+     {
         // Integration assertion tying WP22 T2's two halves together: the
         // installed command self-identifies, AND the file that carries it
         // cannot be rewritten by the agent it names (frozen outright by
         // `ProtectedSurface::HookSettings`).
         let home = tempfile::tempdir().unwrap();
         let agent_dir = home.path().join("agents").join("sales-rep");
-        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
 
         let settings_path = agent_dir.join(".claude/settings.json");
         let settings: Value =
@@ -473,4 +646,168 @@ mod tests {
             Some(duduclaw_core::ProtectedSurface::HookSettings),
         );
     }
+
+    // ── G1 round 2: `--home` and NotebookEdit ─────────────────────────────
+
+    #[tokio::test]
+    async fn installed_command_carries_the_home_and_upgrades_an_entry_without_it() {
+        let home = tempfile::tempdir().unwrap();
+        let agent_dir = home.path().join("agents").join("sales-rep");
+        std::fs::create_dir_all(agent_dir.join(".claude")).unwrap();
+        // An entry from the previous release: `--agent`, no `--home`, old matcher.
+        let stale = json!({"hooks": {"PreToolUse": [{
+            HOOK_TAG: HOOK_ID,
+            "matcher": "Write|Edit|MultiEdit|Bash",
+            "hooks": [{"type": "command",
+                "command": "\"/usr/local/bin/duduclaw\" hook agent-file-guard --agent \"sales-rep\""}]
+        }]}});
+        std::fs::write(
+            agent_dir.join(".claude/settings.json"),
+            serde_json::to_string_pretty(&stale).unwrap(),
+        )
+        .unwrap();
+        ensure_agent_hook_settings(&agent_dir, &fake_bin()).await.unwrap();
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let arr = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 2, "upgraded in place");
+        assert_eq!(arr[0]["matcher"], AGENT_FILE_GUARD_MATCHER);
+        let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+        // A Windows temp dir (`C:\Users\…\Temp\…`) holds backslashes, which
+        // `build_hook_command` single-quotes; a Unix temp dir has none of the
+        // special characters and is double-quoted.
+        let h = home.path().to_str().unwrap();
+        let expected = if h.contains('\\') {
+            format!("--home '{h}'")
+        } else {
+            format!("--home \"{h}\"")
+        };
+        assert!(cmd.contains(&expected), "command: {cmd}");
+        assert!(cmd.contains("--agent \"sales-rep\""), "command: {cmd}");
+    }
+
+    #[test]
+    fn home_is_derived_for_regular_and_ephemeral_agent_dirs_only() {
+        assert_eq!(
+            home_of_agent_dir(Path::new("/h/.duduclaw/agents/x")),
+            Some(PathBuf::from("/h/.duduclaw"))
+        );
+        assert_eq!(
+            home_of_agent_dir(Path::new("/h/.duduclaw/agents/.ephemeral/eph-1")),
+            Some(PathBuf::from("/h/.duduclaw"))
+        );
+        assert_eq!(home_of_agent_dir(Path::new("/tmp/myagent")), None);
+    }
+
+    #[test]
+    fn home_with_shell_special_characters_is_quoted_not_left_out() {
+        // Only an absolute home is written, and `/h/…` has no drive on
+        // Windows, so the root is `C:/h` there (forward slashes, so no
+        // backslash adds a quoting reason the case does not name).
+        let root = if cfg!(windows) { "C:/h" } else { "/h" };
+        for (bad, quoted) in [
+            ("a\"b", "a\"b'"),
+            ("$HOME", "$HOME'"),
+            ("`x`", "`x`'"),
+            ("it's", "it'\\''s'"),
+            // The separator of a Windows path.
+            ("a\\b", "a\\b'"),
+        ] {
+            let bad = format!("{root}/{bad}");
+            let quoted = format!("'{root}/{quoted}");
+            let cmd = build_hook_command(Path::new("/bin/duduclaw"), "x", Some(Path::new(&bad)));
+            assert!(cmd.contains(&format!("--home {quoted}")), "{bad}: {cmd}");
+        }
+        let cmd = build_hook_command(Path::new("/bin/duduclaw"), "x", Some(Path::new("rel/home")));
+        assert!(!cmd.contains("--home"), "relative home must be ignored: {cmd}");
+    }
+
+    // ── RFC-23 §14.4 data-file guard (H10: Rust subcommand, not a script) ───
+
+    #[tokio::test]
+    async fn registers_the_data_file_guard_as_a_rust_subcommand() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_dir = tmp.path().join("myagent");
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
+
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(agent_dir.join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let arr = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        let entry = arr
+            .iter()
+            .find(|e| e[HOOK_TAG] == DATA_FILE_HOOK_ID)
+            .expect("data-file-guard entry");
+        assert_eq!(entry["matcher"], "Read|Bash");
+        let cmd = entry["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            cmd.contains("hook data-file-guard"),
+            "must invoke the Rust subcommand: {cmd}"
+        );
+        assert!(
+            !cmd.contains("bash "),
+            "H10 regression: no shell wrapper may remain (Windows has no bash): {cmd}"
+        );
+        assert!(cmd.starts_with('"'), "binary path must be quoted: {cmd}");
+
+        // No script is written any more.
+        assert!(
+            !agent_dir.join(".claude/hooks/data-file-guard.sh").exists(),
+            "the shell script must not be installed"
+        );
+    }
+
+    #[tokio::test]
+    async fn upgrade_deletes_a_leftover_shell_script() {
+        // An agent installed before H10 still has the script on disk. Leaving
+        // it there invites someone to "fix" the guard by editing a file that
+        // is no longer referenced by anything.
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_dir = tmp.path().join("myagent");
+        let hooks_dir = agent_dir.join(".claude/hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let stale = hooks_dir.join("data-file-guard.sh");
+        std::fs::write(&stale, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
+        assert!(!stale.exists(), "stale script must be removed on upgrade");
+    }
+
+    #[tokio::test]
+    async fn data_file_guard_registration_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_dir = tmp.path().join("myagent");
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
+        let settings_path = agent_dir.join(".claude/settings.json");
+        let before = std::fs::read_to_string(&settings_path).unwrap();
+
+        ensure_agent_hook_settings(&agent_dir, &fake_bin())
+            .await
+            .unwrap();
+        let after = std::fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(before, after, "a second install must change nothing");
+
+        let settings: Value = serde_json::from_str(&after).unwrap();
+        let arr = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(
+            arr.iter()
+                .filter(|e| e[HOOK_TAG] == DATA_FILE_HOOK_ID)
+                .count(),
+            1,
+            "exactly one tagged entry, never a duplicate"
+        );
+    }
+
+    // The guard's own behaviour (modes, extensions, CJK names, fail-open on a
+    // malformed envelope) lives with the decision function it now shares with
+    // the CLI subcommand: `duduclaw_core::data_file_guard`.
 }

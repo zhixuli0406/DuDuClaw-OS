@@ -196,7 +196,9 @@ fn collect_cases(dir: &Path, depth: usize, out: &mut Vec<IndexedCase>) {
         // Mirrors `duduclaw-cli::eval::runner::transcript_path`: an explicit
         // `[case] transcript` relative to the case file, else
         // `<stem>.transcript.jsonl` beside it.
-        let transcript = match case_table.and_then(|c| c.get("transcript")).and_then(|t| t.as_str())
+        let transcript = match case_table
+            .and_then(|c| c.get("transcript"))
+            .and_then(|t| t.as_str())
         {
             Some(rel) => dir.join(rel),
             None => dir.join(format!("{stem}.transcript.jsonl")),
@@ -388,9 +390,6 @@ impl MeasureScorer for EvalMeasureScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
 
     /// Write a suite. Every case gets a (dummy) recorded transcript beside it,
     /// because an unrecorded case is deliberately unmeasurable — see
@@ -436,11 +435,7 @@ mod tests {
     #[cfg(unix)]
     fn fake_binary(dir: &Path, script: &str) -> PathBuf {
         let path = dir.join("fake-duduclaw.sh");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(f, "#!/bin/sh").unwrap();
-        write!(f, "{script}").unwrap();
-        drop(f);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::write_executable(&path, format!("#!/bin/sh\n{script}"), 0o755);
         path
     }
 
@@ -462,13 +457,19 @@ mod tests {
             resolve_eval_suites_root(home.path()),
             home.path().join("corpus/evals")
         );
-        // config.toml, absolute → used verbatim.
+        // config.toml, absolute → used verbatim. (`/opt/evals` is not an
+        // absolute path on Windows — no drive — so pick one per platform.)
+        let abs = if cfg!(windows) {
+            "C:/opt/evals"
+        } else {
+            "/opt/evals"
+        };
         std::fs::write(
             home.path().join("config.toml"),
-            "[evolution]\neval_suites_root = \"/opt/evals\"\n",
+            format!("[evolution]\neval_suites_root = \"{abs}\"\n"),
         )
         .unwrap();
-        assert_eq!(resolve_eval_suites_root(home.path()), PathBuf::from("/opt/evals"));
+        assert_eq!(resolve_eval_suites_root(home.path()), PathBuf::from(abs));
         // Malformed TOML degrades to the default, never panics.
         std::fs::write(home.path().join("config.toml"), "not = = toml").unwrap();
         assert_eq!(
@@ -492,10 +493,16 @@ mod tests {
             root.path().to_path_buf(),
         );
         let out = scorer
-            .score(&ScoreRequest { agent_id: "a0".into(), ..Default::default() })
+            .score(&ScoreRequest {
+                agent_id: "a0".into(),
+                ..Default::default()
+            })
             .await
             .unwrap();
-        assert!(out.is_none(), "an unrecorded corpus must read as ABSENT, never as failing");
+        assert!(
+            out.is_none(),
+            "an unrecorded corpus must read as ABSENT, never as failing"
+        );
     }
 
     #[test]
@@ -523,10 +530,16 @@ mod tests {
             root.path().to_path_buf(),
         );
         let out = scorer
-            .score(&ScoreRequest { agent_id: "ghost".into(), ..Default::default() })
+            .score(&ScoreRequest {
+                agent_id: "ghost".into(),
+                ..Default::default()
+            })
             .await
             .unwrap();
-        assert!(out.is_none(), "no suite ⇒ absent dimension, identical to NullScorer");
+        assert!(
+            out.is_none(),
+            "no suite ⇒ absent dimension, identical to NullScorer"
+        );
     }
 
     #[cfg(unix)]
@@ -599,14 +612,22 @@ exit 0
         let scorer = EvalMeasureScorer::with_binary(bin, root.path().to_path_buf());
 
         let visible = scorer
-            .score(&ScoreRequest { agent_id: "a3".into(), cases: Vec::new(), include_holdout: false })
+            .score(&ScoreRequest {
+                agent_id: "a3".into(),
+                cases: Vec::new(),
+                include_holdout: false,
+            })
             .await
             .unwrap()
             .unwrap();
         assert_eq!(visible.len(), 1, "held-out never reaches the inner loop");
 
         let full = scorer
-            .score(&ScoreRequest { agent_id: "a3".into(), cases: Vec::new(), include_holdout: true })
+            .score(&ScoreRequest {
+                agent_id: "a3".into(),
+                cases: Vec::new(),
+                include_holdout: true,
+            })
             .await
             .unwrap()
             .unwrap();
@@ -652,8 +673,15 @@ exit 0
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(scores.len(), 1, "the ref's `name` half resolved to the file stem");
-        assert_eq!(scores[0].case, "a4/refund-flow", "and translated back on the way out");
+        assert_eq!(
+            scores.len(),
+            1,
+            "the ref's `name` half resolved to the file stem"
+        );
+        assert_eq!(
+            scores[0].case, "a4/refund-flow",
+            "and translated back on the way out"
+        );
     }
 
     #[tokio::test]
@@ -684,9 +712,16 @@ exit 0
             root.path().to_path_buf(),
         );
         let err = scorer
-            .score(&ScoreRequest { agent_id: "a6".into(), cases: Vec::new(), include_holdout: false })
+            .score(&ScoreRequest {
+                agent_id: "a6".into(),
+                cases: Vec::new(),
+                include_holdout: false,
+            })
             .await
             .unwrap_err();
-        assert!(err.contains("spawn duduclaw eval failed"), "unexpected: {err}");
+        assert!(
+            err.contains("spawn duduclaw eval failed"),
+            "unexpected: {err}"
+        );
     }
 }

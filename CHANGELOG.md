@@ -44,6 +44,23 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **Website links (2026-10-11)**: resolve raw HTML documentation links through the same public-page mapping as Markdown and correct stale localized section links. Keep the download navigation linked to an existing home section. No platform documents or OS release artifacts are modified.
 
 ### Changed
+- **平台快照同步到 v1.73.1（1.63.0→1.73.1，`scripts/sync-platform.sh`）**：`duduclaw-cli`／`duduclaw-sysd` 快照自平台重新 vendor（`duduclaw-comp`／`duduclaw-shell` 自本 repo `crates/` 重新快照），`duduclaw-platform-version.inc` 1.63.0→1.73.1（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名、A/B loader 項），兩個平台 recipe 改名 `_1.73.1.bb`。crates.io 依賴集合有變（duduclaw-cli duduclaw-sysd），`*-crates.inc` 已重生。OS 自己的 release 版本（`VERSION`）不受影響。
+  帶進的平台 commit：
+    - 25eb44a99 chore: bump v1.73.1
+    - 42183e091 Merge pull request #115 from zhixuli0406/docs/os-lockscreen-status
+    - 6eca511ea docs(os): say which shell and image the email-free lock screen needs
+    - 3ad3934aa Merge pull request #113 from zhixuli0406/feat/owner-verify-endpoint
+    - a2e3dfcf7 Merge remote-tracking branch 'origin/main' into feat/owner-verify-endpoint
+    - dcd61115d fix(gateway): key the login rate limiter on one address for all loopback peers
+    - cbb8f75f7 fix(gateway): share one owner-verify throttle bucket across loopback addresses
+    - f293f058f Merge pull request #114 from zhixuli0406/fix/eval-runner-etxtbsy
+    - ff650b362 fix(test): write fake executables without holding a write fd (ETXTBSY)
+    - f1ac84ffc feat(gateway): add loopback-only owner password check for the OS lock screen
+    - a4b3c328a Merge pull request #112 from zhixuli0406/docs/odoo-ja-bold
+    - a47087188 docs(odoo): fix a Japanese bold span that rendered with literal asterisks
+    - 681c15445 Merge pull request #111 from zhixuli0406/fix/owner-email-prompt-must-change
+    - d37dba651 Merge remote-tracking branch 'origin/main' into fix/owner-email-prompt-must-change
+    - e63ff44bc Merge pull request #110 from zhixuli0406/docs/odoo-keyword-scope
 - **官網資訊呈現（2026-10-11）**：首頁改依用途 → pre-GA 狀態 → 內附 AI 工具 → 真實 QEMU 桌面 → 交辦與接手 → 核心能力 → 版本／硬體／入門 → 資料安全 → FAQ → 試用的閱讀路徑，移除「第一」與概括競品比較，合併重複技術說明。下載頁提前版本與安裝方式選擇、補閱讀結尾 CTA；資料說明區分本機儲存與雲端模型傳送，企業 DuDuClaw 導向既有總經銷。保留原有視覺與互動，FAQ 原生可展開，無 JS 時桌面六張圖集全部可讀。發布 metadata、資產 URL 與驗簽公鑰不變。
   （2026-09-09 補：Pages 尚未啟用時 `configure-pages` 會失敗，故改為僅 `workflow_dispatch` 手動觸發；正式站走 Cloud Run。啟用 Pages 後再恢復 push 觸發。）
 - **`README.md`／`README.en.md`／`docs/README.md`：連到平台 repo 使用者文件的連結，從 GitHub

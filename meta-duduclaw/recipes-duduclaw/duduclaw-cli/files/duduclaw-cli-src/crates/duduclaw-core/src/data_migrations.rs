@@ -368,8 +368,13 @@ pub fn read_failure(home: &Path) -> Option<MigrationFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    // The four `run_pending` tests below execute real `bash` scripts —
+    // data migrations are a Linux-appliance feature (see `run_pending`'s
+    // `Command::new("bash")`), so those are `cfg(unix)`; this helper only
+    // writes a file and is shared with the platform-neutral tests.
     fn write_script(dir: &Path, name: &str, body: &str) {
         std::fs::write(dir.join(name), body).unwrap();
     }
@@ -432,6 +437,7 @@ mod tests {
 
     // ---- run_pending: happy path + idempotency ------------------------
 
+    #[cfg(unix)]
     #[test]
     fn run_pending_applies_in_order_and_marks_each() {
         let tmp = tempfile::tempdir().unwrap();
@@ -471,6 +477,7 @@ mod tests {
         assert_eq!(contents, "first\nsecond\n");
     }
 
+    #[cfg(unix)]
     #[test]
     fn run_pending_twice_in_a_row_is_a_cheap_no_op_the_second_time() {
         let tmp = tempfile::tempdir().unwrap();
@@ -501,6 +508,7 @@ mod tests {
 
     // ---- run_pending: failure handling --------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn run_pending_stops_at_first_failure_and_never_marks_it() {
         let tmp = tempfile::tempdir().unwrap();
@@ -545,6 +553,7 @@ mod tests {
         assert_eq!(contents, "ok\n");
     }
 
+    #[cfg(unix)]
     #[test]
     fn retrying_after_a_fixed_script_clears_the_failure_record() {
         let tmp = tempfile::tempdir().unwrap();
@@ -604,6 +613,7 @@ mod tests {
         assert!(marker_dir.is_dir());
     }
 
+    #[cfg(unix)] // PermissionsExt::mode() — unix-only by definition
     #[test]
     fn permissions_helper_sanity_for_the_first_shipped_migration() {
         // Not testing the shipped script itself here (that is covered by

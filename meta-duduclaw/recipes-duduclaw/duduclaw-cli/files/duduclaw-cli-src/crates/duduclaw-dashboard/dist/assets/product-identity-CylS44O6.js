@@ -1,0 +1,1 @@
+var e=`DuDuClaw`,t=`🐾`;function n(){return e}function r(){return t}function i(){return e}function a(){return t}function o(){return{value:t,isImage:!1}}export{i as a,a as i,n,o as r,r as t};

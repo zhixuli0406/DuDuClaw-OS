@@ -27,9 +27,11 @@
 //!
 //! ## What this module is *not*
 //!
-//! It is not a rate limiter (`dispatch_guard`), not a tool-permission gate
-//! (`capability_grants`), and not permission attenuation (`delegation_scope`).
-//! Those three are orthogonal and stay where they are. Ranks (`org::OrgRank`)
+//! It is not a rate limiter (`dispatch_guard`) and not a tool-permission gate
+//! (`capability_grants`). Those two are orthogonal and stay where they are.
+//! (A third neighbour, the never-wired `delegation_scope` permission-attenuation
+//! module, was removed on 2026-09-29 — see
+//! `wiki/reports/feature-audit-2026-09-29.md` T1-D11.) Ranks (`org::OrgRank`)
 //! deliberately play no part: the `reports_to` tree remains the only authority
 //! on hierarchy (see `org.rs` — rank is derived, never authoritative).
 //!
@@ -71,10 +73,34 @@ pub const SYSTEM_SENDERS: [&str; 6] = [
     "autopilot",
 ];
 
+/// Queue `sender` values the gateway itself writes on `message_queue` rows
+/// that are not in [`SYSTEM_SENDERS`] (P2-A third review L3-2). The
+/// dispatcher gives these rows meaning (heartbeat wake-up attribution and
+/// stop fencing; workflow hand-offs), so no employee may carry one of these
+/// names: an employee named `heartbeat-scheduler` would otherwise send
+/// queue rows the dispatcher reads as the heartbeat's.
+pub const RESERVED_QUEUE_SENDERS: [&str; 2] = ["heartbeat-scheduler", "workflow"];
+
+/// Is this one of [`RESERVED_QUEUE_SENDERS`]? Exact after trimming,
+/// ASCII-case-insensitive. Identity checks treat such a name like a system
+/// sender: an employee created under it before it was reserved resolves to
+/// the untrusted sentinel (P2-A fourth review L4-2).
+pub fn is_reserved_queue_sender(name: &str) -> bool {
+    let s = name.trim();
+    RESERVED_QUEUE_SENDERS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(s))
+}
+
 /// Sender id stamped on bus tasks that entered through the ACP `message/send`
 /// endpoint. Intentionally **not** in [`SYSTEM_SENDERS`]; exposed as a constant
 /// so the opt-in (`config.toml [acp] trusted = true`) has one spelling.
 pub const ACP_CLIENT_SENDER: &str = "a2a-client";
+
+/// Prefix of the client ids `duduclaw mcp init` issues standalone MCP keys
+/// under (`standalone-claude-code`, `standalone-codex`, …). Reserved at
+/// employee creation by [`is_reserved_agent_id`].
+pub const STANDALONE_CLIENT_PREFIX: &str = "standalone-";
 
 /// Is this sender a system/human interface rather than an agent?
 ///
@@ -107,8 +133,13 @@ pub fn is_system_sender(sender: &str) -> bool {
 ///   `agents.create`; the probe itself mints its token directly through
 ///   `agent_identity_env_vars`, which never consults this list, so the probe
 ///   keeps working unaffected.
+/// - [`RESERVED_QUEUE_SENDERS`] — queue sender names the dispatcher acts on.
 /// - any `__…` id — the namespace gateway-internal synthetic senders use
 ///   (e.g. `__deferred_gvu__`, which `is_valid_agent_id` otherwise accepts).
+/// - any [`STANDALONE_CLIENT_PREFIX`] id — the client ids `duduclaw mcp init`
+///   issues external keys under. Such a key keeps its wiki in
+///   `agents/<client_id>/wiki/`; an employee created under the same name
+///   would share that directory with the external key.
 ///
 /// Case-insensitive on purpose: it costs nothing and covers the day someone
 /// makes [`is_system_sender`] case-insensitive too.
@@ -120,11 +151,17 @@ pub fn is_reserved_agent_id(id: &str) -> bool {
     if s.starts_with("__") {
         return true;
     }
+    if s.get(..STANDALONE_CLIENT_PREFIX.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(STANDALONE_CLIENT_PREFIX))
+    {
+        return true;
+    }
     SYSTEM_SENDERS
         .iter()
         .chain(std::iter::once(&ACP_CLIENT_SENDER))
         .chain(std::iter::once(&"default"))
         .chain(std::iter::once(&"doctor-probe"))
+        .chain(RESERVED_QUEUE_SENDERS.iter())
         .any(|known| known.eq_ignore_ascii_case(s))
 }
 
@@ -993,6 +1030,23 @@ mod tests {
         }
     }
 
+    /// Standalone profile: `duduclaw mcp init` client ids are not employee
+    /// names. Prefix match, case-insensitive; the bare word stays free.
+    #[test]
+    fn standalone_client_prefix_is_reserved() {
+        for id in [
+            "standalone-claude-code",
+            "standalone-codex",
+            "Standalone-X",
+            " standalone-a ",
+        ] {
+            assert!(is_reserved_agent_id(id), "{id:?}");
+        }
+        for id in ["standalone", "my-standalone-bot", "standalon-x", "嘟嘟"] {
+            assert!(!is_reserved_agent_id(id), "{id:?}");
+        }
+    }
+
     #[test]
     fn system_senders_are_allowed_everywhere() {
         for sender in SYSTEM_SENDERS {
@@ -1062,6 +1116,19 @@ mod tests {
         // something that merely contains the reserved word.
         assert!(!is_reserved_agent_id("doctor-probe-2"));
         assert!(!is_reserved_agent_id("my-doctor-probe"));
+    }
+
+    /// P2-A L3-2: queue sender names the dispatcher acts on cannot be
+    /// employee names (an employee called `heartbeat-scheduler` would send
+    /// rows the dispatcher reads as heartbeat wake-ups).
+    #[test]
+    fn queue_sender_names_are_reserved() {
+        for name in RESERVED_QUEUE_SENDERS {
+            assert!(is_reserved_agent_id(name), "{name}");
+            assert!(is_reserved_agent_id(&name.to_ascii_uppercase()), "{name}");
+        }
+        assert!(is_reserved_agent_id("goal-loop-driver"));
+        assert!(!is_reserved_agent_id("heartbeat-scheduler-2"));
     }
 
     #[test]

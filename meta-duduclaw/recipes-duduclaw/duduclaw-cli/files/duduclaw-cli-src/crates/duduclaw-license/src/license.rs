@@ -1,6 +1,6 @@
 //! License data structure v2 (subscription-aware).
 //!
-//! See `commercial/docs/spec-license-module.md` for the design rationale.
+//! See `commercial/docs/specs/spec-license-module.md` for the design rationale.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 /// Compared with v1, this struct adds:
 ///
 /// - `version` — explicit schema version for forward-compat
-/// - `subscription_id` — links to upstream Stripe / PayUni subscription
+/// - `subscription_id` — identifies the distributor-delivered license record
 /// - `customer_id` — opaque identifier (no PII)
 /// - `last_phone_home` — for grace-period calculations
 /// - `public_key_id` — supports key rotation without invalidating old licenses
@@ -31,8 +31,8 @@ pub struct License {
     /// Schema version. Must equal [`CURRENT_SCHEMA_VERSION`] for this build.
     pub version: u32,
 
-    /// Subscription identifier (e.g. PayUni subscription ID, Stripe sub_xxx,
-    /// or a UUID for self-issued perpetual licenses).
+    /// Opaque distributor-delivered license record identifier, shared by
+    /// refresh, revocation and renewal administration.
     pub subscription_id: String,
 
     /// Opaque customer identifier — typically email hash or upstream
@@ -66,7 +66,7 @@ pub struct License {
     #[serde(with = "base64_vec")]
     pub signature: Vec<u8>,
 
-    /// Self-carried control-plane base URL (white-label §10.5). When an issuer
+    /// Self-carried distributor control-plane base URL. When an issuer
     /// bakes its owner-gateway URL into the key at issue time, the client
     /// resolves phone-home / CRL against it without the operator having to set
     /// `DUDUCLAW_CONTROL_URL` — the root fix for the 60-day offline downgrade.
@@ -81,32 +81,13 @@ pub struct License {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_url: Option<String>,
 
-    /// White-label field-level edit claim (WP8). When present, lists the exact
-    /// branding field names (BrandingInput keys, e.g. `"logo_data_uri"`) that
-    /// this license's operator may edit — the carrier for "distributor token vs
-    /// customer token have different editable ranges". `None` = no restriction
-    /// declared → the consumer resolves it to the full vendor-editable set
-    /// (backward-compatible: an OEM license issued before WP8 keeps editing
-    /// every vendor field).
-    ///
-    /// **Part of [`Self::canonical_payload`]** (unlike `control_url`): the claim
-    /// is a security boundary — an unsigned claim could be self-escalated by
-    /// editing the local `license.json`. Because it is signed, stripping or
-    /// widening it invalidates the signature → the license is rejected →
-    /// OpenSource → white_label off → no branding at all (fail-closed). It is
-    /// added at the END of the canonical struct with `skip_serializing_if`, so a
-    /// `None` claim serializes byte-identically to a pre-WP8 license and old
-    /// signatures still verify.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branding_editable: Option<Vec<String>>,
-
     /// Per-license agent-count quota (P-License). When present, it overrides the
     /// tier-default `max_agents` (`FeatureGate::max_agents`) so a distributor can
     /// sell "system + N agents" at any N and later upsell more. `Some(0)` = no
     /// limit (matches the features.toml `0 = unlimited` convention). `None` (the
     /// default) = no override → fall back to the tier default.
     ///
-    /// **Part of [`Self::canonical_payload`]** (like `branding_editable`, unlike
+    /// **Part of [`Self::canonical_payload`]** (unlike
     /// `control_url`): the quota is a security boundary — an unsigned count could
     /// be self-raised by editing the local `license.json`. Because it is signed,
     /// widening it (e.g. `3` → `8`) invalidates the signature → the license is
@@ -118,8 +99,8 @@ pub struct License {
 
     /// NFR (Not-For-Resale) internal-test marker. `true` on free evaluation
     /// licenses granted to distributors for their own testing — full tier
-    /// features (including white-label, so branded builds are testable), but
-    /// the dashboard renders a "NOT FOR RESALE" badge that branding cannot
+    /// features for internal validation, but
+    /// the dashboard renders a "NOT FOR RESALE" badge that operators cannot
     /// remove, making a resold copy immediately identifiable.
     ///
     /// **Part of [`Self::canonical_payload`]** (like `max_agents`): the marker
@@ -229,6 +210,54 @@ impl License {
         Ok(())
     }
 
+    /// Like [`Self::validate`], but tries a list of acceptable fingerprints in
+    /// order and reports which one matched.
+    ///
+    /// This is the v1.66.1 compatibility seam: `candidates[0]` is the machine's
+    /// current (strong) fingerprint and the rest reproduce what older DuDuClaw
+    /// builds computed on the same machine — see
+    /// [`crate::fingerprint::fingerprint_candidates`]. A license bound to a
+    /// legacy value keeps working (`legacy = true`, caller should tell the
+    /// operator to re-issue) instead of silently downgrading to OpenSource.
+    ///
+    /// Only [`LicenseError::InvalidFingerprint`] advances to the next
+    /// candidate — every other failure (expiry, grace period, unsupported
+    /// schema) is returned immediately, because trying another fingerprint
+    /// cannot change the outcome and swallowing it would hide the real reason.
+    ///
+    /// An empty `candidates` slice validates against the empty fingerprint,
+    /// which is exactly the unbound-OEM path [`Self::validate`] already
+    /// implements (and fails closed for every other tier).
+    pub fn validate_any(
+        &self,
+        candidates: &[String],
+        phone_home_interval: i64,
+        grace_period: i64,
+    ) -> Result<crate::fingerprint::FingerprintMatch, LicenseError> {
+        if candidates.is_empty() {
+            self.validate("", phone_home_interval, grace_period)?;
+            return Ok(crate::fingerprint::FingerprintMatch {
+                fingerprint: String::new(),
+                legacy: false,
+            });
+        }
+
+        for (index, candidate) in candidates.iter().enumerate() {
+            match self.validate(candidate, phone_home_interval, grace_period) {
+                Ok(()) => {
+                    return Ok(crate::fingerprint::FingerprintMatch {
+                        fingerprint: candidate.clone(),
+                        legacy: index > 0,
+                    });
+                }
+                Err(LicenseError::InvalidFingerprint) => continue,
+                Err(other) => return Err(other),
+            }
+        }
+
+        Err(LicenseError::InvalidFingerprint)
+    }
+
     /// Validate the tier ↔ deployment-mode binding (M51 fix).
     ///
     /// A cloud-only tier (Hobby/Solo/Studio/Business) must never be honoured on
@@ -281,7 +310,6 @@ impl License {
             expires_at: self.expires_at,
             last_phone_home: self.last_phone_home,
             public_key_id: &self.public_key_id,
-            branding_editable: self.branding_editable.as_ref(),
             max_agents: self.max_agents,
             nfr: self.nfr,
         };
@@ -315,7 +343,6 @@ impl License {
             public_key_id: public_key_id.into(),
             signature: Vec::new(),
             control_url: None,
-            branding_editable: None,
             max_agents: None,
             nfr: false,
         }
@@ -337,11 +364,6 @@ struct CanonicalPayload<'a> {
     expires_at: DateTime<Utc>,
     last_phone_home: DateTime<Utc>,
     public_key_id: &'a str,
-    /// WP8 signed field-level branding claim. Added last with
-    /// `skip_serializing_if` so a `None` claim yields byte-identical canonical
-    /// bytes to a pre-WP8 license (old signatures keep verifying).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    branding_editable: Option<&'a Vec<String>>,
     /// P-License signed agent-count quota. Added last with `skip_serializing_if`
     /// so a `None` quota yields byte-identical canonical bytes to a pre-P-License
     /// license (old signatures keep verifying).
@@ -389,7 +411,6 @@ mod tests {
             public_key_id: "v1".into(),
             signature: Vec::new(),
             control_url: None,
-            branding_editable: None,
             max_agents: None,
             nfr: false,
         }
@@ -569,6 +590,15 @@ mod tests {
     }
 
     #[test]
+    fn distributor_license_has_no_brand_editing_rights() {
+        let license = make_license(LicenseTier::Oem, 30, 0);
+        let encoded = serde_json::to_value(&license).unwrap();
+        assert!(encoded.get("branding_editable").is_none());
+        let payload = String::from_utf8(license.canonical_payload().unwrap()).unwrap();
+        assert!(!payload.contains("branding_editable"));
+    }
+
+    #[test]
     fn canonical_payload_excludes_signature() {
         let license = make_license(LicenseTier::Solo, 30, 0);
         let payload = String::from_utf8(license.canonical_payload().unwrap()).unwrap();
@@ -635,53 +665,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn canonical_payload_excludes_branding_editable_when_none() {
-        // WP8 backward-compat: a None claim must not appear in the signed bytes,
-        // so a pre-WP8 license (no such field) verifies byte-identically.
-        let license = make_license(LicenseTier::Oem, 30, 0);
-        assert!(license.branding_editable.is_none());
-        let payload = String::from_utf8(license.canonical_payload().unwrap()).unwrap();
-        assert!(
-            !payload.contains("branding_editable"),
-            "None claim must be omitted from canonical bytes: {payload}"
-        );
-    }
-
-    #[test]
-    fn canonical_payload_includes_branding_editable_when_some() {
-        // A Some claim IS signed (it is a security boundary, unlike control_url).
-        let mut license = make_license(LicenseTier::Oem, 30, 0);
-        let base = license.canonical_payload().unwrap();
-        license.branding_editable = Some(vec!["logo_data_uri".to_string()]);
-        let with_claim = license.canonical_payload().unwrap();
-        assert_ne!(base, with_claim, "claim must change the signed payload");
-        let text = String::from_utf8(with_claim).unwrap();
-        assert!(text.contains("branding_editable"));
-        assert!(text.contains("logo_data_uri"));
-    }
-
-    #[test]
-    fn branding_editable_serde_roundtrips_and_old_json_defaults_none() {
-        let mut license = make_license(LicenseTier::Oem, 365, 1);
-        let json_old = serde_json::to_string(&license).unwrap();
-        assert!(
-            !json_old.contains("branding_editable"),
-            "None is skipped in serialization"
-        );
-        let parsed_old: License = serde_json::from_str(&json_old).unwrap();
-        assert!(parsed_old.branding_editable.is_none());
-
-        license.branding_editable = Some(vec!["logo_data_uri".into(), "product_name".into()]);
-        let json_new = serde_json::to_string(&license).unwrap();
-        assert!(json_new.contains("branding_editable"));
-        let parsed_new: License = serde_json::from_str(&json_new).unwrap();
-        assert_eq!(
-            parsed_new.branding_editable.as_deref(),
-            Some(["logo_data_uri".to_string(), "product_name".to_string()].as_slice())
-        );
-    }
-
     // ── P-License: signed per-license agent-count quota ─────────────
 
     #[test]
@@ -702,8 +685,7 @@ mod tests {
     fn canonical_payload_none_matches_pre_p_license_bytes() {
         // A None quota must yield the exact same canonical bytes as a license
         // constructed before the field existed — proven by comparing against the
-        // other pre-existing skip-if-none field (branding_editable None). Both
-        // absent ⇒ identical bytes ⇒ old signatures still verify.
+        // original canonical bytes. Clearing the quota restores the same bytes.
         let mut license = make_license(LicenseTier::Solo, 30, 0);
         let baseline = license.canonical_payload().unwrap();
         // Setting then clearing back to None must be a no-op on the bytes.
@@ -816,6 +798,75 @@ mod tests {
         let license = make_license(LicenseTier::Oem, 365, 1);
         assert!(license.validate("abc123", 7, 30).is_ok());
         let err = license.validate("wrong-fp", 7, 30).unwrap_err();
+        assert!(matches!(err, LicenseError::InvalidFingerprint));
+    }
+
+    // ── v1.66.1: multi-candidate fingerprint validation ─────────────
+
+    #[test]
+    fn validate_any_matches_the_strong_fingerprint_first() {
+        let license = make_license(LicenseTier::SelfHostPro, 30, 3);
+        let candidates = vec!["abc123".to_string(), "legacy-fp".to_string()];
+        let m = license.validate_any(&candidates, 7, 30).unwrap();
+        assert_eq!(m.fingerprint, "abc123");
+        assert!(!m.legacy, "a strong match must not be flagged legacy");
+    }
+
+    #[test]
+    fn validate_any_falls_back_to_a_legacy_candidate() {
+        let license = make_license(LicenseTier::SelfHostPro, 30, 3);
+        // The machine's strong fingerprint changed (macOS 26 upgrade); the
+        // installed license is still bound to the old placeholder-MAC value.
+        let candidates = vec!["strong-fp".to_string(), "abc123".to_string()];
+        let m = license.validate_any(&candidates, 7, 30).unwrap();
+        assert_eq!(m.fingerprint, "abc123");
+        assert!(m.legacy, "a compatibility match must be flagged legacy");
+    }
+
+    #[test]
+    fn validate_any_rejects_when_no_candidate_matches() {
+        let license = make_license(LicenseTier::Solo, 30, 0);
+        let candidates = vec!["nope-1".to_string(), "nope-2".to_string()];
+        let err = license.validate_any(&candidates, 7, 30).unwrap_err();
+        assert!(matches!(err, LicenseError::InvalidFingerprint));
+    }
+
+    #[test]
+    fn validate_any_does_not_swallow_non_fingerprint_errors() {
+        // An expired license must report Expired, not InvalidFingerprint —
+        // otherwise the operator chases the wrong problem.
+        let license = make_license(LicenseTier::SelfHostPro, -1, 0);
+        let candidates = vec!["abc123".to_string(), "legacy-fp".to_string()];
+        let err = license.validate_any(&candidates, 7, 30).unwrap_err();
+        assert!(matches!(err, LicenseError::Expired), "got {err:?}");
+
+        let stale = make_license(LicenseTier::SelfHostPro, 30, 45);
+        let err = stale.validate_any(&candidates, 7, 30).unwrap_err();
+        assert!(
+            matches!(err, LicenseError::GracePeriodExceeded(d) if d == 45),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_any_preserves_unbound_oem_behaviour() {
+        // Unbound OEM: an empty license fingerprint passes against anything,
+        // including an empty candidate list.
+        let mut license = make_license(LicenseTier::Oem, 365, 1);
+        license.machine_fingerprint = String::new();
+        let m = license
+            .validate_any(&["whatever".to_string()], 7, 30)
+            .unwrap();
+        assert_eq!(m.fingerprint, "whatever");
+        assert!(!m.legacy);
+        assert!(license.validate_any(&[], 7, 30).is_ok());
+
+        // … and a non-OEM tier still fails closed on an empty fingerprint.
+        let mut bound = make_license(LicenseTier::Solo, 365, 1);
+        bound.machine_fingerprint = String::new();
+        let err = bound
+            .validate_any(&["whatever".to_string()], 7, 30)
+            .unwrap_err();
         assert!(matches!(err, LicenseError::InvalidFingerprint));
     }
 

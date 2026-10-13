@@ -435,14 +435,54 @@ pub struct ProvenanceConfig {
     /// Tools gated by the policy. Empty ⇒ nothing is sensitive (Warn/Enforce
     /// then only maintain the ledger).
     pub sensitive_tools: Vec<SensitiveTool>,
-    /// Per-tool trust override for *results* fed back into the loop, e.g.
-    /// `"shared_wiki_read" → SourceKind::Wiki` declares that tool's output
-    /// trusted (so it never taints). Default for unlisted tools:
+    /// Per-tool trust override for *results* fed back into the loop,
+    /// whatever the call's arguments. Default for unlisted tools:
     /// [`SourceKind::ToolResult`] (tainted).
     pub tool_trust: HashMap<String, SourceKind>,
+    /// Trust overrides that apply only when one argument has one exact value,
+    /// e.g. `wiki_read` is curated content only with `scope = "shared"`; the
+    /// same tool reading an agent's own wiki stays tainted. Checked after
+    /// [`Self::tool_trust`].
+    pub scoped_tool_trust: Vec<ScopedToolTrust>,
     /// Caller-registered ledger for the initial conversation. `None` ⇒ the
     /// fail-safe conservative default of [`seed_default_ledger`].
     pub initial_ledger: Option<ProvenanceLedger>,
+}
+
+/// A result-trust override that applies only when `arg` equals `value`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedToolTrust {
+    /// Exact tool name (token equality, convention #2).
+    pub tool: String,
+    /// Top-level argument name.
+    pub arg: String,
+    /// Required value, compared trimmed and ASCII case-insensitively; any
+    /// other value, a non-string or an absent argument does not match.
+    pub value: String,
+    pub kind: SourceKind,
+}
+
+impl ProvenanceConfig {
+    /// The source kind a result of `tool` called with `args` is registered
+    /// under. An unconditional [`Self::tool_trust`] entry wins, then the first
+    /// matching [`Self::scoped_tool_trust`] entry, else
+    /// [`SourceKind::ToolResult`] (tainted).
+    pub fn result_trust(&self, tool: &str, args: &Value) -> SourceKind {
+        if let Some(kind) = self.tool_trust.get(tool) {
+            return *kind;
+        }
+        self.scoped_tool_trust
+            .iter()
+            .find(|t| {
+                t.tool == tool
+                    && args
+                        .get(&t.arg)
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case(&t.value))
+            })
+            .map(|t| t.kind)
+            .unwrap_or(SourceKind::ToolResult)
+    }
 }
 
 /// Why a flag was raised.
@@ -660,7 +700,8 @@ mod tests {
         let l = tainted_ledger(payload);
         assert_eq!(l.span_count(), 1);
         assert_eq!(
-            l.check_args(&json!({"body": format!("好的，{payload}，馬上")})).len(),
+            l.check_args(&json!({"body": format!("好的，{payload}，馬上")}))
+                .len(),
             1
         );
 
@@ -737,9 +778,10 @@ mod tests {
         l.register("curated wiki paragraph content", SourceKind::Wiki);
         l.register("remembered semantic fact content", SourceKind::Memory);
         assert_eq!(l.span_count(), 0);
-        assert!(l
-            .check_args(&json!({"q": "curated wiki paragraph content"}))
-            .is_empty());
+        assert!(
+            l.check_args(&json!({"q": "curated wiki paragraph content"}))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -800,9 +842,10 @@ mod tests {
         let l = seed_default_ledger(&req);
         assert_eq!(l.span_count(), 2);
         // System prompt text does NOT taint.
-        assert!(l
-            .check_args(&json!({"q": "system prompt trusted content"}))
-            .is_empty());
+        assert!(
+            l.check_args(&json!({"q": "system prompt trusted content"}))
+                .is_empty()
+        );
         // User + tool-result text does.
         assert_eq!(
             l.check_args(&json!({"q": "user tainted message content"}))
@@ -940,10 +983,11 @@ mod tests {
         // Args are clean, but coverage is incomplete → block (fail-closed).
         let d = evaluate_call(&c, &l, "send_email", &json!({"body": "clean text here"}));
         assert!(d.block_reason.is_some());
-        assert!(d
-            .flags
-            .iter()
-            .any(|f| f.kind == FlagKind::LedgerOverflow && f.blocked));
+        assert!(
+            d.flags
+                .iter()
+                .any(|f| f.kind == FlagKind::LedgerOverflow && f.blocked)
+        );
         // Non-sensitive tools still run even under overflow.
         let d = evaluate_call(&c, &l, "search", &json!({"q": "clean"}));
         assert!(d.block_reason.is_none());
@@ -951,9 +995,39 @@ mod tests {
         let c = cfg(ProvenancePolicy::Warn, &["send_email"]);
         let d = evaluate_call(&c, &l, "send_email", &json!({"body": "clean text here"}));
         assert!(d.block_reason.is_none());
-        assert!(d
-            .flags
-            .iter()
-            .any(|f| f.kind == FlagKind::LedgerOverflow && !f.blocked));
+        assert!(
+            d.flags
+                .iter()
+                .any(|f| f.kind == FlagKind::LedgerOverflow && !f.blocked)
+        );
     }
+
+    // ── result_trust ───────────────────────────────────────────────────────
+
+    #[test]
+    fn scoped_trust_applies_only_to_the_matching_argument_value() {
+        let c = ProvenanceConfig {
+            scoped_tool_trust: vec![ScopedToolTrust {
+                tool: "wiki_read".into(),
+                arg: "scope".into(),
+                value: "shared".into(),
+                kind: SourceKind::Wiki,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(c.result_trust("wiki_read", &json!({"scope": " Shared "})), SourceKind::Wiki);
+        for args in [json!({}), json!({"scope": "agent"}), json!({"scope": 1}), json!({"scope": "sharedx"})] {
+            assert_eq!(c.result_trust("wiki_read", &args), SourceKind::ToolResult, "{args}");
+        }
+        assert_eq!(c.result_trust("wiki_search", &json!({"scope": "shared"})), SourceKind::ToolResult);
+    }
+
+    #[test]
+    fn unconditional_trust_still_wins() {
+        let mut c = ProvenanceConfig::default();
+        c.tool_trust.insert("kb_read".into(), SourceKind::Wiki);
+        assert_eq!(c.result_trust("kb_read", &json!({})), SourceKind::Wiki);
+        assert_eq!(c.result_trust("other", &json!({})), SourceKind::ToolResult);
+    }
+
 }

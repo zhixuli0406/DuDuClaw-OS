@@ -12,9 +12,9 @@ reports_to = ""  # Set to orchestrator or calling agent
 icon = "shield-check"
 
 # Optional: choose the AI runtime backend (default: claude).
-# Providers: "claude" | "codex" | "gemini" | "antigravity" | "openai_compat".
+# Providers: "claude" | "codex" | "gemini" (deprecated in v1.67.0, removed in v1.69.0; use "antigravity") | "antigravity" | "openai_compat".
 # "antigravity" drives Google's `agy` CLI (the 2026-06-18 successor to the
-# personal Gemini CLI; install to ~/.local/bin/agy, key via ANTIGRAVITY_API_KEY).
+# personal Gemini CLI; install to ~/.local/bin/agy, Google sign-in via `agy` in a terminal, or `[antigravity] auth = "api_key"` + GEMINI_API_KEY).
 # See docs/todo/TODO-antigravity-cli-migration.md.
 # [runtime]
 # provider = "antigravity"
@@ -28,7 +28,7 @@ api_mode = "cli"
 
 [model.local]
 model = ""
-backend = "llama_cpp"
+backend = "openai_compat"
 context_length = 4096
 gpu_layers = -1
 prefer_local = true
@@ -38,7 +38,10 @@ use_router = true
 timeout_ms = 60000
 max_concurrent = 3
 readonly_project = true
-sandbox_enabled = true   # Evaluator CAN run sandbox tests
+# Task sandbox: enable only after Docker runs and the sandbox image is on
+# this machine (`duduclaw doctor` checks both). The AI inside must reach its
+# model provider, so the sandbox also needs `network_access = true`.
+sandbox_enabled = false
 network_access = false
 
 [heartbeat]
@@ -58,11 +61,11 @@ warn_threshold_percent = 80
 hard_stop = false
 
 [permissions]
-can_create_agents = false
+can_create_agents = true
 can_send_cross_agent = true   # Must reply to delegating agent
-can_modify_own_skills = false
+can_modify_own_skills = true
 can_modify_own_soul = false
-can_schedule_tasks = false
+can_schedule_tasks = true
 allowed_channels = []          # No direct channel access — bus only
 
 [evolution]
@@ -70,8 +73,6 @@ skill_auto_activate = false
 skill_security_scan = true
 gvu_enabled = false            # Evaluator doesn't self-evolve
 max_silence_hours = 168.0      # 7 days — evaluator is passive
-max_gvu_generations = 0
-observation_period_hours = 24.0
 skill_token_budget = 500
 max_active_skills = 2
 

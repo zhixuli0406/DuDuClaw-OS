@@ -33,6 +33,18 @@
 //! - `redirect_uri` must exactly match a registered value (string equality),
 //!   and registration only accepts `https://…` or loopback `http://…` URIs.
 //! - Client-supplied text (client_name) is HTML-escaped before rendering.
+//!
+//! Client ID Metadata Documents (2026-10-08, [`cimd`]): a `client_id` that
+//! is an `https://` URL with a path and is not a registered id is resolved by
+//! fetching that URL (public addresses only, pinned resolution, no
+//! redirects, 5 s, 5 KiB, cached 1 h, at most 64 cached). The document must
+//! be a JSON object whose `client_id` equals the URL exactly, whose
+//! `redirect_uris` pass the same policy as registration, and whose
+//! `token_endpoint_auth_method` is absent or `none` (public clients only).
+//! The AS metadata advertises `client_id_metadata_document_supported`.
+//! Written from the MCP 2025-11-25 authorization spec and the IETF draft
+//! `draft-ietf-oauth-client-id-metadata-document`, not tested against a real
+//! client that uses it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -119,7 +131,9 @@ fn load_store(home: &Path) -> OAuthStore {
 /// advisory lock (project convention 3).
 fn save_store(home: &Path, mut store: OAuthStore) -> std::io::Result<()> {
     let now = now_unix();
-    store.codes.retain(|_, c| now - c.issued_unix <= CODE_TTL_SECS);
+    store
+        .codes
+        .retain(|_, c| now - c.issued_unix <= CODE_TTL_SECS);
     store.tokens.retain(|_, t| t.expires_unix > now);
     store.refresh.retain(|_, t| t.expires_unix > now);
     let path = store_path(home);
@@ -212,7 +226,10 @@ pub(crate) fn www_authenticate_value(headers: &HeaderMap) -> String {
 // ── Metadata endpoints ────────────────────────────────────────────────────────
 
 fn grantable_scope_strings() -> Vec<String> {
-    EXTERNALLY_GRANTABLE_SCOPES.iter().map(|s| s.to_string()).collect()
+    EXTERNALLY_GRANTABLE_SCOPES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 pub(crate) async fn protected_resource_metadata(headers: HeaderMap) -> Response {
@@ -238,8 +255,117 @@ pub(crate) async fn authorization_server_metadata(headers: HeaderMap) -> Respons
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "scopes_supported": grantable_scope_strings(),
+        "client_id_metadata_document_supported": true,
     }))
     .into_response()
+}
+
+// ── Client ID Metadata Documents ─────────────────────────────────────────────
+
+pub(crate) mod cimd {
+    use super::{RegisteredClient, redirect_uri_acceptable, sanitize_client_name};
+    use duduclaw_gateway::remote_mcp::url_policy::{OutboundPolicy, check_outbound, pinned_client};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    pub const MAX_DOC_BYTES: usize = 5 * 1024;
+    const CACHE_TTL: Duration = Duration::from_secs(3600);
+    const CACHE_MAX: usize = 64;
+
+    /// Is `client_id` shaped like a metadata-document URL (https, has a
+    /// path other than `/`, no fragment)?
+    pub fn is_cimd_client_id(client_id: &str) -> bool {
+        client_id.len() <= 2000
+            && url::Url::parse(client_id).is_ok_and(|u| {
+                u.scheme() == "https" && u.path() != "/" && !u.path().is_empty() && u.fragment().is_none()
+            })
+    }
+
+    /// Validate a fetched document for `client_id`. Pure.
+    pub fn parse_document(doc: &Value, client_id: &str) -> Result<RegisteredClient, String> {
+        let obj = doc.as_object().ok_or("the client metadata document is not a JSON object")?;
+        if obj.get("client_id").and_then(|v| v.as_str()) != Some(client_id) {
+            return Err("the client metadata document names a different client_id".into());
+        }
+        match obj.get("token_endpoint_auth_method").and_then(|v| v.as_str()) {
+            None | Some("none") => {}
+            Some(_) => return Err("only public clients (token_endpoint_auth_method none) are supported".into()),
+        }
+        let uris: Vec<String> = obj
+            .get("redirect_uris")
+            .and_then(|v| v.as_array())
+            .ok_or("the client metadata document has no redirect_uris")?
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()
+            .ok_or("redirect_uris must be strings")?;
+        if uris.is_empty() || uris.len() > super::MAX_REDIRECT_URIS || !uris.iter().all(|u| redirect_uri_acceptable(u)) {
+            return Err("redirect_uris must be 1..=10 https:// or loopback http:// URLs".into());
+        }
+        Ok(RegisteredClient {
+            client_name: sanitize_client_name(obj.get("client_name").and_then(|v| v.as_str())),
+            redirect_uris: uris,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        })
+    }
+
+    fn cache() -> &'static Mutex<HashMap<String, (RegisteredClient, Instant)>> {
+        static C: OnceLock<Mutex<HashMap<String, (RegisteredClient, Instant)>>> = OnceLock::new();
+        C.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Fetch (or take from the cache) and validate the document.
+    pub async fn resolve(client_id: &str) -> Result<RegisteredClient, String> {
+        resolve_with(client_id, OutboundPolicy::PUBLIC_ONLY).await
+    }
+
+    pub async fn resolve_with(client_id: &str, policy: OutboundPolicy) -> Result<RegisteredClient, String> {
+        if let Ok(c) = cache().lock()
+            && let Some((client, at)) = c.get(client_id)
+            && at.elapsed() < CACHE_TTL
+        {
+            return Ok(client.clone());
+        }
+        let url = url::Url::parse(client_id).map_err(|_| "client_id is not a URL".to_string())?;
+        check_outbound(&url, policy)?;
+        let http = pinned_client(&url, policy, Duration::from_secs(5)).await?;
+        let resp = http
+            .get(url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|_| "the client metadata document could not be fetched".to_string())?;
+        if resp.status().as_u16() != 200 {
+            return Err(format!("the client metadata document answered HTTP {}", resp.status().as_u16()));
+        }
+        let bytes = duduclaw_gateway::remote_mcp::http::read_capped(resp, MAX_DOC_BYTES).await?;
+        let doc: Value = serde_json::from_slice(&bytes).map_err(|_| "the client metadata document is not JSON".to_string())?;
+        let client = parse_document(&doc, client_id)?;
+        if let Ok(mut c) = cache().lock() {
+            if c.len() >= CACHE_MAX {
+                c.retain(|_, (_, at)| at.elapsed() < CACHE_TTL);
+                if c.len() >= CACHE_MAX {
+                    c.clear();
+                }
+            }
+            c.insert(client_id.to_string(), (client.clone(), Instant::now()));
+        }
+        Ok(client)
+    }
+}
+
+/// A registered client, or — for an unregistered `https://` client id — its
+/// Client ID Metadata Document.
+async fn resolve_client(store: &OAuthStore, client_id: &str) -> Result<RegisteredClient, String> {
+    if let Some(c) = store.clients.get(client_id) {
+        return Ok(c.clone());
+    }
+    if cimd::is_cimd_client_id(client_id) {
+        return cimd::resolve(client_id).await;
+    }
+    Err("unknown client_id — register first via /oauth/register".into())
 }
 
 // ── Dynamic client registration (RFC 7591) ────────────────────────────────────
@@ -283,20 +409,29 @@ pub(crate) async fn register_handler(
     Json(body): Json<Value>,
 ) -> Response {
     let Some(uris) = body.get("redirect_uris").and_then(|v| v.as_array()) else {
-        return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata",
-            "redirect_uris is required");
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "redirect_uris is required",
+        );
     };
     if uris.is_empty() || uris.len() > MAX_REDIRECT_URIS {
-        return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata",
-            "redirect_uris must contain 1..=10 entries");
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "redirect_uris must contain 1..=10 entries",
+        );
     }
     let mut redirect_uris = Vec::new();
     for u in uris {
         match u.as_str() {
             Some(s) if redirect_uri_acceptable(s) => redirect_uris.push(s.to_string()),
             _ => {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_redirect_uri",
-                    "redirect_uris must be https:// or loopback http:// URLs");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_redirect_uri",
+                    "redirect_uris must be https:// or loopback http:// URLs",
+                );
             }
         }
     }
@@ -304,8 +439,11 @@ pub(crate) async fn register_handler(
 
     let mut store = load_store(&state.home_dir);
     if store.clients.len() >= MAX_CLIENTS {
-        return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata",
-            "registration limit reached — prune mcp_oauth_issued.json");
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "registration limit reached — prune mcp_oauth_issued.json",
+        );
     }
     let client_id = format!("mcp_{}", uuid::Uuid::new_v4().simple());
     store.clients.insert(
@@ -317,8 +455,11 @@ pub(crate) async fn register_handler(
         },
     );
     if save_store(&state.home_dir, store).is_err() {
-        return oauth_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error",
-            "failed to persist registration");
+        return oauth_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "failed to persist registration",
+        );
     }
     (
         StatusCode::CREATED,
@@ -378,14 +519,18 @@ pub(crate) async fn authorize_handler(
     let Some(client_id) = q.get("client_id") else {
         return html_error(StatusCode::BAD_REQUEST, "missing client_id");
     };
-    let Some(client) = store.clients.get(client_id) else {
-        return html_error(StatusCode::BAD_REQUEST, "unknown client_id — register first via /oauth/register");
+    let client = match resolve_client(&store, client_id).await {
+        Ok(c) => c,
+        Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
     };
     let Some(redirect_uri) = q.get("redirect_uri") else {
         return html_error(StatusCode::BAD_REQUEST, "missing redirect_uri");
     };
     if !client.redirect_uris.iter().any(|u| u == redirect_uri) {
-        return html_error(StatusCode::BAD_REQUEST, "redirect_uri is not registered for this client");
+        return html_error(
+            StatusCode::BAD_REQUEST,
+            "redirect_uri is not registered for this client",
+        );
     }
 
     let state_param = q.get("state").cloned().unwrap_or_default();
@@ -403,7 +548,9 @@ pub(crate) async fn authorize_handler(
     }
     let challenge = q.get("code_challenge").cloned().unwrap_or_default();
     let challenge_ok = (43..=128).contains(&challenge.len())
-        && challenge.chars().all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c));
+        && challenge
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c));
     if !challenge_ok || q.get("code_challenge_method").map(String::as_str) != Some("S256") {
         // PKCE S256 is REQUIRED (OAuth 2.1 / MCP spec).
         return bounce("invalid_request");
@@ -468,13 +615,21 @@ pub(crate) async fn decision_handler(
 ) -> Response {
     let mut store = load_store(&http_state.home_dir);
     // Re-validate against the store — hidden form fields are client-supplied.
-    let Some(client) = store.clients.get(&f.client_id) else {
-        return html_error(StatusCode::BAD_REQUEST, "unknown client_id");
+    let client = match resolve_client(&store, &f.client_id).await {
+        Ok(c) => c,
+        Err(_) => return html_error(StatusCode::BAD_REQUEST, "unknown client_id"),
     };
     if !client.redirect_uris.iter().any(|u| u == &f.redirect_uri) {
-        return html_error(StatusCode::BAD_REQUEST, "redirect_uri is not registered for this client");
+        return html_error(
+            StatusCode::BAD_REQUEST,
+            "redirect_uri is not registered for this client",
+        );
     }
-    let sep = if f.redirect_uri.contains('?') { '&' } else { '?' };
+    let sep = if f.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
     let state_suffix = if f.state.is_empty() {
         String::new()
     } else {
@@ -482,8 +637,11 @@ pub(crate) async fn decision_handler(
     };
 
     if f.action != "approve" {
-        return Redirect::to(&format!("{}{sep}error=access_denied{state_suffix}", f.redirect_uri))
-            .into_response();
+        return Redirect::to(&format!(
+            "{}{sep}error=access_denied{state_suffix}",
+            f.redirect_uri
+        ))
+        .into_response();
     }
 
     // Operator proof: a valid INTERNAL key. External keys cannot mint grants
@@ -528,7 +686,8 @@ fn oauth_error(status: StatusCode, code: &str, desc: &str) -> Response {
         Json(json!({ "error": code, "error_description": desc })),
     )
         .into_response();
-    resp.headers_mut().insert("Cache-Control", "no-store".parse().unwrap());
+    resp.headers_mut()
+        .insert("Cache-Control", "no-store".parse().unwrap());
     resp
 }
 
@@ -586,12 +745,19 @@ pub(crate) async fn token_handler(
                 f.get("redirect_uri"),
                 f.get("code_verifier"),
             ) else {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_request",
-                    "code, client_id, redirect_uri and code_verifier are required");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "code, client_id, redirect_uri and code_verifier are required",
+                );
             };
             // Single-use: remove up front so a failed exchange still burns it.
             let Some(pending) = store.codes.remove(&sha256_hex(code)) else {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", "unknown or reused code");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "unknown or reused code",
+                );
             };
             let _ = save_store(&state.home_dir, store.clone());
             if now_unix() - pending.issued_unix > CODE_TTL_SECS
@@ -599,45 +765,70 @@ pub(crate) async fn token_handler(
                 || &pending.redirect_uri != redirect_uri
                 || !pkce_matches(verifier, &pending.code_challenge)
             {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant",
-                    "code expired or does not match this client/redirect_uri/PKCE verifier");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "code expired or does not match this client/redirect_uri/PKCE verifier",
+                );
             }
-            let client_name = store
-                .clients
-                .get(client_id)
-                .map(|c| c.client_name.clone())
-                .unwrap_or_else(|| "Unnamed MCP client".to_string());
+            let client_name = match resolve_client(&store, client_id).await {
+                Ok(c) => c.client_name,
+                Err(_) => "Unnamed MCP client".to_string(),
+            };
             let body = mint_tokens(&mut store, client_id, &client_name, &pending.scope);
             if save_store(&state.home_dir, store).is_err() {
-                return oauth_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error",
-                    "failed to persist tokens");
+                return oauth_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "failed to persist tokens",
+                );
             }
             let mut resp = Json(body).into_response();
-            resp.headers_mut().insert("Cache-Control", "no-store".parse().unwrap());
+            resp.headers_mut()
+                .insert("Cache-Control", "no-store".parse().unwrap());
             resp
         }
         "refresh_token" => {
             let (Some(raw), Some(client_id)) = (f.get("refresh_token"), f.get("client_id")) else {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_request",
-                    "refresh_token and client_id are required");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "refresh_token and client_id are required",
+                );
             };
             let key = sha256_hex(raw);
             let Some(entry) = store.refresh.remove(&key) else {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", "unknown refresh token");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "unknown refresh token",
+                );
             };
             if entry.expires_unix <= now_unix() || &entry.client_id != client_id {
                 let _ = save_store(&state.home_dir, store);
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant",
-                    "refresh token expired or client mismatch");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "refresh token expired or client mismatch",
+                );
             }
             // Rotation: old refresh token is already removed; mint a new pair.
-            let body = mint_tokens(&mut store, &entry.client_id, &entry.client_name, &entry.scope);
+            let body = mint_tokens(
+                &mut store,
+                &entry.client_id,
+                &entry.client_name,
+                &entry.scope,
+            );
             if save_store(&state.home_dir, store).is_err() {
-                return oauth_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error",
-                    "failed to persist tokens");
+                return oauth_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "failed to persist tokens",
+                );
             }
             let mut resp = Json(body).into_response();
-            resp.headers_mut().insert("Cache-Control", "no-store".parse().unwrap());
+            resp.headers_mut()
+                .insert("Cache-Control", "no-store".parse().unwrap());
             resp
         }
         other => oauth_error(
@@ -653,8 +844,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cimd_ids_and_documents_are_validated() {
+        assert!(cimd::is_cimd_client_id("https://chatgpt.com/oauth/client.json"));
+        assert!(!cimd::is_cimd_client_id("https://chatgpt.com/"));
+        assert!(!cimd::is_cimd_client_id("http://chatgpt.com/c.json"));
+        assert!(!cimd::is_cimd_client_id("abc123"));
+        let id = "https://app.example.com/client.json";
+        let good = json!({
+            "client_id": id, "client_name": "Example <b>",
+            "redirect_uris": ["https://app.example.com/cb"]
+        });
+        let c = cimd::parse_document(&good, id).unwrap();
+        assert_eq!(c.redirect_uris, vec!["https://app.example.com/cb"]);
+        let mut other = good.clone();
+        other["client_id"] = json!("https://evil.example/client.json");
+        assert!(cimd::parse_document(&other, id).is_err());
+        let mut private = good.clone();
+        private["token_endpoint_auth_method"] = json!("private_key_jwt");
+        assert!(cimd::parse_document(&private, id).is_err());
+        let mut bad_uri = good.clone();
+        bad_uri["redirect_uris"] = json!(["myapp://cb"]);
+        assert!(cimd::parse_document(&bad_uri, id).is_err());
+        assert!(cimd::parse_document(&json!([]), id).is_err());
+    }
+
+    #[tokio::test]
+    async fn cimd_document_is_fetched_capped_and_cached() {
+        use axum::routing::get;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let id = format!("{base}/client.json");
+        let doc = json!({ "client_id": id, "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"] });
+        let big = "x".repeat(cimd::MAX_DOC_BYTES + 10);
+        let app = axum::Router::new()
+            .route("/client.json", get(move || { let d = doc.clone(); async move { axum::Json(d) } }))
+            .route("/big.json", get(move || { let b = big.clone(); async move { b } }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let loopback = duduclaw_gateway::remote_mcp::url_policy::OutboundPolicy { allow_loopback: true };
+        let c = cimd::resolve_with(&id, loopback).await.unwrap();
+        assert_eq!(c.redirect_uris, vec!["https://chatgpt.com/connector_platform_oauth_redirect"]);
+        assert!(cimd::resolve_with(&format!("{base}/big.json"), loopback).await.is_err());
+        // Production policy: loopback refused before any request.
+        assert!(cimd::resolve_with(&format!("{base}/other.json"), duduclaw_gateway::remote_mcp::url_policy::OutboundPolicy::PUBLIC_ONLY).await.is_err());
+    }
+
+    #[test]
     fn redirect_uri_policy_is_anchored_and_fail_closed() {
-        assert!(redirect_uri_acceptable("https://claude.ai/api/mcp/auth_callback"));
+        assert!(redirect_uri_acceptable(
+            "https://claude.ai/api/mcp/auth_callback"
+        ));
         assert!(redirect_uri_acceptable("http://localhost:33418/callback"));
         assert!(redirect_uri_acceptable("http://127.0.0.1/cb"));
         assert!(redirect_uri_acceptable("http://[::1]:8080/cb"));
@@ -668,7 +906,10 @@ mod tests {
 
     #[test]
     fn scope_filter_narrows_to_grantable_only() {
-        assert_eq!(filter_scope("memory:read admin odoo:execute wiki:read"), "memory:read wiki:read");
+        assert_eq!(
+            filter_scope("memory:read admin odoo:execute wiki:read"),
+            "memory:read wiki:read"
+        );
         assert_eq!(filter_scope(""), "");
         assert_eq!(filter_scope("bogus"), "");
     }
@@ -679,7 +920,10 @@ mod tests {
         let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(Sha256::digest(verifier.as_bytes()));
         assert!(pkce_matches(verifier, &challenge));
-        assert!(!pkce_matches("wrong-verifier-wrong-verifier-wrong-verifier", &challenge));
+        assert!(!pkce_matches(
+            "wrong-verifier-wrong-verifier-wrong-verifier",
+            &challenge
+        ));
     }
 
     #[test]
@@ -714,7 +958,10 @@ mod tests {
 
     #[test]
     fn client_name_is_sanitized_and_escaped() {
-        assert_eq!(sanitize_client_name(Some("Evil\u{7}<script>")), "Evil<script>");
+        assert_eq!(
+            sanitize_client_name(Some("Evil\u{7}<script>")),
+            "Evil<script>"
+        );
         assert_eq!(escape_html("Evil<script>"), "Evil&lt;script&gt;");
         assert_eq!(sanitize_client_name(None), "Unnamed MCP client");
         assert_eq!(sanitize_client_name(Some("   ")), "Unnamed MCP client");

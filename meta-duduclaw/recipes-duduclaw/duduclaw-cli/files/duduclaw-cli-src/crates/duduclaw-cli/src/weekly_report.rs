@@ -25,6 +25,11 @@ use duduclaw_gateway::evolution_events::reliability::ReliabilitySummary;
 use duduclaw_gateway::task_store::TaskStore;
 use serde::Serialize;
 
+#[path = "weekly_report_goal.rs"]
+pub(crate) mod goal_survival;
+#[path = "weekly_report_goal_readonly.rs"]
+pub(crate) mod goal_survival_readonly;
+
 /// Hard cap on activity rows scanned per agent. The activity table has no time
 /// index, so we fetch DESC-ordered rows up to this cap and filter by timestamp
 /// client-side. If the cap is hit, the renderer notes that older rows in the
@@ -85,6 +90,8 @@ pub struct ReportData {
     pub agents: Vec<AgentReport>,
     /// True when at least one agent's activity scan hit ACTIVITY_FETCH_CAP.
     pub activity_truncated: bool,
+    /// Goal-loop survival table (goal tasks created inside the window).
+    pub goal_survival: goal_survival::GoalSurvival,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,11 +131,7 @@ pub struct ActivityMetrics {
 // Data collection
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn collect(
-    home_dir: &Path,
-    days: u32,
-    agent_filter: Option<&str>,
-) -> Result<ReportData> {
+async fn collect(home_dir: &Path, days: u32, agent_filter: Option<&str>) -> Result<ReportData> {
     // Open data sources. Missing DBs are auto-created empty by the
     // underlying constructors — that yields zero counts, which is fine.
     let cost_db: PathBuf = home_dir.join("cost_telemetry.db");
@@ -217,7 +220,10 @@ async fn collect(
 
         let active = cost_metrics.requests_current > 0
             || activity.total > 0
-            || reliability.as_ref().map(|r| r.total_events > 0).unwrap_or(false);
+            || reliability
+                .as_ref()
+                .map(|r| r.total_events > 0)
+                .unwrap_or(false);
         if active {
             active_count += 1;
         }
@@ -242,6 +248,10 @@ async fn collect(
             .then_with(|| a.name.cmp(&b.name))
     });
 
+    // A failed read degrades to an empty section rather than failing the report.
+    let goal_survival =
+        survival_result(goal_survival::collect(&tasks, &window_start, agent_filter).await);
+
     Ok(ReportData {
         generated_at: now,
         window_start,
@@ -251,7 +261,32 @@ async fn collect(
         total_agents_active: active_count,
         agents: agent_reports,
         activity_truncated,
+        goal_survival,
     })
+}
+
+fn survival_result(
+    result: std::result::Result<goal_survival::GoalSurvival, String>,
+) -> goal_survival::GoalSurvival {
+    match result {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!(error = %e, "weekly-report: goal survival table failed");
+            goal_survival::GoalSurvival::unavailable(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod survival_failure_tests {
+    #[test]
+    fn survival_read_failure_is_unavailable_instead_of_zero_tasks() {
+        let report = super::survival_result(Err("no such table: task_iterations".into()));
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["availability"], "unavailable");
+        assert!(super::goal_survival::render_markdown(&report).contains("無法讀取"));
+        assert!(!super::goal_survival::render_markdown(&report).contains("沒有目標任務"));
+    }
 }
 
 async fn collect_activity(
@@ -314,7 +349,11 @@ pub fn render_markdown(report: &ReportData) -> String {
     let total_requests: u64 = report.agents.iter().map(|a| a.cost.requests_current).sum();
     let total_requests_prev: u64 = report.agents.iter().map(|a| a.cost.requests_previous).sum();
     let total_cost: u64 = report.agents.iter().map(|a| a.cost.cost_millicents).sum();
-    let total_cost_prev: u64 = report.agents.iter().map(|a| a.cost.cost_millicents_previous).sum();
+    let total_cost_prev: u64 = report
+        .agents
+        .iter()
+        .map(|a| a.cost.cost_millicents_previous)
+        .sum();
     let total_input: u64 = report.agents.iter().map(|a| a.cost.input_tokens).sum();
     let total_output: u64 = report.agents.iter().map(|a| a.cost.output_tokens).sum();
     let total_activity: u64 = report.agents.iter().map(|a| a.activity.total).sum();
@@ -334,8 +373,14 @@ pub fn render_markdown(report: &ReportData) -> String {
         fmt_usd(total_cost_prev),
         fmt_delta(total_cost, total_cost_prev)
     ));
-    out.push_str(&format!("| Input Token | {} | — | — |\n", fmt_num(total_input)));
-    out.push_str(&format!("| Output Token | {} | — | — |\n", fmt_num(total_output)));
+    out.push_str(&format!(
+        "| Input Token | {} | — | — |\n",
+        fmt_num(total_input)
+    ));
+    out.push_str(&format!(
+        "| Output Token | {} | — | — |\n",
+        fmt_num(total_output)
+    ));
     out.push_str(&format!(
         "| 任務活動事件總數 | {} | — | — |\n\n",
         fmt_num(total_activity)
@@ -360,10 +405,7 @@ pub fn render_markdown(report: &ReportData) -> String {
                 fmt_num(agent.cost.input_tokens),
                 fmt_num(agent.cost.output_tokens),
                 fmt_usd(agent.cost.cost_millicents),
-                fmt_delta(
-                    agent.cost.requests_current,
-                    agent.cost.requests_previous
-                )
+                fmt_delta(agent.cost.requests_current, agent.cost.requests_previous)
             ));
         }
         out.push('\n');
@@ -439,6 +481,8 @@ pub fn render_markdown(report: &ReportData) -> String {
         out.push('\n');
     }
 
+    out.push_str(&goal_survival::render_markdown(&report.goal_survival));
+
     // Footer
     out.push_str("---\n\n");
     out.push_str("**資料來源**：\n");
@@ -486,7 +530,11 @@ fn fmt_usd(millicents: u64) -> String {
 /// Render a current-vs-previous percentage delta as "+12.5%" / "-3.0%" / "—".
 fn fmt_delta(current: u64, previous: u64) -> String {
     if previous == 0 {
-        return if current == 0 { "—".into() } else { "new".into() };
+        return if current == 0 {
+            "—".into()
+        } else {
+            "new".into()
+        };
     }
     let delta = current as f64 - previous as f64;
     let pct = delta / previous as f64 * 100.0;
@@ -591,6 +639,7 @@ mod tests {
                 },
             ],
             activity_truncated: false,
+            goal_survival: goal_survival::build(Vec::new(), 0),
         }
     }
 

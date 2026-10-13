@@ -13,10 +13,20 @@
 //! priorities (e.g. `tw_national_id` priority 100 wins over a more general
 //! `digits_8_to_12` priority 50).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::Result;
+use serde_json::Value;
+
+use crate::config::SourceSetting;
+use crate::data_source::DataSource;
+use crate::error::{RedactionError, Result};
+use crate::ner::{InstallDirs, NerConfig};
+use crate::pipeline::ToolContext;
 use crate::rules::{Match, Rule, RuleKind, RuleSpec};
+use crate::rules::db_field;
+use crate::rules::identity::IdentityRule;
+use crate::rules::json_path::JsonPathRule;
 use crate::rules::keyword::KeywordRule;
 use crate::rules::regex::RegexRule;
 use crate::source::Source;
@@ -28,19 +38,85 @@ pub struct MatchedSpan {
     pub span: Match,
 }
 
+/// One node selected by a structured (JsonPath) rule.
+#[derive(Debug, Clone)]
+pub struct StructuredHit {
+    /// RFC-6901 pointer into the value that was resolved.
+    pub pointer: String,
+    /// The rule that selected it — carries category, restore scope and the
+    /// `exclude_keys` the pipeline applies while descending.
+    pub rule: Arc<JsonPathRule>,
+}
+
 /// A collection of compiled rules with `apply()` that returns resolved
 /// matches in left-to-right order.
+///
+/// Text rules and structured (JsonPath) rules are kept apart: a structured
+/// rule's `match_text` is empty by construction, so running it through the
+/// text path would be pure overhead, and the two passes resolve conflicts
+/// differently (spans vs. pointers).
 pub struct RuleEngine {
     rules: Vec<Arc<dyn Rule>>,
+    structured: Vec<Arc<JsonPathRule>>,
+}
+
+/// Ambient resources some rule kinds need at compile time.
+///
+/// Kept as an explicit struct rather than extra parameters so adding the next
+/// context-dependent rule kind does not churn every call site.
+#[derive(Debug, Clone)]
+pub struct EngineOptions {
+    /// `<home>/shared/wiki/identity/people` — required by
+    /// [`RuleKind::Identity`]. `None` ⇒ this engine was built in a context
+    /// with no identity source (e.g. a unit test), and an identity rule fails
+    /// to compile rather than silently matching nothing.
+    pub identity_people_dir: Option<PathBuf>,
+
+    /// Data-source registry consulted by [`RuleKind::DbField`] — built-ins
+    /// plus the operator's `[redaction.data_sources.*]` entries. Defaults to
+    /// the built-ins alone, so a caller that forgets to thread the config
+    /// through loses custom sources loudly (unknown source ⇒ load error)
+    /// rather than losing Odoo silently.
+    pub data_sources: std::collections::HashMap<String, DataSource>,
+
+    /// Where the NER model lives — required by [`RuleKind::Ner`]. `None` ⇒
+    /// this engine was built in a context with no model directory (a unit
+    /// test, a dry-compile with no home), and a `ner` rule fails to compile
+    /// rather than silently matching nothing. Same fail-closed shape as
+    /// `identity_people_dir`.
+    pub ner_dirs: Option<InstallDirs>,
+
+    /// `[redaction.ner]` runtime settings. Defaults are usable; the manager
+    /// threads the operator's block through.
+    pub ner: NerConfig,
+}
+
+impl Default for EngineOptions {
+    fn default() -> Self {
+        Self {
+            identity_people_dir: None,
+            data_sources: crate::data_source::builtin_registry(),
+            ner_dirs: None,
+            ner: NerConfig::default(),
+        }
+    }
 }
 
 impl RuleEngine {
+    /// Compile a vector of [`RuleSpec`] into a runtime engine with default
+    /// ambient resources: no identity directory and the **built-in data
+    /// sources only**. Operator-defined `[redaction.data_sources.*]` entries
+    /// reach the engine through [`RuleEngine::from_specs_with`].
+    pub fn from_specs(specs: Vec<RuleSpec>) -> Result<Self> {
+        Self::from_specs_with(specs, &EngineOptions::default())
+    }
+
     /// Compile a vector of [`RuleSpec`] into a runtime engine.
     ///
-    /// Rule types not yet implemented (Identity / Keyword / JsonPath) are
-    /// silently skipped with a `tracing::warn` — this is intentional so a
-    /// profile that ships with future rule types degrades gracefully.
-    pub fn from_specs(specs: Vec<RuleSpec>) -> Result<Self> {
+    /// Every [`RuleKind`] either compiles or *fails the load*: a rule that
+    /// silently vanished would leave an operator believing a field is masked
+    /// when it is not. There is no warn-and-skip path.
+    pub fn from_specs_with(specs: Vec<RuleSpec>, options: &EngineOptions) -> Result<Self> {
         // Dedup by rule id with last-wins semantics: when two profiles (or a
         // profile + inline config) define the same id, the later spec must
         // override the earlier one. We keep the original ordering of the
@@ -61,7 +137,17 @@ impl RuleEngine {
             .collect();
 
         let mut rules: Vec<Arc<dyn Rule>> = Vec::new();
+        let mut structured: Vec<Arc<JsonPathRule>> = Vec::new();
         for spec in specs {
+            // `enabled = false` parks a rule without deleting it — applied
+            // here, before the kind match, so it holds for EVERY kind
+            // (regex / keyword / identity / json_path / db_field) and can
+            // never be forgotten when the next kind is added. The dedup above
+            // has already run, so a later profile's disabled spec correctly
+            // overrides (and silences) an earlier profile's enabled one.
+            if !spec.enabled {
+                continue;
+            }
             match &spec.kind {
                 RuleKind::Regex { .. } => {
                     let rule = RegexRule::compile(spec)?;
@@ -71,32 +157,145 @@ impl RuleEngine {
                     let rule = KeywordRule::compile(spec)?;
                     rules.push(Arc::new(rule));
                 }
-                other => {
-                    tracing::warn!(
-                        target: "duduclaw_redaction::engine",
-                        rule_id = %spec.id,
-                        kind = ?other,
-                        "rule kind not yet implemented in this build — skipping"
-                    );
+                RuleKind::Identity { .. } => {
+                    // Fail-closed: without a people directory we cannot know
+                    // which names to mask, and a rule that matches nothing is
+                    // indistinguishable from a working one at runtime.
+                    let Some(people_dir) = options.identity_people_dir.clone() else {
+                        return Err(RedactionError::rule_compile(
+                            spec.id.clone(),
+                            "identity source unavailable in this context \
+                             (no identity people directory configured)",
+                        ));
+                    };
+                    let rule = IdentityRule::compile(spec, people_dir)?;
+                    rules.push(Arc::new(rule));
+                }
+                RuleKind::JsonPath { .. } => {
+                    let rule = JsonPathRule::compile(spec)?;
+                    structured.push(Arc::new(rule));
+                }
+                RuleKind::Ner { .. } => {
+                    // One spec becomes one rule per label (each with its own
+                    // category); they share a single model session.
+                    //
+                    // Fail-closed in three places: no model directory in this
+                    // context, no model installed, or a build without the
+                    // `ner` feature. None of them may degrade to "compiles and
+                    // matches nothing".
+                    #[cfg(feature = "ner")]
+                    {
+                        let Some(dirs) = options.ner_dirs.clone() else {
+                            return Err(RedactionError::rule_compile(
+                                spec.id.clone(),
+                                "AI 智慧偵測在這個情境下沒有模型目錄可用",
+                            ));
+                        };
+                        for rule in crate::rules::ner::NerRule::compile(
+                            spec,
+                            &dirs,
+                            &options.ner.sanitized(),
+                        )? {
+                            rules.push(rule);
+                        }
+                    }
+                    #[cfg(not(feature = "ner"))]
+                    {
+                        return Err(RedactionError::rule_compile(
+                            spec.id.clone(),
+                            "這個版本的 DuDuClaw 未內建 AI 智慧偵測（缺少 `ner` 編譯功能）",
+                        ));
+                    }
+                }
+                RuleKind::DbField { .. } => {
+                    // Sugar: expand to one JsonPath spec per bound tool, then
+                    // compile each. Expansion happens here (after the id dedup
+                    // above) precisely so the expanded rules may share the
+                    // operator's single rule id without colliding.
+                    for expanded in db_field::expand(&spec, &options.data_sources)? {
+                        structured.push(Arc::new(JsonPathRule::compile(expanded)?));
+                    }
                 }
             }
         }
-        Ok(RuleEngine { rules })
+
+        // Structured rules run in (priority desc, spec order) — a stable sort
+        // keeps the config's ordering within one priority band, so which rule
+        // claims a node first is deterministic.
+        structured.sort_by_key(|r| std::cmp::Reverse(r.priority()));
+
+        Ok(RuleEngine { rules, structured })
     }
 
-    /// Number of compiled rules.
+    /// Number of compiled rules (text + structured).
     pub fn rule_count(&self) -> usize {
-        self.rules.len()
+        self.rules.len() + self.structured.len()
     }
 
     /// `(rule id, category)` pairs for every compiled rule — feeds the
     /// dashboard's field picker so operators see exactly which fields the
-    /// active profiles cover.
+    /// active profiles cover. Structured field rules are included so the
+    /// catalogue covers `json_path` / `db_field` categories too.
     pub fn rule_catalogue(&self) -> Vec<(String, String)> {
         self.rules
             .iter()
             .map(|r| (r.id().to_string(), r.category().to_string()))
+            .chain(
+                self.structured
+                    .iter()
+                    .map(|r| (r.id().to_string(), r.category().to_string())),
+            )
             .collect()
+    }
+
+    /// Number of compiled structured (JsonPath / db_field) rules.
+    pub fn structured_rule_count(&self) -> usize {
+        self.structured.len()
+    }
+
+    /// Resolve every structured rule that applies to this tool call against
+    /// `value`, returning the selected nodes as JSON pointers.
+    ///
+    /// Four gates, all of which must pass: the rule's `match_tool` glob, its
+    /// `match_args` equality table, its `match_result` equality table, and the
+    /// source's category filter. Results come back in rule order (priority
+    /// desc), and within a rule in path order — the pipeline relies on that
+    /// being deterministic, because the first rule to claim a node is the one
+    /// whose category the token carries.
+    ///
+    /// `match_result` is evaluated against **this** `value` — the same
+    /// document the paths resolve on. The pipeline calls this once per value
+    /// it descends into (the outer envelope, then each embedded JSON leaf), so
+    /// a rule bound to `"/table" = "customers.csv"` fires exactly on the
+    /// payload that says so and nowhere else.
+    pub fn apply_structured(
+        &self,
+        value: &Value,
+        ctx: &ToolContext<'_>,
+        setting: &SourceSetting,
+    ) -> Vec<StructuredHit> {
+        let mut hits = Vec::new();
+        for rule in &self.structured {
+            if !rule.matches_tool(ctx.tool_name) {
+                continue;
+            }
+            if !rule.matches_args(ctx.args) {
+                continue;
+            }
+            if !rule.matches_result(value) {
+                continue;
+            }
+            if !setting.allows_category(rule.category()) {
+                continue;
+            }
+            for pointer in rule.resolve_pointers(value) {
+                hits.push(StructuredHit {
+                    pointer,
+                    rule: rule.clone(),
+                });
+            }
+        }
+        hits
     }
 
     /// Apply all rules to `text` and return the resolved matches in
@@ -170,8 +369,83 @@ mod tests {
             priority,
             cross_session_stable: false,
             apply_to_system_prompt: false,
+            enabled: true,
             kind: RuleKind::Regex { pattern: pattern.into() },
         }
+    }
+
+    fn ner_spec() -> RuleSpec {
+        RuleSpec {
+            id: "ai_pii".into(),
+            category: "PII".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: crate::ner::DEFAULT_NER_PRIORITY,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: true,
+            kind: RuleKind::Ner {
+                labels: Vec::new(),
+                min_chars: None,
+                max_chars: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_ner_rule_with_no_model_directory_fails_the_load() {
+        // Same fail-closed shape as an identity rule without a people
+        // directory: a rule that compiled but matched nothing would be
+        // indistinguishable from a working one at runtime.
+        let Err(err) = RuleEngine::from_specs(vec![ner_spec()]) else {
+            panic!("a NER rule with no model directory must not compile");
+        };
+        assert!(
+            matches!(err, RedactionError::RuleCompile { .. }),
+            "expected a rule-compile failure, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "ner"))]
+    fn a_build_without_the_ner_feature_refuses_the_rule_rather_than_skipping_it() {
+        let opts = EngineOptions {
+            ner_dirs: Some(crate::ner::InstallDirs::under_home(std::path::Path::new("/nope"))),
+            ..EngineOptions::default()
+        };
+        let Err(err) = RuleEngine::from_specs_with(vec![ner_spec()], &opts) else {
+            panic!("a build without the feature must not compile a NER rule");
+        };
+        assert!(
+            format!("{err}").contains("AI 智慧偵測"),
+            "the error must say the build cannot do this: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "ner")]
+    fn a_ner_rule_with_an_empty_model_directory_fails_the_load() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let opts = EngineOptions {
+            ner_dirs: Some(crate::ner::InstallDirs::under_home(tmp.path())),
+            ..EngineOptions::default()
+        };
+        let Err(err) = RuleEngine::from_specs_with(vec![ner_spec()], &opts) else {
+            panic!("an uninstalled model must not compile");
+        };
+        assert!(
+            matches!(err, RedactionError::RuleCompile { .. }),
+            "an uninstalled model must fail the load: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_disabled_ner_rule_is_skipped_before_the_model_is_consulted() {
+        // `enabled = false` is checked ahead of the kind match, so parking the
+        // rule must work even on a machine that could never load the model.
+        let mut spec = ner_spec();
+        spec.enabled = false;
+        let engine = RuleEngine::from_specs(vec![spec]).expect("a parked rule must not need a model");
+        assert_eq!(engine.rule_count(), 0);
     }
 
     #[test]
@@ -264,24 +538,239 @@ mod tests {
         assert!(hits_foo.is_empty(), "overridden rule must no longer fire");
     }
 
+    fn identity_spec(id: &str, source: &str) -> RuleSpec {
+        RuleSpec {
+            id: id.into(),
+            category: "PERSON".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: 70,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: true,
+            kind: RuleKind::Identity { source: source.into() },
+        }
+    }
+
     #[test]
-    fn future_rule_kinds_are_skipped_gracefully() {
-        // JsonPath is still unimplemented in the engine — it must be skipped,
-        // not error. (Keyword used to be here; it is now compiled — see below.)
+    fn every_rule_kind_compiles_or_errors_loudly() {
+        // No rule kind is warn-skipped any more: an identity rule with no
+        // identity source available must FAIL the load, not vanish into a
+        // silently empty engine (an operator would believe names are masked).
+        let err = RuleEngine::from_specs(vec![identity_spec("people", "wiki")])
+            .err()
+            .expect("identity rule with no source must fail the load");
+        match err {
+            crate::error::RedactionError::RuleCompile { ref reason, .. } => {
+                assert!(reason.contains("identity source unavailable"), "{reason}");
+            }
+            other => panic!("expected RuleCompile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn identity_rule_compiles_when_a_people_dir_is_supplied() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let people = tmp.path().join("shared/wiki/identity/people");
+        std::fs::create_dir_all(&people).unwrap();
+        std::fs::write(
+            people.join("ruby.md"),
+            "---\nperson_id: p1\ndisplay_name: Ruby Lin\n---\n",
+        )
+        .unwrap();
+
+        let engine = RuleEngine::from_specs_with(
+            vec![identity_spec("people", "wiki")],
+            &EngineOptions {
+                identity_people_dir: Some(people),
+                ..EngineOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(engine.rule_count(), 1);
+        assert_eq!(engine.structured_rule_count(), 0);
+        // It is a text rule like any other — catalogue and text path included.
+        assert_eq!(engine.rule_catalogue(), vec![("people".into(), "PERSON".into())]);
+        let hits = engine.apply(
+            "Ruby Lin called",
+            &Source::ToolResult { tool_name: "x".into() },
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].span.original, "Ruby Lin");
+    }
+
+    #[test]
+    fn identity_rule_with_unknown_source_fails_the_load() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let people = tmp.path().join("people");
+        std::fs::create_dir_all(&people).unwrap();
+        let res = RuleEngine::from_specs_with(
+            vec![identity_spec("people", "ldap")],
+            &EngineOptions {
+                identity_people_dir: Some(people),
+                ..EngineOptions::default()
+            },
+        );
+        assert!(matches!(
+            res.err(),
+            Some(crate::error::RedactionError::RuleCompile { .. })
+        ));
+    }
+
+    fn json_path_spec(id: &str, paths: &[&str], tool: Option<&str>) -> RuleSpec {
+        RuleSpec {
+            id: id.into(),
+            category: "DB_FIELD".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: 50,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: true,
+            kind: RuleKind::JsonPath {
+                paths: paths.iter().map(|s| s.to_string()).collect(),
+                match_tool: tool.map(|s| s.to_string()),
+                match_args: std::collections::HashMap::new(),
+                match_result: Default::default(),
+                exclude_keys: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn json_path_rule_kind_is_compiled() {
+        let engine =
+            RuleEngine::from_specs(vec![json_path_spec("field", &["$[*].name"], None)]).unwrap();
+        assert_eq!(engine.rule_count(), 1);
+        assert_eq!(engine.structured_rule_count(), 1);
+        // It must not participate in the text path.
+        assert!(
+            engine
+                .apply("name is Alice", &Source::ToolResult { tool_name: "x".into() })
+                .is_empty()
+        );
+        assert_eq!(engine.rule_catalogue(), vec![("field".into(), "DB_FIELD".into())]);
+    }
+
+    #[test]
+    fn malformed_json_path_fails_the_load() {
+        let res = RuleEngine::from_specs(vec![json_path_spec("bad", &["name"], None)]);
+        assert!(matches!(
+            res.err(),
+            Some(crate::error::RedactionError::RuleCompile { .. })
+        ));
+    }
+
+    #[test]
+    fn db_field_expands_to_several_structured_rules() {
         let spec = RuleSpec {
-            id: "future".into(),
+            id: "customers".into(),
+            category: "DB_FIELD".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: 70,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: true,
+            kind: RuleKind::DbField {
+                source: Some("odoo".into()),
+                connector: None,
+                fields: vec!["res.partner.name".into()],
+            },
+        };
+        let engine = RuleEngine::from_specs(vec![spec]).unwrap();
+        // odoo_search + odoo_execute + odoo_partner_search.
+        assert_eq!(engine.structured_rule_count(), 3);
+        // All three share the operator's single rule id.
+        assert!(
+            engine
+                .rule_catalogue()
+                .iter()
+                .all(|(id, _)| id == "customers")
+        );
+    }
+
+    #[test]
+    fn unknown_connector_fails_the_load() {
+        let spec = RuleSpec {
+            id: "bad".into(),
             category: "X".into(),
             restore_scope: RestoreScope::Owner,
             priority: 50,
             cross_session_stable: false,
             apply_to_system_prompt: false,
-            kind: RuleKind::JsonPath {
-                paths: vec!["$.phone".into()],
-                match_tool: None,
+            enabled: true,
+            kind: RuleKind::DbField {
+                source: Some("sqlserver".into()),
+                connector: None,
+                fields: vec!["dbo.customer.name".into()],
             },
         };
-        let engine = RuleEngine::from_specs(vec![spec]).unwrap();
-        assert_eq!(engine.rule_count(), 0);
+        assert!(RuleEngine::from_specs(vec![spec]).is_err());
+    }
+
+    #[test]
+    fn apply_structured_honours_tool_arg_and_category_gates() {
+        use crate::config::{SourceMode, SourceSetting};
+
+        let mut with_args = json_path_spec("f", &["$[*].name"], Some("odoo_*"));
+        with_args.kind = RuleKind::JsonPath {
+            paths: vec!["$[*].name".into()],
+            match_tool: Some("odoo_*".into()),
+            match_args: [("model".to_string(), "res.partner".to_string())]
+                .into_iter()
+                .collect(),
+            match_result: Default::default(),
+            exclude_keys: vec![],
+        };
+        let engine = RuleEngine::from_specs(vec![with_args]).unwrap();
+
+        let value = serde_json::json!([{"name": "Alice"}, {"name": "Bob"}]);
+        let args = serde_json::json!({"model": "res.partner"});
+        let open: SourceSetting = SourceMode::On.into();
+
+        let ctx = ToolContext { tool_name: "odoo_search", args: Some(&args) };
+        let hits = engine.apply_structured(&value, &ctx, &open);
+        assert_eq!(
+            hits.iter().map(|h| h.pointer.clone()).collect::<Vec<_>>(),
+            vec!["/0/name", "/1/name"]
+        );
+
+        // Wrong tool.
+        let ctx = ToolContext { tool_name: "memory_search", args: Some(&args) };
+        assert!(engine.apply_structured(&value, &ctx, &open).is_empty());
+
+        // Wrong model arg.
+        let other = serde_json::json!({"model": "crm.lead"});
+        let ctx = ToolContext { tool_name: "odoo_search", args: Some(&other) };
+        assert!(engine.apply_structured(&value, &ctx, &open).is_empty());
+
+        // Missing args entirely.
+        let ctx = ToolContext { tool_name: "odoo_search", args: None };
+        assert!(engine.apply_structured(&value, &ctx, &open).is_empty());
+
+        // Category excluded for this source.
+        let filtered = SourceSetting {
+            mode: SourceMode::On,
+            only_categories: vec![],
+            exclude_categories: vec!["DB_FIELD".into()],
+        };
+        let ctx = ToolContext { tool_name: "odoo_search", args: Some(&args) };
+        assert!(engine.apply_structured(&value, &ctx, &filtered).is_empty());
+    }
+
+    #[test]
+    fn apply_structured_orders_by_priority_desc() {
+        let mut low = json_path_spec("low", &["$.name"], None);
+        low.priority = 10;
+        let mut high = json_path_spec("high", &["$.name"], None);
+        high.priority = 90;
+        let engine = RuleEngine::from_specs(vec![low, high]).unwrap();
+
+        let value = serde_json::json!({"name": "Alice"});
+        let ctx = ToolContext { tool_name: "any", args: None };
+        let hits = engine.apply_structured(&value, &ctx, &crate::config::SourceMode::On.into());
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].rule.id(), "high");
+        assert_eq!(hits[1].rule.id(), "low");
     }
 
     #[test]
@@ -294,6 +783,7 @@ mod tests {
             priority: 60,
             cross_session_stable: true,
             apply_to_system_prompt: false,
+            enabled: true,
             kind: RuleKind::Keyword {
                 values: vec!["Amazon".into()],
                 case_sensitive: false,
@@ -301,5 +791,119 @@ mod tests {
         };
         let engine = RuleEngine::from_specs(vec![spec]).unwrap();
         assert_eq!(engine.rule_count(), 1);
+    }
+
+    // ── `enabled = false` (2026-09 custom-rules card) ────────
+
+    #[test]
+    fn disabled_text_rule_is_not_compiled() {
+        let mut spec = rspec("email", r"[\w.+-]+@[\w-]+\.[\w.-]+", 50);
+        spec.enabled = false;
+        let engine = RuleEngine::from_specs(vec![spec]).unwrap();
+        assert_eq!(engine.rule_count(), 0);
+        let hits = engine.apply(
+            "contact alice@acme.com",
+            &Source::ToolResult { tool_name: "x".into() },
+        );
+        assert!(hits.is_empty(), "a disabled rule must never fire");
+    }
+
+    #[test]
+    fn disabled_structured_rule_is_not_compiled() {
+        let mut spec = json_path_spec("customer", &["$.name"], None);
+        spec.enabled = false;
+        let engine = RuleEngine::from_specs(vec![spec]).unwrap();
+        assert_eq!(engine.structured_rule_count(), 0);
+        assert_eq!(engine.rule_count(), 0);
+    }
+
+    #[test]
+    fn disabled_keyword_rule_is_not_compiled() {
+        let spec = RuleSpec {
+            id: "customer".into(),
+            category: "CUSTOMER".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: 60,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: false,
+            kind: RuleKind::Keyword {
+                values: vec!["Amazon".into()],
+                case_sensitive: false,
+            },
+        };
+        assert_eq!(RuleEngine::from_specs(vec![spec]).unwrap().rule_count(), 0);
+    }
+
+    #[test]
+    fn disabled_identity_rule_skips_the_fail_closed_gate() {
+        // An identity rule normally refuses to compile without a people
+        // directory. Disabled, it is not compiled at all — so parking a rule
+        // must not resurrect that error.
+        let spec = RuleSpec {
+            id: "people".into(),
+            category: "PERSON".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: 50,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: false,
+            kind: RuleKind::Identity { source: String::new() },
+        };
+        assert_eq!(RuleEngine::from_specs(vec![spec]).unwrap().rule_count(), 0);
+    }
+
+    #[test]
+    fn disabled_db_field_rule_is_not_expanded() {
+        let spec = RuleSpec {
+            id: "partner".into(),
+            category: "CUSTOMER_PII".into(),
+            restore_scope: RestoreScope::Owner,
+            priority: 50,
+            cross_session_stable: false,
+            apply_to_system_prompt: false,
+            enabled: false,
+            kind: RuleKind::DbField {
+                source: Some("odoo".into()),
+                connector: None,
+                fields: vec!["res.partner.name".into()],
+            },
+        };
+        assert_eq!(RuleEngine::from_specs(vec![spec]).unwrap().rule_count(), 0);
+    }
+
+    #[test]
+    fn enabled_defaults_to_true_when_absent_from_toml() {
+        let spec: RuleSpec =
+            toml::from_str("type = \"regex\"\npattern = 'a'\ncategory = \"X\"\n").unwrap();
+        assert!(spec.enabled, "an existing profile must keep firing");
+    }
+
+    #[test]
+    fn enabled_is_always_serialised() {
+        let spec = rspec("email", "a", 50);
+        let v = toml::Value::try_from(&spec).unwrap();
+        assert_eq!(
+            v.get("enabled").and_then(|b| b.as_bool()),
+            Some(true),
+            "enabled must be stated explicitly, not left to the default"
+        );
+    }
+
+    #[test]
+    fn a_later_disabled_spec_overrides_an_earlier_enabled_one() {
+        // Last-wins dedup runs before the enabled gate, so a custom profile
+        // listed after a built-in can park one of its rules.
+        let on = rspec("email", r"[\w.+-]+@[\w-]+\.[\w.-]+", 50);
+        let mut off = on.clone();
+        off.enabled = false;
+        assert_eq!(
+            RuleEngine::from_specs(vec![on.clone(), off]).unwrap().rule_count(),
+            0
+        );
+        // ...and the reverse order re-enables it.
+        let mut off2 = on.clone();
+        off2.enabled = false;
+        assert_eq!(RuleEngine::from_specs(vec![off2, on]).unwrap().rule_count(), 1);
     }
 }

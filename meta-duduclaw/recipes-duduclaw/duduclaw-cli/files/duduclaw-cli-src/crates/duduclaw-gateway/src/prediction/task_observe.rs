@@ -61,7 +61,10 @@ struct NativeEvidenceStore {
 
 impl NativeEvidenceStore {
     fn new() -> Self {
-        Self { order: VecDeque::new(), map: HashMap::new() }
+        Self {
+            order: VecDeque::new(),
+            map: HashMap::new(),
+        }
     }
 
     fn insert(&mut self, task_id: String, round: u32, events: Vec<NativeToolEvent>) {
@@ -104,6 +107,17 @@ pub fn record_native_evidence(task_id: &str, round: u32, events: Vec<NativeToolE
     if let Ok(mut store) = native_evidence_store().lock() {
         store.insert(task_id.to_string(), round, events);
     }
+}
+
+/// The bridge key's round for a task whose `tasks.revision_round` is
+/// `revision_round`: the settle side takes evidence for `revision_round + 1`
+/// (`dispatch_engine/review.rs`), and `revision_round` does not move between
+/// the dispatch and that settle, so the producer (`dispatcher.rs`) must key
+/// by the same value — NOT by the goal-loop marker's `iter=`, which is the
+/// driver's dispatch ordinal and diverges after a stall re-dispatch or a
+/// gateway restart. One function so the two sides cannot drift.
+pub fn evidence_round_for_revision(revision_round: i64) -> u32 {
+    (revision_round as u32).saturating_add(1)
 }
 
 /// Consumer-side entry point: called by
@@ -176,7 +190,9 @@ pub fn observe_round(
 
     let Some(home) = home_dir else {
         warn!(
-            task_id, round, agent_id,
+            task_id,
+            round,
+            agent_id,
             "[unobservable: {task_id} round={round}: no home_dir configured for this agent]"
         );
         return unobservable(task_id, agent_id, round, window, runtime);
@@ -191,7 +207,9 @@ pub fn observe_round(
         // build a McpOnly observation from either — degrade to None rather
         // than assert "the agent used zero tools" as a claim.
         warn!(
-            task_id, round, agent_id,
+            task_id,
+            round,
+            agent_id,
             "[unobservable: {task_id} round={round}: no tool_calls.jsonl evidence in window {since}..{until}]"
         );
         return unobservable(task_id, agent_id, round, window, runtime);
@@ -203,7 +221,9 @@ pub fn observe_round(
         .collect();
     if other_ratio_exceeds_threshold(&classes) {
         warn!(
-            task_id, round, agent_id,
+            task_id,
+            round,
+            agent_id,
             other_count = classes.iter().filter(|c| **c == ToolClass::Other).count(),
             total = classes.len(),
             "task_observe: Other tool-class ratio exceeds warn threshold — ToolClass mapping table may be missing entries (R4)"
@@ -250,10 +270,16 @@ fn observe_full(
         .iter()
         .map(|r| ToolClass::classify(runtime, &r.tool_name))
         .collect();
-    classes.extend(native.iter().map(|e| ToolClass::classify(runtime, &e.tool_name)));
+    classes.extend(
+        native
+            .iter()
+            .map(|e| ToolClass::classify(runtime, &e.tool_name)),
+    );
     if other_ratio_exceeds_threshold(&classes) {
         warn!(
-            task_id, round, agent_id,
+            task_id,
+            round,
+            agent_id,
             other_count = classes.iter().filter(|c| **c == ToolClass::Other).count(),
             total = classes.len(),
             "task_observe: Other tool-class ratio exceeds warn threshold (Full merge) — ToolClass mapping table may be missing entries (R4)"
@@ -396,7 +422,11 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(obs.fidelity, ObservationFidelity::McpOnly, "design §8.2: McpOnly is the primary branch, not an exception");
+        assert_eq!(
+            obs.fidelity,
+            ObservationFidelity::McpOnly,
+            "design §8.2: McpOnly is the primary branch, not an exception"
+        );
         assert_eq!(obs.observed_calls, 2);
         assert_eq!(obs.observed_errors, 1);
         assert!(obs.observed_tool_classes.contains(&ToolClass::TaskBoard));
@@ -465,7 +495,12 @@ mod tests {
             "{\"timestamp\":\"2026-08-06T00:02:00Z\",\"agent_id\":\"agnes\",\"tool_name\":\"tasks_create\",\"success\":true}\n",
         )
         .unwrap();
-        for runtime in [RuntimeType::Claude, RuntimeType::Codex, RuntimeType::Gemini, RuntimeType::OpenAiCompat] {
+        for runtime in [
+            RuntimeType::Claude,
+            RuntimeType::Codex,
+            RuntimeType::Gemini,
+            RuntimeType::OpenAiCompat,
+        ] {
             let obs = observe_round(
                 Some(dir.path()),
                 "agnes",
@@ -558,7 +593,10 @@ mod tests {
             ),
         )
         .unwrap();
-        let native_events = vec![native("mcp__duduclaw__tasks_create", true), native("mcp__duduclaw__tasks_complete", true)];
+        let native_events = vec![
+            native("mcp__duduclaw__tasks_create", true),
+            native("mcp__duduclaw__tasks_complete", true),
+        ];
         let obs = observe_round(
             Some(dir.path()),
             "agnes",
@@ -584,8 +622,11 @@ mod tests {
             "{\"timestamp\":\"2026-08-06T00:02:00Z\",\"agent_id\":\"agnes\",\"tool_name\":\"tasks_create\",\"success\":true}\n",
         )
         .unwrap();
-        let native_events =
-            vec![native("Bash", true), native("Read", true), native("mcp__duduclaw__tasks_create", true)];
+        let native_events = vec![
+            native("Bash", true),
+            native("Read", true),
+            native("mcp__duduclaw__tasks_create", true),
+        ];
         let obs = observe_round(
             Some(dir.path()),
             "agnes",
@@ -611,7 +652,10 @@ mod tests {
         .unwrap();
         // Native side has 2 failures (one of them is the same MCP call, one
         // is a native-only Bash failure the MCP audit never saw).
-        let native_events = vec![native("mcp__duduclaw__tasks_create", false), native("Bash", false)];
+        let native_events = vec![
+            native("mcp__duduclaw__tasks_create", false),
+            native("Bash", false),
+        ];
         let obs = observe_round(
             Some(dir.path()),
             "agnes",
@@ -705,7 +749,11 @@ mod tests {
     fn native_evidence_bridge_distinguishes_round() {
         let task_id = format!("bridge-test-round-{}", uuid::Uuid::new_v4());
         record_native_evidence(&task_id, 1, vec![native("Bash", true)]);
-        record_native_evidence(&task_id, 2, vec![native("Read", true), native("Write", false)]);
+        record_native_evidence(
+            &task_id,
+            2,
+            vec![native("Read", true), native("Write", false)],
+        );
         assert_eq!(take_native_evidence(&task_id, 1).map(|v| v.len()), Some(1));
         assert_eq!(take_native_evidence(&task_id, 2).map(|v| v.len()), Some(2));
     }

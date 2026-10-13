@@ -14,8 +14,8 @@
 //! `TypingGuard` owns a refresh loop and stops it on drop (RAII, panic-safe)
 //! — same pattern as the original Discord implementation.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// RAII guard: fires `refresh()` immediately and then every `interval`
@@ -79,7 +79,11 @@ pub fn telegram_typing(
 /// LINE: loading animation (1:1 chats only; 60 s max → refresh every 50 s).
 /// LINE silently no-ops (202) for group chats and users not viewing the
 /// chat, so it is safe to fire unconditionally with a user id.
-pub fn line_loading(client: reqwest::Client, channel_token: String, user_id: String) -> TypingGuard {
+pub fn line_loading(
+    client: reqwest::Client,
+    channel_token: String,
+    user_id: String,
+) -> TypingGuard {
     TypingGuard::start(Duration::from_secs(50), move || {
         let client = client.clone();
         let token = channel_token.clone();
@@ -133,8 +137,12 @@ pub fn slack_status(
         let channel = channel_id.clone();
         let ts = thread_ts.clone();
         async move {
+            let url = "https://slack.com/api/assistant.threads.setStatus";
+            // Tests route this to the local channel provider (P0-B F4).
+            #[cfg(test)]
+            let url = crate::test_channel_provider::url(&token, url);
             let _ = client
-                .post("https://slack.com/api/assistant.threads.setStatus")
+                .post(url)
                 .header("Authorization", format!("Bearer {token}"))
                 .json(&serde_json::json!({
                     "channel_id": channel,
@@ -217,7 +225,11 @@ mod tests {
         let at_drop = count.load(Ordering::SeqCst);
         assert!(at_drop >= 2, "expected ≥2 refreshes, got {at_drop}");
         tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(count.load(Ordering::SeqCst), at_drop, "loop kept running after drop");
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            at_drop,
+            "loop kept running after drop"
+        );
     }
 
     #[tokio::test]
@@ -228,7 +240,9 @@ mod tests {
         // Unsupported channel type.
         assert!(typing_guard_for(client.clone(), "discord", "12345", None, "tok").is_none());
         // Non-numeric Telegram chat id.
-        assert!(typing_guard_for(client.clone(), "telegram", "not-a-number", None, "tok").is_none());
+        assert!(
+            typing_guard_for(client.clone(), "telegram", "not-a-number", None, "tok").is_none()
+        );
     }
 
     #[tokio::test]

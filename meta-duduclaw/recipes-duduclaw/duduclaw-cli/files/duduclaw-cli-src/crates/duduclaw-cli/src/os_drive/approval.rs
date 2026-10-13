@@ -1,5 +1,5 @@
 //! A7a — the `requires_approval` gate. See
-//! `commercial/docs/DESIGN-os-self-drive-2026-08.md` §5 for the full
+//! `commercial/docs/specs/DESIGN-os-self-drive-2026-08.md` §5 for the full
 //! semantics; short version: an operator terminal (no `DUDUCLAW_AGENT_ID` in
 //! the environment) runs a `requires_approval` command directly, an
 //! agent-identity caller must clear `ApprovalBroker` first — the exact same
@@ -58,9 +58,10 @@ pub async fn gate(home_dir: &Path, description: &str, tool: &str) -> Result<(), 
         }
     };
 
-    match crate::mcp::run_install_approval(
+    match crate::mcp::run_tool_approval(
         &broker,
         &agent_id,
+        tool,
         description,
         serde_json::json!({ "tool": tool }),
         OS_DRIVE_APPROVAL_TTL_SECONDS,
@@ -86,7 +87,10 @@ mod tests {
         assert_eq!(filter_agent_id(None), None);
         assert_eq!(filter_agent_id(Some("".to_string())), None);
         assert_eq!(filter_agent_id(Some("  ".to_string())), None);
-        assert_eq!(filter_agent_id(Some(" ceo ".to_string())), Some("ceo".to_string()));
+        assert_eq!(
+            filter_agent_id(Some(" ceo ".to_string())),
+            Some("ceo".to_string())
+        );
     }
 
     /// Pure stand-in for the env-reading half of [`caller_agent_id`], so the
@@ -102,7 +106,12 @@ mod tests {
         // circuit to Ok without ever touching a broker/home_dir, so an
         // intentionally-invalid path is safe to pass.
         assert!(std::env::var(duduclaw_core::ENV_AGENT_ID).is_err());
-        let result = gate(Path::new("/nonexistent/path/should/never/be/touched"), "test", "test_tool").await;
+        let result = gate(
+            Path::new("/nonexistent/path/should/never/be/touched"),
+            "test",
+            "test_tool",
+        )
+        .await;
         assert!(result.is_ok(), "{result:?}");
     }
 }

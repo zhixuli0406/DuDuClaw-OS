@@ -1,5 +1,5 @@
 //! WP2.4 — the **Gate** half of the Gate/Measure split
-//! (`commercial/docs/DESIGN-evolution-v3-aee.md` §2.2).
+//! (`commercial/docs/specs/DESIGN-evolution-v3-aee.md` §2.2).
 //!
 //! A Gate is deterministic, costs zero LLM tokens, and **keeps its veto**.
 //! Everything that is actually a *quality judgement* (LLM judge, similarity
@@ -197,7 +197,9 @@ pub(crate) fn gate_safety(content: &str, current_reference: &str) -> Result<(), 
                 return Err(TextGradient::blocking(
                     "G-Safety",
                     "killswitch",
-                    &format!("Candidate attempts to disable or remove killswitch capability ('{phrase}')"),
+                    &format!(
+                        "Candidate attempts to disable or remove killswitch capability ('{phrase}')"
+                    ),
                     "Killswitch is a non-negotiable safety mechanism and cannot be modified",
                 ));
             }
@@ -250,7 +252,10 @@ fn gate_contract(content: &str, must_not: &[String]) -> Result<(), TextGradient>
         return Err(TextGradient::blocking(
             "G-Contract",
             "candidate.content",
-            &format!("Candidate is {} bytes, exceeding the {CONTENT_MAX_BYTES}-byte limit", content.len()),
+            &format!(
+                "Candidate is {} bytes, exceeding the {CONTENT_MAX_BYTES}-byte limit",
+                content.len()
+            ),
             "Keep each change focused and compact",
         ));
     }
@@ -347,7 +352,10 @@ fn gate_canary_static(
                 advisories.push(TextGradient::advisory(
                     "G-Canary-Static",
                     &test.id,
-                    &format!("Candidate may weaken canary '{}': it suppresses '{required}'", test.id),
+                    &format!(
+                        "Candidate may weaken canary '{}': it suppresses '{required}'",
+                        test.id
+                    ),
                     &format!("Canary test: {}", test.description),
                 ));
             }
@@ -448,6 +456,9 @@ mod tests {
     #[test]
     fn capacity_never_vetoes_it_reports_headroom() {
         assert_eq!(capacity_headroom(crate::playbook::PLAYBOOK_MAX_ENTRIES), 0);
-        assert_eq!(capacity_headroom(crate::playbook::PLAYBOOK_MAX_ENTRIES + 3), 3);
+        assert_eq!(
+            capacity_headroom(crate::playbook::PLAYBOOK_MAX_ENTRIES + 3),
+            3
+        );
     }
 }

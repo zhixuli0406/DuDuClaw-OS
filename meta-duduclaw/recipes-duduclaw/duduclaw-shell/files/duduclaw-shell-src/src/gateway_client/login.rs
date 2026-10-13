@@ -20,14 +20,27 @@
 // established convention (`gateway_client/mod.rs`'s header comment) is
 // small independent modules over cross-module coupling.
 //
-// ── The account is always the fixed bootstrap `admin@local` ─────────────
+// ── Which account: the machine's owner, asked from the gateway ───────────
 // This surface has no concept of "which operator is unlocking" — the
-// Personal edition has exactly one administrator account
-// (`duduclaw-gateway/src/local_session.rs::LOCAL_ADMIN_EMAIL`), the same one
-// OOBE's `AccountCreate` step sets the password for via `/api/first-run/
-// claim` (see `oobe/claim.rs`'s own header comment). Hardcoding it here
-// mirrors that same established convention rather than inventing a
-// "which account" UI this task brief never asked for.
+// Personal edition has exactly one owner account, the one OOBE's
+// `AccountCreate` step sets the password for via `/api/first-run/claim`
+// (see `oobe/claim.rs`'s own header comment). Its email used to be the fixed
+// placeholder `admin@local`; since platform v1.73.0 the owner can replace it
+// with a real address from the dashboard. So each verify first reads the
+// owner's current email from the local-session response
+// (`session::local_owner_email`), then logs in with it. When no local
+// session is available (auto-login switched off, a non-Personal edition, or
+// an older gateway that never moved the email) it falls back to the
+// placeholder, which is exactly the account those setups still have.
+// Cost: one extra loopback round trip and one `login_local_auto` audit row
+// per unlock attempt, which is rare (an operator typing a password).
+//
+// Since platform v1.73.1 the shell first asks `POST /api/owner/verify`,
+// which checks the owner's password without any email (loopback only,
+// shares /api/login's rate limit), so a non-Personal or auto-login-off
+// owner who changed their email can still unlock. Older gateways answer
+// that route with something other than `200 {"ok":true}`, and the shell
+// then falls back to the email-based `/api/login` path above.
 //
 // ── Why the gateway's OWN 429 does not replace this surface's throttle ───
 // `handle_login`'s `check_login_rate_limit` is a 15-MINUTE, IP+email-scoped
@@ -50,9 +63,9 @@ const DEFAULT_GATEWAY_URL: &str = "http://127.0.0.1:18789";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const READ_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The fixed bootstrap account this surface always authenticates as — see
-/// this file's header comment.
-const LOCK_ACCOUNT_EMAIL: &str = "admin@local";
+/// The owner's placeholder email, used when the gateway can't tell us the
+/// current one — see this file's header comment.
+const FALLBACK_LOCK_ACCOUNT_EMAIL: &str = "admin@local";
 
 /// Why a verify attempt did not resolve to `Ok(())`. `lockscreen::render`'s
 /// own `apply_unlock_result` collapses every variant but
@@ -70,8 +83,8 @@ pub(crate) enum LoginError {
     /// way to verify a password at all, so the lockscreen stays locked
     /// (see `lockscreen/render.rs`'s own header comment).
     Unreachable(String),
-    /// `POST /api/login` -> 401 — a real password mismatch for
-    /// `LOCK_ACCOUNT_EMAIL`. The ONLY variant that means "the gateway is
+    /// `POST /api/login` -> 401 — a real password mismatch for the owner
+    /// account. The ONLY variant that means "the gateway is
     /// fine, the typed password was wrong."
     InvalidCredentials,
     /// `POST /api/login` -> 429 — the gateway's OWN 15-minute rate limit
@@ -100,7 +113,61 @@ struct HttpResponse {
 /// Real entry point — reads `DUDUCLAW_SHELL_GATEWAY_URL` (same env var, same
 /// fallback, as every other client in this module tree).
 pub(crate) fn verify_password(password: &str) -> Result<(), LoginError> {
-    verify_password_at(&gateway_base_url(), password)
+    let base = gateway_base_url();
+    match owner_verify_at(&base, password)? {
+        OwnerVerify::Verified => Ok(()),
+        OwnerVerify::Invalid => Err(LoginError::InvalidCredentials),
+        OwnerVerify::RateLimited => Err(LoginError::RateLimited),
+        OwnerVerify::Unsupported => {
+            let email = lock_account_email(&base);
+            verify_password_at(&base, &email, password)
+        }
+    }
+}
+
+/// Outcome of `POST /api/owner/verify` (platform v1.73.1+), which checks the
+/// owner's password without needing the owner's email.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnerVerify {
+    Verified,
+    Invalid,
+    RateLimited,
+    /// Anything else: an older gateway without the endpoint (404/405, or a
+    /// catch-all page), or a refusal. The caller falls back to `/api/login`.
+    Unsupported,
+}
+
+/// Only a 200 whose body is exactly `{"ok": true}` counts as verified: an
+/// older gateway's catch-all route must never be mistaken for a match.
+pub(crate) fn owner_verify_at(base_url: &str, password: &str) -> Result<OwnerVerify, LoginError> {
+    let (host, port) = parse_loopback_base_url(base_url)?;
+    let body = serde_json::to_vec(&serde_json::json!({ "password": password }))
+        .map_err(|e| LoginError::Malformed(format!("could not encode verify request body: {e}")))?;
+    let (status, resp_body) = http_post_json_with_body(&host, port, "/api/owner/verify", &body)?;
+    Ok(match status {
+        200 => {
+            let ok = serde_json::from_slice::<serde_json::Value>(&resp_body)
+                .ok()
+                .and_then(|v| v.get("ok").and_then(serde_json::Value::as_bool));
+            if ok == Some(true) { OwnerVerify::Verified } else { OwnerVerify::Unsupported }
+        }
+        401 => OwnerVerify::Invalid,
+        429 => OwnerVerify::RateLimited,
+        _ => OwnerVerify::Unsupported,
+    })
+}
+
+/// The owner's current email, or the placeholder when the gateway can't say.
+/// The reason goes to stderr (no email, no password) so a fallback is never
+/// silent.
+fn lock_account_email(base_url: &str) -> String {
+    match super::session::local_owner_email_at(base_url) {
+        Ok(email) => email,
+        Err(e) => {
+            eprintln!("[lockscreen] owner email unavailable ({e:?}); using the placeholder account");
+            FALLBACK_LOCK_ACCOUNT_EMAIL.to_string()
+        }
+    }
 }
 
 fn gateway_base_url() -> String {
@@ -115,9 +182,9 @@ fn gateway_base_url() -> String {
 /// Only the HTTP STATUS drives the outcome (see `HttpResponse`'s own doc
 /// comment on why the body is never parsed): 200 -> `Ok(())`, 401 ->
 /// `InvalidCredentials`, 429 -> `RateLimited`, anything else -> `Http`.
-pub(crate) fn verify_password_at(base_url: &str, password: &str) -> Result<(), LoginError> {
+pub(crate) fn verify_password_at(base_url: &str, email: &str, password: &str) -> Result<(), LoginError> {
     let (host, port) = parse_loopback_base_url(base_url)?;
-    let body = serde_json::to_vec(&serde_json::json!({ "email": LOCK_ACCOUNT_EMAIL, "password": password }))
+    let body = serde_json::to_vec(&serde_json::json!({ "email": email, "password": password }))
         .map_err(|e| LoginError::Malformed(format!("could not encode login request body: {e}")))?;
     let resp = http_post_json(&host, port, "/api/login", &body)?;
     match resp.status {
@@ -183,6 +250,24 @@ fn http_post_json(host: &str, port: u16, path: &str, body: &[u8]) -> Result<Http
     parse_response(&raw)
 }
 
+/// Like `http_post_json`, but also returns the response body (after the
+/// header terminator); used only where the body decides the outcome.
+fn http_post_json_with_body(host: &str, port: u16, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), LoginError> {
+    let mut stream = connect(host, port)?;
+    let mut request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
+    stream.write_all(&request).map_err(|e| LoginError::Unreachable(e.to_string()))?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).map_err(|e| LoginError::Unreachable(e.to_string()))?;
+    let status = parse_response(&raw)?.status;
+    let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4).unwrap_or(raw.len());
+    Ok((status, raw[body_start..].to_vec()))
+}
+
 /// Only the status LINE is parsed — see `HttpResponse`'s own doc comment on
 /// why this module never needs the body at all, unlike every other client
 /// in this tree.
@@ -221,30 +306,108 @@ mod tests {
         format!("http://{addr}")
     }
 
+    /// Like `start_mock_server`, but hands back the raw request it received.
+    fn start_capturing_mock_server(response: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("local_addr");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+            }
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    #[test]
+    fn owner_verify_accepts_only_ok_true_bodies() {
+        let base = start_mock_server("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Verified);
+        // An older gateway's catch-all page must never unlock.
+        let base = start_mock_server("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html><html></html>");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Unsupported);
+        let base = start_mock_server("HTTP/1.1 200 OK\r\n\r\n{\"ok\":false}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Unsupported);
+    }
+
+    #[test]
+    fn owner_verify_maps_statuses() {
+        let base = start_mock_server("HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Invalid);
+        let base = start_mock_server("HTTP/1.1 429 Too Many Requests\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::RateLimited);
+        let base = start_mock_server("HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Unsupported);
+    }
+
+    #[test]
+    fn owner_verify_sends_only_the_password() {
+        let (base, rx) = start_capturing_mock_server("HTTP/1.1 200 OK\r\n\r\n{\"ok\":true}");
+        assert_eq!(owner_verify_at(&base, "pw-123456").unwrap(), OwnerVerify::Verified);
+        let request = rx.recv_timeout(Duration::from_secs(2)).expect("request captured");
+        assert!(request.starts_with("POST /api/owner/verify "), "{request}");
+        assert!(request.contains(r#"{"password":"pw-123456"}"#), "{request}");
+        assert!(!request.contains("email"), "{request}");
+    }
+
+    #[test]
+    fn login_request_carries_the_given_email() {
+        let (base, rx) = start_capturing_mock_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(verify_password_at(&base, "owner@example.com", "pw-123456"), Ok(()));
+        let request = rx.recv_timeout(Duration::from_secs(2)).expect("request captured");
+        assert!(request.starts_with("POST /api/login "), "{request}");
+        assert!(request.contains(r#""email":"owner@example.com""#), "{request}");
+    }
+
+    #[test]
+    fn lock_account_email_follows_the_owner() {
+        let base = start_mock_server(
+            "HTTP/1.1 200 OK\r\n\r\n{\"access_token\":\"j\",\"user\":{\"email\":\"owner@example.com\"}}",
+        );
+        assert_eq!(lock_account_email(&base), "owner@example.com");
+    }
+
+    /// No local session (auto-login off, non-Personal, unreachable): the
+    /// placeholder account those setups still have.
+    #[test]
+    fn lock_account_email_falls_back_to_the_placeholder() {
+        let base = start_mock_server("HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(lock_account_email(&base), FALLBACK_LOCK_ACCOUNT_EMAIL);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        drop(listener);
+        assert_eq!(lock_account_email(&format!("http://{addr}")), FALLBACK_LOCK_ACCOUNT_EMAIL);
+    }
+
     #[test]
     fn correct_password_returns_ok() {
         let base = start_mock_server(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"ok\":1}\n",
         );
-        assert_eq!(verify_password_at(&base, "correct-horse-battery-staple"), Ok(()));
+        assert_eq!(verify_password_at(&base, "owner@example.com", "correct-horse-battery-staple"), Ok(()));
     }
 
     #[test]
     fn wrong_password_maps_to_invalid_credentials() {
         let base = start_mock_server("HTTP/1.1 401 Unauthorized\r\nContent-Length: 9\r\n\r\n{\"x\":1}\n\n");
-        assert_eq!(verify_password_at(&base, "wrong-password"), Err(LoginError::InvalidCredentials));
+        assert_eq!(verify_password_at(&base, "owner@example.com", "wrong-password"), Err(LoginError::InvalidCredentials));
     }
 
     #[test]
     fn rate_limited_maps_to_rate_limited() {
         let base = start_mock_server("HTTP/1.1 429 Too Many Requests\r\nContent-Length: 7\r\n\r\n{\"x\":1}");
-        assert_eq!(verify_password_at(&base, "any-password"), Err(LoginError::RateLimited));
+        assert_eq!(verify_password_at(&base, "owner@example.com", "any-password"), Err(LoginError::RateLimited));
     }
 
     #[test]
     fn unexpected_status_maps_to_http() {
         let base = start_mock_server("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\n\r\n{}");
-        assert_eq!(verify_password_at(&base, "any-password"), Err(LoginError::Http(500)));
+        assert_eq!(verify_password_at(&base, "owner@example.com", "any-password"), Err(LoginError::Http(500)));
     }
 
     #[test]
@@ -252,14 +415,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         drop(listener);
-        let result = verify_password_at(&format!("http://{addr}"), "any-password");
+        let result = verify_password_at(&format!("http://{addr}"), "owner@example.com", "any-password");
         assert!(matches!(result, Err(LoginError::Unreachable(_))), "{result:?}");
     }
 
     #[test]
     fn non_loopback_url_is_refused_without_any_connection_attempt() {
         let started = std::time::Instant::now();
-        let result = verify_password_at("http://example.com:18789", "any-password");
+        let result = verify_password_at("http://example.com:18789", "owner@example.com", "any-password");
         assert_eq!(result, Err(LoginError::NonLoopback));
         assert!(started.elapsed() < Duration::from_millis(500), "must fail before ever dialing out, elapsed={:?}", started.elapsed());
     }
@@ -271,7 +434,7 @@ mod tests {
         // degenerate response that closes right after the status line, with
         // no headers and no blank-line terminator at all.
         let base = start_mock_server("HTTP/1.1 200 OK\r\n");
-        assert_eq!(verify_password_at(&base, "any-password"), Ok(()));
+        assert_eq!(verify_password_at(&base, "owner@example.com", "any-password"), Ok(()));
     }
 
     #[test]
@@ -285,7 +448,7 @@ mod tests {
     /// `cargo test` never depends on one being up, same convention
     /// `oobe/claim.rs`'s own `live_first_run_claim_against_env_gateway`
     /// establishes. Verification playbook (WP-lock-pw, 2026-08-22):
-    ///   1. start a gateway with a home whose `admin@local` password is
+    ///   1. start a gateway with a home whose owner password is
     ///      already known, e.g. a fresh home claimed via
     ///      `DUDUCLAW_HOME=$(mktemp -d) DUDUCLAW_PORT=28794 duduclaw run`
     ///      then `POST /api/first-run/claim` with a known password (see
@@ -295,7 +458,7 @@ mod tests {
     ///      DUDUCLAW_SHELL_LIVE_LOCK_PASSWORD=<the password just claimed> \
     ///      cargo test -p duduclaw-shell -- --ignored live_verify_password --nocapture`
     #[test]
-    #[ignore = "requires a live gateway with a known admin@local password — see doc comment"]
+    #[ignore = "requires a live gateway with a known owner password — see doc comment"]
     fn live_verify_password_against_env_gateway() {
         let Some(base) = std::env::var("DUDUCLAW_SHELL_GATEWAY_URL").ok().filter(|v| !v.trim().is_empty()) else {
             eprintln!("[live] DUDUCLAW_SHELL_GATEWAY_URL not set — skipping");
@@ -305,11 +468,13 @@ mod tests {
             eprintln!("[live] DUDUCLAW_SHELL_LIVE_LOCK_PASSWORD not set — skipping");
             return;
         };
-        let wrong = verify_password_at(&base, "definitely-the-wrong-password-12345");
+        let email = lock_account_email(&base);
+        eprintln!("[live] verifying against the owner account the gateway reports");
+        let wrong = verify_password_at(&base, &email, "definitely-the-wrong-password-12345");
         assert_eq!(wrong, Err(LoginError::InvalidCredentials), "a wrong password must be rejected");
         eprintln!("[live] wrong password correctly rejected");
 
-        let right = verify_password_at(&base, &password);
+        let right = verify_password_at(&base, &email, &password);
         assert_eq!(right, Ok(()), "the real password must verify");
         eprintln!("[live] correct password verified against {base}");
     }

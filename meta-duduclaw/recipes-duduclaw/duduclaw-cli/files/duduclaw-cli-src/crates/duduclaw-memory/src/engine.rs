@@ -252,6 +252,9 @@ pub const GRAPH_CACHE_MIN_TRIPLES: usize = 500;
 struct CachedGraph {
     graph: crate::graph_rank::TripleGraph,
     generation: u64,
+    /// The namespace's forget epoch when built (P2-B): a forget applied by
+    /// another process bumps it, so this cache never serves forgotten triples.
+    forget_epoch: i64,
 }
 
 /// One entity node in a [`GraphExport`] (D3.3): a canonical entity string and
@@ -326,6 +329,33 @@ pub struct SqliteMemoryEngine {
     /// wire it into a metrics layer; see
     /// [`novelty_gate_rejections`](Self::novelty_gate_rejections).
     novelty_rejections: std::sync::atomic::AtomicU64,
+    /// Held claims repeated while an identical one was pending review
+    /// ([`held_claim_repeats`](Self::held_claim_repeats)).
+    held_claim_repeats: std::sync::atomic::AtomicU64,
+    /// Supersession trust guard (`crate::supersession_guard`): a temporal write
+    /// may not supersede a currently valid fact whose origin trust is strictly
+    /// higher than its own. Default `true` for every constructor (fail closed);
+    /// `config.toml [memory] supersession_trust_guard = false` turns it off
+    /// through `memory_factory::build_memory_engine` / the MCP server, which
+    /// restores the pre-guard behaviour byte for byte.
+    pub supersession_trust_guard: bool,
+    /// Count of temporal writes refused by the supersession trust guard since
+    /// this engine was constructed (in-process only, like
+    /// [`novelty_rejections`](Self::novelty_rejections)).
+    supersession_refusals: std::sync::atomic::AtomicU64,
+    /// Count of writes refused by the source fence (P2-B) since this engine
+    /// was constructed (in-process only, like
+    /// [`supersession_refusals`](Self::supersession_refusals)).
+    fence_refusals: std::sync::atomic::AtomicU64,
+    /// Count of reaffirmations whose `reaffirm` lineage rows were not recorded
+    /// because the surviving row already had [`MAX_LINEAGE_SOURCES`] sources
+    /// (the reaffirmation itself still happened).
+    ///
+    /// [`MAX_LINEAGE_SOURCES`]: crate::lineage::MAX_LINEAGE_SOURCES
+    reaffirm_lineage_skipped: std::sync::atomic::AtomicU64,
+    /// Test-only pause / fault points (zero-sized unless built for tests or
+    /// with the `test-hooks` feature).
+    pub(crate) hooks: crate::lineage::hooks::TestHooks,
 }
 
 /// Bytes per gigabyte (binary GiB, matching SQLite page-size arithmetic).
@@ -355,6 +385,10 @@ struct ActiveTriple {
     /// The surviving row's own `origin` (WP1) — counts as one corroborating
     /// class when deciding whether a reaffirm may raise confidence.
     origin: Option<String>,
+    /// Stored `origin_trust` — compared by the supersession trust guard.
+    origin_trust: f64,
+    /// D2: a held (quarantined) row is inert and never outranks a write.
+    quarantined: bool,
 }
 
 /// Parse an rfc3339 timestamp into a UTC `DateTime`, ignoring malformed input.
@@ -556,6 +590,12 @@ impl SqliteMemoryEngine {
             memory_quota_bytes: 0,
             novelty_gate: crate::novelty_gate::NoveltyGateConfig::default(),
             novelty_rejections: std::sync::atomic::AtomicU64::new(0),
+            held_claim_repeats: std::sync::atomic::AtomicU64::new(0),
+            supersession_trust_guard: true,
+            supersession_refusals: std::sync::atomic::AtomicU64::new(0),
+            fence_refusals: std::sync::atomic::AtomicU64::new(0),
+            reaffirm_lineage_skipped: std::sync::atomic::AtomicU64::new(0),
+            hooks: Default::default(),
         })
     }
 
@@ -574,6 +614,12 @@ impl SqliteMemoryEngine {
             memory_quota_bytes: 0,
             novelty_gate: crate::novelty_gate::NoveltyGateConfig::default(),
             novelty_rejections: std::sync::atomic::AtomicU64::new(0),
+            held_claim_repeats: std::sync::atomic::AtomicU64::new(0),
+            supersession_trust_guard: true,
+            supersession_refusals: std::sync::atomic::AtomicU64::new(0),
+            fence_refusals: std::sync::atomic::AtomicU64::new(0),
+            reaffirm_lineage_skipped: std::sync::atomic::AtomicU64::new(0),
+            hooks: Default::default(),
         })
     }
 
@@ -686,6 +732,19 @@ impl SqliteMemoryEngine {
     /// process-wide metrics registry).
     pub fn novelty_gate_rejections(&self) -> u64 {
         self.novelty_rejections.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Builder-style: enable/disable the supersession trust guard (default
+    /// enabled). See [`supersession_trust_guard`](Self::supersession_trust_guard).
+    pub fn with_supersession_trust_guard(mut self, enabled: bool) -> Self {
+        self.supersession_trust_guard = enabled;
+        self
+    }
+
+    /// Number of temporal writes the supersession trust guard has refused since
+    /// this engine instance was constructed (in-process, not persisted).
+    pub fn supersession_refusals(&self) -> u64 {
+        self.supersession_refusals.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// B1 anti-false-surprise gate (arXiv:2606.29182), exposed for callers
@@ -840,11 +899,12 @@ impl SqliteMemoryEngine {
         now_rfc: &str,
     ) -> Result<Option<Vec<(String, f64)>>> {
         let cur_gen = self.graph_generation(agent_id);
+        let cur_epoch = crate::lineage::db::forget_epoch(conn, agent_id)?;
 
-        // Fast path: a cache entry whose generation still matches.
+        // Fast path: a cache entry whose generation and forget epoch match.
         if let Ok(cache) = self.graph_cache.read() {
             if let Some(c) = cache.get(agent_id) {
-                if c.generation == cur_gen {
+                if c.generation == cur_gen && c.forget_epoch == cur_epoch {
                     return self.rank_from_graph(conn, &c.graph, agent_id, query, now_rfc);
                 }
             }
@@ -881,6 +941,7 @@ impl SqliteMemoryEngine {
                     CachedGraph {
                         graph,
                         generation: cur_gen,
+                        forget_epoch: cur_epoch,
                     },
                 );
             }
@@ -1786,16 +1847,251 @@ impl SqliteMemoryEngine {
     /// now and `superseded_by` points at this new row). Without a full triple
     /// this is a plain insert that also populates the temporal columns.
     /// Returns the stored entry id.
+    ///
+    /// A write refused by the supersession trust guard (see
+    /// [`store_temporal_outcome`](Self::store_temporal_outcome)) is returned as
+    /// an `Err` naming both trusts, so no caller can mistake it for a stored
+    /// fact. Callers that want to act on a refusal (hand it to human review)
+    /// use `store_temporal_outcome` instead.
+    ///
+    /// A write refused by the source fence (P2-B: a source or parent was
+    /// forgotten, a parent is missing, too many sources) is an `Err` whose
+    /// message starts with `source forgotten:`.
     pub async fn store_temporal(
         &self,
         agent_id: &str,
         entry: MemoryEntry,
         meta: TemporalMeta,
+        provenance: crate::lineage::Provenance,
     ) -> Result<String> {
+        match self
+            .store_temporal_outcome(agent_id, entry, meta, provenance)
+            .await?
+        {
+            crate::supersession_guard::TemporalWriteOutcome::Stored(id) => Ok(id),
+            crate::supersession_guard::TemporalWriteOutcome::Refused(r) => Err(
+                DuDuClawError::Memory(format!("supersession trust guard refused write: {r}")),
+            ),
+            crate::supersession_guard::TemporalWriteOutcome::Fenced(r) => {
+                Err(r.into_error())
+            }
+        }
+    }
+
+    /// [`store_temporal`](Self::store_temporal) with a typed outcome — the
+    /// single choke point for F1 temporal writes.
+    ///
+    /// Supersession trust guard: when the write would supersede a currently
+    /// valid fact (same triple, different object/content, not an out-of-order
+    /// historical insert), and any such non-quarantined fact's trust is
+    /// strictly higher than this write's effective `origin_trust`, nothing is
+    /// written and [`TemporalWriteOutcome::Refused`] is returned. The existing
+    /// fact's trust is its stored `origin_trust` capped at its origin class
+    /// ceiling (`supersession_guard::existing_fact_trust`) — a lowered value is
+    /// honoured; corroboration raises `confidence`, not trust, so it does not
+    /// enter. Reaffirmation, plain inserts, historical segments and quarantined
+    /// writes never reach the guard. Disabled via
+    /// [`supersession_trust_guard`](Self::supersession_trust_guard).
+    ///
+    /// [`TemporalWriteOutcome::Refused`]: crate::supersession_guard::TemporalWriteOutcome::Refused
+    ///
+    /// Source fence (P2-B): `provenance` is resolved into lineage rows and
+    /// checked against the tombstones inside the same `BEGIN IMMEDIATE`
+    /// transaction as the write; a forgotten source, a forgotten or missing
+    /// parent, or too many sources returns
+    /// [`TemporalWriteOutcome::Fenced`](crate::supersession_guard::TemporalWriteOutcome::Fenced)
+    /// and writes nothing. The fence runs before the trust guard and the
+    /// novelty gate. The whole write (supersession, insert, lineage) is one
+    /// transaction, so it is atomic and mutually exclusive with a forget apply.
+    pub async fn store_temporal_outcome(
+        &self,
+        agent_id: &str,
+        entry: MemoryEntry,
+        meta: TemporalMeta,
+        provenance: crate::lineage::Provenance,
+    ) -> Result<crate::supersession_guard::TemporalWriteOutcome> {
+        self.hooks.fire_publish(crate::lineage::HookPoint::BeforeTxn);
         let conn = self.conn.lock().await;
+        Self::in_immediate_txn(&conn, || {
+            self.store_temporal_locked(&conn, agent_id, entry, meta, &provenance)
+        })
+    }
+
+    /// Install a pause point on the publish path (tests / `test-hooks` only).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_publish_hook(&self, hook: Option<crate::lineage::hooks::PublishHook>) {
+        if let Ok(mut g) = self.hooks.publish.write() {
+            *g = hook;
+        }
+    }
+
+    /// Install a pause / fault point on the forget-apply path (tests /
+    /// `test-hooks` only). Returning `Err` from inside the transaction makes
+    /// the apply roll back.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_apply_hook(&self, hook: Option<crate::lineage::hooks::ApplyHook>) {
+        if let Ok(mut g) = self.hooks.apply.write() {
+            *g = hook;
+        }
+    }
+
+    /// Count of writes refused by the source fence since construction.
+    pub fn fence_refusals(&self) -> u64 {
+        self.fence_refusals.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Count of reaffirmations that went ahead without recording their
+    /// `reaffirm` lineage because the row was at the per-row source cap.
+    pub fn reaffirm_lineage_skipped(&self) -> u64 {
+        self.reaffirm_lineage_skipped
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Resolve `provenance` for a write into `agent_id`, recording a refusal.
+    fn resolve_lineage(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        provenance: &crate::lineage::Provenance,
+        derived_from: &[String],
+    ) -> Result<std::result::Result<Vec<crate::lineage::db::OriginRow>, crate::lineage::FenceRefusal>>
+    {
+        let r = crate::lineage::db::resolve(conn, agent_id, provenance, derived_from)?;
+        if let Err(refusal) = &r {
+            self.fence_refusals
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            warn!(agent_id, reason = refusal.reason.as_str(), "source fence refused write");
+        }
+        Ok(r)
+    }
+
+    /// Run `f` inside `BEGIN IMMEDIATE` on the locked connection. Any error
+    /// after `BEGIN` — from `f` or from `COMMIT` itself — rolls back, so the
+    /// long-lived connection is never left inside an open transaction (which
+    /// would make every later `BEGIN` fail).
+    fn in_immediate_txn<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        match f() {
+            Ok(v) => match conn.execute_batch("COMMIT") {
+                Ok(()) => Ok(v),
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(DuDuClawError::Memory(format!("commit failed: {e}")))
+                }
+            },
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    /// Load the currently valid rows (`valid_until IS NULL`) for one triple,
+    /// newest world-time first — quarantined rows included (flagged), held
+    /// claims never (they carry no triple).
+    fn load_active_triple(
+        conn: &Connection,
+        agent_id: &str,
+        subject: &str,
+        predicate: &str,
+    ) -> Result<Vec<ActiveTriple>> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, object, content, metadata, access_count,
+                        COALESCE(valid_from, timestamp), origin, origin_trust,
+                        quarantined
+                 FROM memories
+                 WHERE agent_id = ?1 AND subject = ?2 AND predicate = ?3
+                   AND valid_until IS NULL
+                 ORDER BY COALESCE(valid_from, timestamp) DESC, created_at DESC, id DESC",
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![agent_id, subject, predicate], |r| {
+                Ok(ActiveTriple {
+                    id: r.get(0)?,
+                    object: r.get(1)?,
+                    content: r.get(2)?,
+                    metadata: r
+                        .get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "{}".to_string()),
+                    access_count: r.get(4)?,
+                    valid_from: r.get(5)?,
+                    origin: r.get(6)?,
+                    origin_trust: r.get::<_, Option<f64>>(7)?.unwrap_or(1.0),
+                    quarantined: r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
+                })
+            })
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        let mut v = Vec::new();
+        for r in rows {
+            v.push(r.map_err(|e| DuDuClawError::Memory(e.to_string()))?);
+        }
+        Ok(v)
+    }
+
+    /// The supersession guard's verdict for a write of `(origin, trust)`
+    /// against the non-quarantined rows in `active`.
+    fn guard_verdict(
+        subject: &str,
+        predicate: &str,
+        origin: &str,
+        trust: f64,
+        active: &[ActiveTriple],
+    ) -> Option<crate::supersession_guard::SupersessionRefusal> {
+        crate::supersession_guard::check_supersession(
+            subject,
+            predicate,
+            origin,
+            trust,
+            active.iter().filter(|r| !r.quarantined).map(|r| {
+                crate::supersession_guard::ActiveRow {
+                    id: &r.id,
+                    origin: r.origin.as_deref(),
+                    stored_trust: r.origin_trust,
+                }
+            }),
+        )
+    }
+
+    /// Whether a fact starting at `valid_from` predates the reigning (newest
+    /// world-time) non-excluded active row — the out-of-order "historical
+    /// segment" case of conflict resolution.
+    fn predates_reigning(valid_from: Option<DateTime<Utc>>, active: &[&ActiveTriple]) -> bool {
+        let Some(new_vf) = valid_from else { return false };
+        active
+            .first()
+            .and_then(|r| r.valid_from.as_deref())
+            .and_then(parse_rfc3339)
+            .is_some_and(|reigning| new_vf < reigning)
+    }
+
+    /// [`store_temporal_outcome`](Self::store_temporal_outcome) on an already
+    /// locked connection, so callers can make a check-then-write sequence
+    /// atomic (held claims, promotion, quarantine release).
+    ///
+    /// Must run inside a transaction the caller opened (it does not begin one).
+    fn store_temporal_locked(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        entry: MemoryEntry,
+        meta: TemporalMeta,
+        provenance: &crate::lineage::Provenance,
+    ) -> Result<crate::supersession_guard::TemporalWriteOutcome> {
+        use crate::supersession_guard::TemporalWriteOutcome;
         // M1 moat-gate: reject once the Cloud paid-tier quota is hit. No-op when
         // unlimited (quota 0). Runs before any write so a rejection loses nothing.
-        self.enforce_quota(&conn)?;
+        self.enforce_quota(conn)?;
+
+        // ── P2-B source fence: before any UPDATE or INSERT ─────────────────
+        let derived_parents: Vec<String> = meta.derived_from.clone().unwrap_or_default();
+        let lineage = match self.resolve_lineage(conn, agent_id, provenance, &derived_parents)? {
+            Ok(rows) => rows,
+            Err(refusal) => return Ok(TemporalWriteOutcome::Fenced(refusal)),
+        };
+        self.hooks.fire_publish(crate::lineage::HookPoint::AfterFenceCheck);
 
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -1866,56 +2162,73 @@ impl SqliteMemoryEngine {
         // D2: a quarantined fact is INERT — it must never expire, supersede, or
         // reaffirm a currently-valid fact (that is exactly the PoisonedRAG
         // primitive we are defending against: unverified input silently
-        // overwriting curated knowledge). Skip the whole conflict-resolution
-        // block; the row is inserted with `quarantined = 1` and stays isolated
-        // until a human releases it.
+        // overwriting curated knowledge). It is inserted with `quarantined = 1`
+        // and stays isolated until a human releases it — but the supersession
+        // trust guard still runs on it (H2): a quarantined write that could
+        // never replace the current fact (it is outranked) is refused here, so
+        // the caller routes it to the held-claim review instead of a burst
+        // batch whose approval would only flip a flag.
         let mut supersedes: Option<String> = None;
-        if !meta.quarantined {
         if let (Some(subj), Some(pred)) = (meta.subject.as_ref(), meta.predicate.as_ref()) {
-            // Load currently-active rows (id + object + content + metadata +
+            // Currently-active rows (id + object + content + metadata +
             // access_count + world-time start), newest world-time first. We need
             // object/content to decide reaffirm-vs-supersede and valid_from to
             // decide the out-of-order (historical) insert.
-            let active: Vec<ActiveTriple> = {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT id, object, content, metadata, access_count,
-                                COALESCE(valid_from, timestamp), origin
-                         FROM memories
-                         WHERE agent_id = ?1 AND subject = ?2 AND predicate = ?3
-                           AND valid_until IS NULL
-                         ORDER BY COALESCE(valid_from, timestamp) DESC, created_at DESC, id DESC",
-                    )
-                    .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
-                let rows = stmt
-                    .query_map(params![agent_id, subj, pred], |r| {
-                        Ok(ActiveTriple {
-                            id: r.get(0)?,
-                            object: r.get(1)?,
-                            content: r.get(2)?,
-                            metadata: r
-                                .get::<_, Option<String>>(3)?
-                                .unwrap_or_else(|| "{}".to_string()),
-                            access_count: r.get(4)?,
-                            valid_from: r.get(5)?,
-                            origin: r.get(6)?,
-                        })
-                    })
-                    .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
-                let mut v = Vec::new();
-                for r in rows {
-                    v.push(r.map_err(|e| DuDuClawError::Memory(e.to_string()))?);
-                }
-                v
-            };
+            let active = Self::load_active_triple(conn, agent_id, subj, pred)?;
 
+            if meta.quarantined {
+                if self.supersession_trust_guard {
+                    let clean: Vec<&ActiveTriple> = active.iter().filter(|r| !r.quarantined).collect();
+                    let identical = clean.iter().any(|r| {
+                        object_opt_eq(&meta.object, &r.object)
+                            && r.content.trim() == entry.content.trim()
+                    });
+                    if !identical && !Self::predates_reigning(meta.valid_from, &clean) {
+                        if let Some(refusal) =
+                            Self::guard_verdict(subj, pred, &origin_str, origin_trust, &active)
+                        {
+                            self.supersession_refusals
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            warn!(
+                                agent_id,
+                                entry_id = %entry.id,
+                                existing_id = %refusal.existing_id,
+                                write_origin = %refusal.write_origin,
+                                write_trust = refusal.write_trust,
+                                existing_trust = refusal.existing_trust,
+                                "supersession trust guard refused quarantined write"
+                            );
+                            return Ok(TemporalWriteOutcome::Refused(refusal));
+                        }
+                    }
+                }
+            } else {
             // ── Reaffirm: same (subject, predicate, object) + content re-observed.
             // Don't create a new row — append this write's {source_event, origin}
             // to the surviving row's `reaffirmed_by` list (cap 20) and bump
             // access_count.
+            // A quarantined (pending-review) row is inert: an equal value
+            // written now must not "reaffirm" it and write nothing (R-M2).
             if let Some(row) = active.iter().find(|r| {
-                object_opt_eq(&meta.object, &r.object) && r.content.trim() == entry.content.trim()
+                !r.quarantined
+                    && object_opt_eq(&meta.object, &r.object)
+                    && r.content.trim() == entry.content.trim()
             }) {
+                // P2-B: the reaffirming write's sources become `reaffirm`
+                // lineage of the survivor (the insert trigger re-checks them).
+                if let Some(refusal) =
+                    crate::lineage::db::add_reaffirm(
+                        conn,
+                        &row.id,
+                        agent_id,
+                        &lineage,
+                        &self.reaffirm_lineage_skipped,
+                    )?
+                {
+                    self.fence_refusals
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(TemporalWriteOutcome::Fenced(refusal));
+                }
                 let new_meta = append_reaffirmed_by(&row.metadata, &source_event, &origin_str);
 
                 // WP1 Sybil-resistant corroboration: only raise confidence when
@@ -1959,7 +2272,7 @@ impl SqliteMemoryEngine {
                     .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
                     info!(agent_id, entry_id = %row.id, "temporal memory reaffirmed");
                 }
-                return Ok(row.id.clone());
+                return Ok(TemporalWriteOutcome::Stored(row.id.clone()));
             }
 
             if active.len() > 1 {
@@ -1979,28 +2292,45 @@ impl SqliteMemoryEngine {
             // the current fact or forming a supersession chain (it was never
             // current). Facts with no valid_from keep the legacy ingestion-order
             // behavior byte-for-byte.
-            let mut treat_as_history = false;
-            if let Some(new_vf) = meta.valid_from {
-                if let Some(reigning) = active
-                    .first()
-                    .and_then(|r| r.valid_from.as_deref())
-                    .and_then(parse_rfc3339)
+            let all: Vec<&ActiveTriple> = active.iter().collect();
+            let treat_as_history = Self::predates_reigning(meta.valid_from, &all);
+            if treat_as_history {
+                if let Some(new_vf) = meta.valid_from {
+                    // Tightest bound: the smallest active valid_from strictly
+                    // after the new fact's start.
+                    let bound = active
+                        .iter()
+                        .filter_map(|r| r.valid_from.as_deref().and_then(parse_rfc3339))
+                        .filter(|dt| *dt > new_vf)
+                        .min()
+                        .map(|dt| dt.to_rfc3339());
+                    valid_until = match (valid_until.take(), bound) {
+                        (Some(a), Some(b)) => Some(min_rfc3339(a, b)),
+                        (a, b) => a.or(b),
+                    };
+                }
+            }
+
+            if !treat_as_history && self.supersession_trust_guard {
+                // Supersession trust guard: a lower-trust write may not replace
+                // a more trusted current fact. Nothing has been written yet
+                // (the reaffirm branch returned above), so a refusal leaves the
+                // store exactly as it was.
+                if let Some(refusal) =
+                    Self::guard_verdict(subj, pred, &origin_str, origin_trust, &active)
                 {
-                    if new_vf < reigning {
-                        treat_as_history = true;
-                        // Tightest bound: the smallest active valid_from strictly
-                        // after the new fact's start.
-                        let bound = active
-                            .iter()
-                            .filter_map(|r| r.valid_from.as_deref().and_then(parse_rfc3339))
-                            .filter(|dt| *dt > new_vf)
-                            .min()
-                            .map(|dt| dt.to_rfc3339());
-                        valid_until = match (valid_until.take(), bound) {
-                            (Some(a), Some(b)) => Some(min_rfc3339(a, b)),
-                            (a, b) => a.or(b),
-                        };
-                    }
+                    self.supersession_refusals
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    warn!(
+                        agent_id,
+                        entry_id = %entry.id,
+                        existing_id = %refusal.existing_id,
+                        write_origin = %refusal.write_origin,
+                        write_trust = refusal.write_trust,
+                        existing_trust = refusal.existing_trust,
+                        "supersession trust guard refused temporal write"
+                    );
+                    return Ok(TemporalWriteOutcome::Refused(refusal));
                 }
             }
 
@@ -2019,8 +2349,8 @@ impl SqliteMemoryEngine {
                 }
                 supersedes = active.first().map(|r| r.id.clone());
             }
+            } // end non-quarantined conflict resolution
         }
-        } // end `if !meta.quarantined`
 
         // B1 anti-false-surprise gate (arXiv:2606.29182): ONLY applies to a
         // "plain" semantic write — one that carries no explicit
@@ -2085,6 +2415,14 @@ impl SqliteMemoryEngine {
         )
         .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
 
+        crate::lineage::db::insert_origins(
+            conn,
+            crate::lineage::db::STORE_MEMORIES,
+            &entry.id,
+            agent_id,
+            &lineage,
+        )?;
+
         self.embed_on_write(&conn, agent_id, &entry.id, &entry.content);
 
         // D3.1: a new triple (and any supersession expiry above) changed the
@@ -2092,7 +2430,7 @@ impl SqliteMemoryEngine {
         self.bump_graph_generation(agent_id);
 
         info!(agent_id, entry_id = %entry.id, "temporal memory stored");
-        Ok(entry.id)
+        Ok(TemporalWriteOutcome::Stored(entry.id))
     }
 
     /// Compute + persist an embedding for a just-written row when an embedder is
@@ -2127,17 +2465,34 @@ impl SqliteMemoryEngine {
         .map_err(|e| DuDuClawError::Memory(e.to_string()))
     }
 
-    /// D2 approval — RELEASE a quarantined batch. Clears `quarantined` on the
-    /// given ids owned by `agent_id`, making them visible to retrieval again.
-    /// Only rows currently quarantined are touched (idempotent). Returns the
-    /// number of rows released. `ids` is capped at 100 per call.
+    /// D2 approval — RELEASE a quarantined batch. Only rows owned by
+    /// `agent_id`, still quarantined and not closed out are touched
+    /// (idempotent); held claims (`metadata.held_claim`) are skipped — they
+    /// are accepted through [`promote_quarantined`](Self::promote_quarantined).
+    /// `ids` is capped at 100 per call.
+    ///
+    /// A row without a triple just becomes visible again. A row WITH a triple
+    /// is applied with real supersession semantics against the current state
+    /// (H2) instead of flipping a flag, which would leave it coexisting as a
+    /// second current value next to whatever the store holds now:
+    ///
+    /// - the same value is already current → the release reaffirms that fact
+    ///   and the released row is closed out pointing at it;
+    /// - the row predates the reigning fact (world time) → it is released as
+    ///   a bounded historical segment;
+    /// - the supersession trust guard refuses it (the current fact is more
+    ///   trusted) → it is NOT released but converted into a held claim
+    ///   (reported in [`ReleaseReport::held`](crate::supersession_guard::ReleaseReport::held)
+    ///   so the caller can file its own conflict review);
+    /// - otherwise it supersedes the current fact exactly like a write would.
     pub async fn release_quarantine(
         &self,
         agent_id: &str,
         ids: &[String],
-    ) -> Result<usize> {
+    ) -> Result<crate::supersession_guard::ReleaseReport> {
+        let mut report = crate::supersession_guard::ReleaseReport::default();
         if ids.is_empty() {
-            return Ok(0);
+            return Ok(report);
         }
         if ids.len() > 100 {
             return Err(DuDuClawError::Memory(
@@ -2145,30 +2500,227 @@ impl SqliteMemoryEngine {
             ));
         }
         let conn = self.conn.lock().await;
-        let placeholders = std::iter::repeat("?")
-            .take(ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "UPDATE memories SET quarantined = 0
-             WHERE agent_id = ? AND quarantined = 1 AND id IN ({placeholders})"
-        );
-        let mut bind: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(ids.len() + 1);
-        bind.push(&agent_id);
         for id in ids {
-            bind.push(id);
+            // Per-row transaction: a failure leaves earlier rows applied and
+            // this one untouched; a retry skips applied rows and re-reports
+            // rows already converted to held claims (idempotent).
+            let mut one = crate::supersession_guard::ReleaseReport::default();
+            Self::in_immediate_txn(&conn, || self.release_one_locked(&conn, agent_id, id, &mut one))?;
+            report.released += one.released;
+            report.held.extend(one.held);
         }
-        let n = conn
-            .execute(&sql, bind.as_slice())
-            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
         drop(conn);
-        if n > 0 {
-            // D3.1: released rows re-enter the valid-triple set.
+        if report.released > 0 || !report.held.is_empty() {
+            // D3.1: released rows re-enter (or close out of) the valid-triple set.
             self.bump_graph_generation(agent_id);
         }
-        Ok(n)
+        Ok(report)
     }
 
+    fn release_one_locked(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        id: &str,
+        report: &mut crate::supersession_guard::ReleaseReport,
+    ) -> Result<()> {
+        type Row = (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+            Option<String>,
+            Option<String>,
+            String,
+        );
+        let row: Option<Row> = conn
+            .query_row(
+                "SELECT content, subject, predicate, object, origin,
+                        origin_trust, COALESCE(valid_from, timestamp),
+                        metadata, COALESCE(source_event, '')
+                 FROM memories
+                 WHERE id = ?1 AND agent_id = ?2 AND quarantined = 1 AND valid_until IS NULL",
+                params![id, agent_id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        let Some((content, subject, predicate, object, origin, stored_trust, valid_from, metadata, source_event)) =
+            row
+        else {
+            return Ok(());
+        };
+        // R-L3: the row's trust as the write path would hold it — capped at
+        // its origin class ceiling; a NULL trust reads as the unattributed
+        // class, never 1.0.
+        let trust = crate::supersession_guard::existing_fact_trust(
+            stored_trust.unwrap_or(crate::origin::UNATTRIBUTED.ceiling),
+            origin.as_deref(),
+        );
+        let mut meta_json: serde_json::Value = metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .filter(|v: &serde_json::Value| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if meta_json.get("held_claim").is_some() {
+            // A held claim is accepted by promotion, never by a plain release.
+            // One this batch's release already converted (an earlier attempt
+            // that failed before its card was filed) is re-reported so the
+            // retry files the card (idempotent: no second conversion).
+            if meta_json.get("held_from_release").and_then(|v| v.as_bool()) == Some(true) {
+                report.held.push(crate::supersession_guard::ReleaseHeld {
+                    held_id: id.to_string(),
+                    newly_converted: false,
+                    refusal: None,
+                });
+            }
+            return Ok(());
+        }
+        let now_str = Utc::now().to_rfc3339();
+        let (Some(subj), Some(pred)) = (subject, predicate) else {
+            conn.execute(
+                "UPDATE memories SET quarantined = 0 WHERE id = ?1 AND agent_id = ?2",
+                params![id, agent_id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            report.released += 1;
+            return Ok(());
+        };
+
+        let active = Self::load_active_triple(conn, agent_id, &subj, &pred)?;
+        let clean: Vec<&ActiveTriple> = active.iter().filter(|r| !r.quarantined).collect();
+
+        // Already current with the same value → reaffirm it.
+        if let Some(survivor) = clean
+            .iter()
+            .find(|r| object_opt_eq(&object, &r.object) && r.content.trim() == content.trim())
+        {
+            let origin_name = origin.as_deref().unwrap_or(crate::origin::UNATTRIBUTED.name);
+            // P2-B: the released row's sources corroborate the survivor.
+            if let Some(r) = crate::lineage::db::copy_as_reaffirm(
+                conn,
+                agent_id,
+                id,
+                agent_id,
+                &survivor.id,
+                &self.reaffirm_lineage_skipped,
+            )? {
+                return Err(r.into_error());
+            }
+            let new_meta = append_reaffirmed_by(&survivor.metadata, &source_event, origin_name);
+            conn.execute(
+                "UPDATE memories SET metadata = ?1, access_count = access_count + 1
+                 WHERE id = ?2 AND agent_id = ?3",
+                params![new_meta, survivor.id, agent_id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            conn.execute(
+                "UPDATE memories
+                 SET quarantined = 0, valid_until = ?1, superseded_by = ?2,
+                     invalidated_by_event = 'quarantine_release_reaffirmed', invalidated_at = ?1
+                 WHERE id = ?3 AND agent_id = ?4",
+                params![now_str, survivor.id, id, agent_id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            report.released += 1;
+            return Ok(());
+        }
+
+        // Predates the reigning fact → a bounded historical segment.
+        let row_vf = valid_from.as_deref().and_then(parse_rfc3339);
+        if Self::predates_reigning(row_vf, &clean) {
+            let bound = row_vf.and_then(|vf| {
+                clean
+                    .iter()
+                    .filter_map(|r| r.valid_from.as_deref().and_then(parse_rfc3339))
+                    .filter(|dt| *dt > vf)
+                    .min()
+                    .map(|dt| dt.to_rfc3339())
+            });
+            conn.execute(
+                "UPDATE memories SET quarantined = 0, valid_until = ?1
+                 WHERE id = ?2 AND agent_id = ?3",
+                params![bound, id, agent_id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            report.released += 1;
+            return Ok(());
+        }
+
+        // Outranked by the current fact → becomes a held claim of its own.
+        if self.supersession_trust_guard {
+            let origin_name = origin
+                .clone()
+                .unwrap_or_else(|| crate::origin::UNATTRIBUTED.name.to_string());
+            if let Some(refusal) = Self::guard_verdict(&subj, &pred, &origin_name, trust, &active) {
+                self.supersession_refusals
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                meta_json["held_claim"] = serde_json::json!({
+                    "subject": subj,
+                    "predicate": pred,
+                    "object": object,
+                    "conflicts_with": refusal.existing_id,
+                    // R-L9: the sweep's grace period starts at conversion,
+                    // not at the row's original ingestion.
+                    "held_at": Utc::now().to_rfc3339(),
+                });
+                meta_json["held_from_release"] = serde_json::json!(true);
+                conn.execute(
+                    "UPDATE memories SET subject = NULL, predicate = NULL, object = NULL,
+                                         metadata = ?1
+                     WHERE id = ?2 AND agent_id = ?3",
+                    params![meta_json.to_string(), id, agent_id],
+                )
+                .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+                warn!(
+                    agent_id,
+                    held_id = %id,
+                    existing_id = %refusal.existing_id,
+                    "quarantine release refused by the supersession trust guard — held for review"
+                );
+                report.held.push(crate::supersession_guard::ReleaseHeld {
+                    held_id: id.to_string(),
+                    newly_converted: true,
+                    refusal: Some(refusal),
+                });
+                return Ok(());
+            }
+        }
+
+        // Supersede the current fact like any write.
+        for r in &clean {
+            conn.execute(
+                "UPDATE memories
+                 SET valid_until = ?1, superseded_by = ?2,
+                     invalidated_by_event = 'quarantine_release', invalidated_at = ?1
+                 WHERE id = ?3",
+                params![now_str, id, r.id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        }
+        conn.execute(
+            "UPDATE memories SET quarantined = 0, supersedes = COALESCE(?1, supersedes)
+             WHERE id = ?2 AND agent_id = ?3",
+            params![clean.first().map(|r| r.id.clone()), id, agent_id],
+        )
+        .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        report.released += 1;
+        Ok(())
+    }
     /// D2 approval — REJECT a quarantined batch. Expires the given ids
     /// (`valid_until = now`, `invalidated_by_event = event`,
     /// `invalidated_at = now`) and downgrades their `origin_trust` to
@@ -2200,7 +2752,8 @@ impl SqliteMemoryEngine {
             "UPDATE memories
              SET valid_until = ?1, invalidated_by_event = ?2, invalidated_at = ?1,
                  origin_trust = MIN(origin_trust, 0.1)
-             WHERE agent_id = ? AND quarantined = 1 AND id IN ({placeholders})"
+             WHERE agent_id = ? AND quarantined = 1 AND valid_until IS NULL
+               AND id IN ({placeholders})"
         );
         let mut bind: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(ids.len() + 3);
         bind.push(&now_str);
@@ -2220,6 +2773,548 @@ impl SqliteMemoryEngine {
         Ok(n)
     }
 
+    /// Trust review — HOLD a claim the supersession trust guard refused, so a
+    /// human can accept it later instead of it being lost.
+    ///
+    /// The claim is inserted as a quarantined row (inert: excluded from every
+    /// retrieval path) with its `(subject, predicate, object)` moved out of the
+    /// triple columns into `metadata.held_claim`. Keeping it off the triple
+    /// means the held row is invisible to `get_history` / `get_at` and to later
+    /// conflict resolution for that triple — a pending claim never shows up as
+    /// a value of the fact. `meta.origin` / `origin_trust` are stored as for
+    /// any write (the claim keeps its low provenance while held). The id of
+    /// the current fact the claim conflicts with is recorded as
+    /// `held_claim.conflicts_with`, so a promotion approved after that fact
+    /// changed is refused as stale (M3). Returns the held row's id.
+    ///
+    /// Idempotent per claim: when the same `(agent, subject, predicate,
+    /// object)` is already held and pending, no second row is written and the
+    /// existing id is returned (see [`hold_refused_claim_outcome`](Self::hold_refused_claim_outcome)).
+    pub async fn hold_refused_claim(
+        &self,
+        agent_id: &str,
+        entry: MemoryEntry,
+        meta: TemporalMeta,
+        provenance: crate::lineage::Provenance,
+    ) -> Result<String> {
+        Ok(self
+            .hold_refused_claim_outcome(agent_id, entry, meta, provenance)
+            .await?
+            .id)
+    }
+
+    /// [`hold_refused_claim`](Self::hold_refused_claim), reporting whether a
+    /// new held row was written (`newly_held`) or an identical claim was
+    /// already pending review — a claim repeated in chat must not pile up rows
+    /// (and, on the gateway side, approval cards). A different object for the
+    /// same subject/predicate is a different claim and is held separately.
+    pub async fn hold_refused_claim_outcome(
+        &self,
+        agent_id: &str,
+        entry: MemoryEntry,
+        meta: TemporalMeta,
+        provenance: crate::lineage::Provenance,
+    ) -> Result<crate::supersession_guard::HeldClaim> {
+        let mut admit_all = || true;
+        self.hold_refused_claim_gated(agent_id, entry, meta, provenance, &mut admit_all)
+            .await?
+            .ok_or_else(|| DuDuClawError::Memory("held claim not admitted".to_string()))
+    }
+
+    /// [`hold_refused_claim_outcome`](Self::hold_refused_claim_outcome) with an
+    /// admission gate (M1). The pending-duplicate lookup, the gate and the
+    /// insert run in one `BEGIN IMMEDIATE` transaction on the locked
+    /// connection, so two concurrent identical holds — in this process or
+    /// another one on the same database — yield one row. `admit` is called
+    /// only when a NEW row would be written (a repeat of a pending claim
+    /// never consumes it); returning `false` writes nothing and yields
+    /// `Ok(None)` (the caller audits the cap).
+    ///
+    /// A claim whose source was forgotten is not held: `Err` starting with
+    /// `source forgotten:` (nothing written).
+    pub async fn hold_refused_claim_gated(
+        &self,
+        agent_id: &str,
+        entry: MemoryEntry,
+        meta: TemporalMeta,
+        provenance: crate::lineage::Provenance,
+        admit: &mut (dyn FnMut() -> bool + Send),
+    ) -> Result<Option<crate::supersession_guard::HeldClaim>> {
+        self.hooks.fire_publish(crate::lineage::HookPoint::BeforeTxn);
+        let conn = self.conn.lock().await;
+        Self::in_immediate_txn(&conn, || {
+            self.hold_locked(&conn, agent_id, entry, meta, &provenance, admit)
+        })
+    }
+
+    fn hold_locked(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        entry: MemoryEntry,
+        meta: TemporalMeta,
+        provenance: &crate::lineage::Provenance,
+        admit: &mut (dyn FnMut() -> bool + Send),
+    ) -> Result<Option<crate::supersession_guard::HeldClaim>> {
+        let mut conflicts_with: Option<String> = None;
+        if let (Some(subject), Some(predicate)) = (meta.subject.as_deref(), meta.predicate.as_deref()) {
+            if let Some(id) = Self::find_pending_held_claim_locked(
+                conn,
+                agent_id,
+                subject,
+                predicate,
+                meta.object.as_deref(),
+            )? {
+                self.held_claim_repeats
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(
+                    agent = agent_id,
+                    held_id = %id,
+                    "held claim repeated while pending review — not held again"
+                );
+                return Ok(Some(crate::supersession_guard::HeldClaim { id, newly_held: false }));
+            }
+            let active = Self::load_active_triple(conn, agent_id, subject, predicate)?;
+            conflicts_with = Self::strongest_clean_id(&active);
+        }
+        // L3: a claim the source fence refuses must not use a review slot.
+        // The fence itself is applied again (and counted) by the write below.
+        let derived = meta.derived_from.clone().unwrap_or_default();
+        let fenced = crate::lineage::db::resolve(conn, agent_id, provenance, &derived)?.is_err();
+        if !fenced && !admit() {
+            return Ok(None);
+        }
+        let mut metadata = meta
+            .metadata
+            .clone()
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        metadata["held_claim"] = serde_json::json!({
+            "subject": meta.subject,
+            "predicate": meta.predicate,
+            "object": meta.object,
+            "conflicts_with": conflicts_with,
+            "held_at": Utc::now().to_rfc3339(),
+        });
+        let held = TemporalMeta {
+            subject: None,
+            predicate: None,
+            object: None,
+            metadata: Some(metadata),
+            quarantined: true,
+            ..meta
+        };
+        match self.store_temporal_locked(conn, agent_id, entry, held, provenance)? {
+            crate::supersession_guard::TemporalWriteOutcome::Stored(id) => {
+                Ok(Some(crate::supersession_guard::HeldClaim { id, newly_held: true }))
+            }
+            // Unreachable: a write without a triple never meets the guard.
+            crate::supersession_guard::TemporalWriteOutcome::Refused(r) => {
+                Err(DuDuClawError::Memory(format!("held claim refused: {r}")))
+            }
+            crate::supersession_guard::TemporalWriteOutcome::Fenced(r) => {
+                Err(r.into_error())
+            }
+        }
+    }
+
+    /// The id of the non-quarantined active row the supersession guard would
+    /// compare a write against (the most trusted one; the newest on a tie).
+    fn strongest_clean_id(active: &[ActiveTriple]) -> Option<String> {
+        let mut best: Option<(&ActiveTriple, f64)> = None;
+        for r in active.iter().filter(|r| !r.quarantined) {
+            let t = crate::supersession_guard::existing_fact_trust(r.origin_trust, r.origin.as_deref());
+            if best.as_ref().is_none_or(|(_, b)| t > *b) {
+                best = Some((r, t));
+            }
+        }
+        best.map(|(r, _)| r.id.clone())
+    }
+
+    /// The id of a held claim (see [`hold_refused_claim`](Self::hold_refused_claim))
+    /// for exactly this `(subject, predicate, object)` that is still pending
+    /// review — quarantined, not closed out (`valid_until IS NULL`). `None`
+    /// object matches only a held claim without an object. Oldest first.
+    pub async fn find_pending_held_claim(
+        &self,
+        agent_id: &str,
+        subject: &str,
+        predicate: &str,
+        object: Option<&str>,
+    ) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+        Self::find_pending_held_claim_locked(&conn, agent_id, subject, predicate, object)
+    }
+
+    fn find_pending_held_claim_locked(
+        conn: &Connection,
+        agent_id: &str,
+        subject: &str,
+        predicate: &str,
+        object: Option<&str>,
+    ) -> Result<Option<String>> {
+        conn.query_row(
+            "SELECT id FROM memories
+             WHERE agent_id = ?1 AND quarantined = 1 AND valid_until IS NULL
+               AND json_valid(metadata)
+               AND json_extract(metadata, '$.held_claim.subject') = ?2
+               AND json_extract(metadata, '$.held_claim.predicate') = ?3
+               AND json_extract(metadata, '$.held_claim.object') IS ?4
+             ORDER BY timestamp ASC
+             LIMIT 1",
+            params![agent_id, subject, predicate, object],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| DuDuClawError::Memory(e.to_string()))
+    }
+
+    /// Everything a review card for a held claim shows, read from the held row
+    /// AS STORED (R-H1) — never from the incoming fact that triggered the
+    /// filing. `None` when `id` is not a pending held claim of `agent_id`.
+    /// The protected fact is the row recorded as `conflicts_with` (read by id,
+    /// whether or not it is still current — a changed fact makes the card
+    /// stale at approval, see [`promote_quarantined_bound`](Self::promote_quarantined_bound)).
+    pub async fn held_claim_view(
+        &self,
+        agent_id: &str,
+        id: &str,
+    ) -> Result<Option<crate::supersession_guard::HeldClaimView>> {
+        let conn = self.conn.lock().await;
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT content, metadata FROM memories
+                 WHERE id = ?1 AND agent_id = ?2 AND quarantined = 1 AND valid_until IS NULL",
+                params![id, agent_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        let Some((content, metadata)) = row else { return Ok(None) };
+        let meta: serde_json::Value = metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let claim = &meta["held_claim"];
+        let part = |k: &str| claim.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let (Some(subject), Some(predicate)) = (part("subject"), part("predicate")) else {
+            return Ok(None);
+        };
+        let object = part("object");
+        let conflicts_with = part("conflicts_with");
+        let existing: Option<(String, Option<String>)> = match conflicts_with.as_deref() {
+            Some(eid) => conn
+                .query_row(
+                    "SELECT content, object FROM memories WHERE id = ?1 AND agent_id = ?2",
+                    params![eid, agent_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| DuDuClawError::Memory(e.to_string()))?,
+            None => None,
+        };
+        let claim_digest =
+            crate::supersession_guard::claim_digest(&content, &subject, &predicate, object.as_deref());
+        Ok(Some(crate::supersession_guard::HeldClaimView {
+            id: id.to_string(),
+            content,
+            subject,
+            predicate,
+            object,
+            conflicts_with,
+            existing_content: existing.as_ref().map(|e| e.0.clone()),
+            existing_object: existing.and_then(|e| e.1),
+            held_from_release: meta.get("held_from_release").and_then(|v| v.as_bool()) == Some(true),
+            claim_digest,
+        }))
+    }
+
+    /// Number of times [`hold_refused_claim_outcome`](Self::hold_refused_claim_outcome)
+    /// found an identical claim already pending and wrote nothing (in-process
+    /// counter, like [`novelty_gate_rejections`](Self::novelty_gate_rejections)).
+    pub fn held_claim_repeats(&self) -> u64 {
+        self.held_claim_repeats.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Trust review — ACCEPT held claims with the reviewer's authority.
+    ///
+    /// For each id that is still a pending held claim (written by
+    /// [`hold_refused_claim`](Self::hold_refused_claim): `quarantined = 1`,
+    /// `valid_until IS NULL`, `metadata.held_claim` present) the claim is
+    /// re-written as a NEW fact with `reviewer_origin` at that class's ceiling
+    /// through the temporal write path, so it supersedes the current fact like
+    /// any write of that trust (or reaffirms it, if the fact already says the
+    /// same). The new row's metadata carries `promoted_from`; the held row is
+    /// then closed out (`invalidated_by_event = "trust_review_promoted"`,
+    /// `superseded_by` = the promoted id) and stays quarantined.
+    ///
+    /// M3 stale card: the fact the claim conflicted with when it was held
+    /// (`held_claim.conflicts_with`) must still be the current fact for the
+    /// triple. If it is not (the fact changed after the card was filed, or
+    /// the held row predates that bookkeeping), nothing is written and the
+    /// held row is closed out as `trust_review_stale` — counted in
+    /// [`PromotionReport::stale`](crate::supersession_guard::PromotionReport::stale).
+    /// The check and the write run under one lock and transaction.
+    ///
+    /// A second approval of the same ids finds nothing pending; an id that is
+    /// not a pending held claim (already decided, erased, a burst row) is
+    /// skipped and counted nowhere. `ids` is capped at 100 per call.
+    pub async fn promote_quarantined(
+        &self,
+        agent_id: &str,
+        ids: &[String],
+        reviewer_origin: &str,
+    ) -> Result<crate::supersession_guard::PromotionReport> {
+        if ids.len() > 100 {
+            return Err(DuDuClawError::Memory(
+                "promote_quarantined limited to 100 ids per call".to_string(),
+            ));
+        }
+        let bound: Vec<(String, Option<String>)> = ids.iter().map(|i| (i.clone(), None)).collect();
+        self.promote_inner(agent_id, &bound, reviewer_origin).await
+    }
+
+    /// [`promote_quarantined`](Self::promote_quarantined) bound to what the
+    /// reviewer saw (R-H1): each id carries the `claim_digest` recorded on
+    /// its review card ([`crate::supersession_guard::claim_digest`] over the
+    /// held row's content, subject, predicate and object). A row whose digest
+    /// no longer matches is not written — it is closed out and counted as
+    /// stale, exactly like a changed protected fact.
+    pub async fn promote_quarantined_bound(
+        &self,
+        agent_id: &str,
+        ids: &[(String, String)],
+        reviewer_origin: &str,
+    ) -> Result<crate::supersession_guard::PromotionReport> {
+        if ids.len() > 100 {
+            return Err(DuDuClawError::Memory(
+                "promote_quarantined limited to 100 ids per call".to_string(),
+            ));
+        }
+        let bound: Vec<(String, Option<String>)> =
+            ids.iter().map(|(i, d)| (i.clone(), Some(d.clone()))).collect();
+        self.promote_inner(agent_id, &bound, reviewer_origin).await
+    }
+
+    async fn promote_inner(
+        &self,
+        agent_id: &str,
+        ids: &[(String, Option<String>)],
+        reviewer_origin: &str,
+    ) -> Result<crate::supersession_guard::PromotionReport> {
+        let mut report = crate::supersession_guard::PromotionReport::default();
+        let conn = self.conn.lock().await;
+        for (held_id, digest) in ids {
+            let mut one = crate::supersession_guard::PromotionReport::default();
+            Self::in_immediate_txn(&conn, || {
+                self.promote_one_locked(
+                    &conn,
+                    agent_id,
+                    held_id,
+                    digest.as_deref(),
+                    reviewer_origin,
+                    &mut one,
+                )
+            })?;
+            report.promoted += one.promoted;
+            report.stale += one.stale;
+        }
+        drop(conn);
+        if report.promoted > 0 {
+            self.bump_graph_generation(agent_id);
+        }
+        Ok(report)
+    }
+
+    fn promote_one_locked(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        held_id: &str,
+        expected_digest: Option<&str>,
+        reviewer_origin: &str,
+        report: &mut crate::supersession_guard::PromotionReport,
+    ) -> Result<()> {
+        let held = conn
+            .query_row(
+                "SELECT id, agent_id, content, timestamp, tags, layer, importance,
+                        access_count, last_accessed, source_event, confidence, metadata
+                 FROM memories
+                 WHERE id = ?1 AND agent_id = ?2 AND quarantined = 1
+                   AND valid_until IS NULL",
+                params![held_id, agent_id],
+                |r| {
+                    Ok((
+                        Self::row_to_entry(r)?,
+                        r.get::<_, Option<f64>>(10)?,
+                        r.get::<_, Option<String>>(11)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        let Some((held_entry, confidence, metadata)) = held else {
+            return Ok(());
+        };
+        let mut meta_json: serde_json::Value = metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .filter(|v: &serde_json::Value| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let claim = meta_json
+            .as_object_mut()
+            .and_then(|o| o.remove("held_claim"))
+            .unwrap_or(serde_json::Value::Null);
+        let part = |k: &str| claim.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let (Some(subject), Some(predicate)) = (part("subject"), part("predicate")) else {
+            // Not a held claim (e.g. a burst-quarantined row): leave it to
+            // the release/reject path.
+            return Ok(());
+        };
+        let now_str = Utc::now().to_rfc3339();
+
+        // R-H1: the card the reviewer approved must describe this row as it
+        // is stored now.
+        let digest_matches = expected_digest.is_none_or(|d| {
+            d == crate::supersession_guard::claim_digest(
+                &held_entry.content,
+                &subject,
+                &predicate,
+                part("object").as_deref(),
+            )
+        });
+        // M3: the protected fact must still be the current one. A missing
+        // `conflicts_with` key (bookkeeping absent) fails closed as stale.
+        let still_current = digest_matches && match claim.get("conflicts_with") {
+            None => false,
+            Some(v) => {
+                let active = Self::load_active_triple(conn, agent_id, &subject, &predicate)?;
+                match v.as_str() {
+                    Some(id) => active.iter().any(|r| !r.quarantined && r.id == id),
+                    None => v.is_null() && active.iter().all(|r| r.quarantined),
+                }
+            }
+        };
+        if !still_current {
+            conn.execute(
+                "UPDATE memories
+                 SET valid_until = ?1, invalidated_by_event = 'trust_review_stale',
+                     invalidated_at = ?1
+                 WHERE id = ?2 AND agent_id = ?3",
+                params![now_str, held_id, agent_id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            warn!(
+                agent_id,
+                held_id,
+                "held claim not promoted: the fact it conflicted with changed after it was held"
+            );
+            report.stale += 1;
+            return Ok(());
+        }
+
+        meta_json["promoted_from"] = serde_json::json!(held_id);
+        let entry = MemoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: Utc::now(),
+            access_count: 0,
+            last_accessed: None,
+            ..held_entry
+        };
+        let meta = TemporalMeta {
+            subject: Some(subject),
+            predicate: Some(predicate),
+            object: part("object"),
+            confidence,
+            metadata: Some(meta_json),
+            origin: Some(reviewer_origin.to_string()),
+            origin_trust: Some(crate::origin::trust_ceiling(reviewer_origin)),
+            ..Default::default()
+        };
+        // P2-B: the promoted fact inherits every source of the held claim.
+        let provenance = crate::lineage::Provenance::derived(vec![held_id.to_string()]);
+        let new_id = match self.store_temporal_locked(conn, agent_id, entry, meta, &provenance)? {
+            crate::supersession_guard::TemporalWriteOutcome::Stored(id) => id,
+            crate::supersession_guard::TemporalWriteOutcome::Refused(r) => {
+                // Only reachable when the reviewer origin is not top-trust.
+                return Err(DuDuClawError::Memory(format!("promotion refused: {r}")));
+            }
+            crate::supersession_guard::TemporalWriteOutcome::Fenced(r) => {
+                return Err(r.into_error());
+            }
+        };
+        conn.execute(
+            "UPDATE memories
+             SET valid_until = ?1, superseded_by = ?2,
+                 invalidated_by_event = 'trust_review_promoted', invalidated_at = ?1
+             WHERE id = ?3 AND agent_id = ?4",
+            params![now_str, new_id, held_id, agent_id],
+        )
+        .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        report.promoted += 1;
+        Ok(())
+    }
+
+    /// L1 — close out quarantined rows (held claims and burst batches) whose
+    /// review is no longer pending: every row still `quarantined = 1` and not
+    /// closed out, written before `older_than`, whose id is NOT in
+    /// `pending_ids` (the ids every pending review card covers). Treated as a
+    /// rejection: `valid_until = now`, `invalidated_by_event = event`, trust
+    /// downgraded to `min(current, 0.1)`. Returns the number closed. The
+    /// caller must pass the COMPLETE pending set (fail closed: if it cannot
+    /// read the approvals, it must not call this).
+    pub async fn expire_unreviewed_quarantine(
+        &self,
+        pending_ids: &std::collections::HashSet<String>,
+        older_than: DateTime<Utc>,
+        event: &str,
+    ) -> Result<usize> {
+        let cutoff = older_than.to_rfc3339();
+        let now_str = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        let candidates: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, agent_id FROM memories
+                     WHERE quarantined = 1 AND valid_until IS NULL
+                       AND COALESCE(
+                             CASE WHEN json_valid(metadata)
+                                  THEN json_extract(metadata, '$.held_claim.held_at') END,
+                             ingested_at, timestamp) < ?1",
+                )
+                .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            let rows = stmt
+                .query_map(params![cutoff], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            let mut v = Vec::new();
+            for r in rows {
+                v.push(r.map_err(|e| DuDuClawError::Memory(e.to_string()))?);
+            }
+            v
+        };
+        let mut agents: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut closed = 0usize;
+        for (id, agent) in candidates {
+            if pending_ids.contains(&id) {
+                continue;
+            }
+            closed += conn
+                .execute(
+                    "UPDATE memories
+                     SET valid_until = ?1, invalidated_by_event = ?2, invalidated_at = ?1,
+                         origin_trust = MIN(origin_trust, 0.1)
+                     WHERE id = ?3 AND quarantined = 1 AND valid_until IS NULL",
+                    params![now_str, event, id],
+                )
+                .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            agents.insert(agent);
+        }
+        drop(conn);
+        for a in agents {
+            self.bump_graph_generation(&a);
+        }
+        Ok(closed)
+    }
     /// Read back the stored `origin_trust` for a memory id (P2-1). Returns
     /// `None` when the id is not found for this agent.
     pub async fn get_origin_trust(&self, agent_id: &str, memory_id: &str) -> Result<Option<f64>> {
@@ -2689,11 +3784,17 @@ impl SqliteMemoryEngine {
     ///
     /// Orchestrates the other public helpers (no direct lock held here) to avoid
     /// re-entrant locking of the connection mutex.
+    ///
+    /// `provenance` names the choice (usually the user's message that picked
+    /// the option, P2-B); both written rows are derived from the decision's
+    /// currently valid rows plus those sources, so forgetting either the
+    /// decision's source or the choice removes them.
     pub async fn resolve_decision(
         &self,
         agent_id: &str,
         decision_id: &str,
         chosen_key: &str,
+        provenance: crate::lineage::Provenance,
     ) -> Result<DecisionResolveOutcome> {
         // Status gate.
         match self.decision_status(agent_id, decision_id).await? {
@@ -2713,6 +3814,8 @@ impl SqliteMemoryEngine {
         };
 
         let subject = format!("decision:{decision_id}");
+        let decision_rows = self.valid_row_ids_for_subject(agent_id, &subject).await?;
+        let provenance = provenance.with_parents(decision_rows);
 
         // 1. status → resolved:<key> (supersedes the open status row).
         self.store_temporal(
@@ -2728,6 +3831,7 @@ impl SqliteMemoryEngine {
                 metadata: None,
                 ..Default::default()
             },
+            provenance.clone(),
         )
         .await?;
 
@@ -2747,7 +3851,7 @@ impl SqliteMemoryEngine {
             "resolved".to_string(),
             subject.clone(),
         ];
-        self.store_temporal(agent_id, entry, TemporalMeta::default())
+        self.store_temporal(agent_id, entry, TemporalMeta::default(), provenance)
             .await?;
 
         Ok(DecisionResolveOutcome::Resolved {
@@ -2755,6 +3859,24 @@ impl SqliteMemoryEngine {
             chosen_content,
             question: view.question,
         })
+    }
+
+    /// Ids of the currently valid, non-quarantined rows of one subject.
+    async fn valid_row_ids_for_subject(&self, agent_id: &str, subject: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM memories
+                 WHERE agent_id = ?1 AND subject = ?2 AND valid_until IS NULL AND quarantined = 0
+                 ORDER BY id",
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        let ids = stmt
+            .query_map(params![agent_id, subject], |r| r.get::<_, String>(0))
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        Ok(ids)
     }
 
     /// Build a semantic `MemoryEntry` for a decision artifact / fact row (RFC-24).
@@ -3179,6 +4301,9 @@ impl SqliteMemoryEngine {
         )
         .map_err(|e| DuDuClawError::Memory(format!("entity_embedding table: {e}")))?;
 
+        // ── P2-B source lineage, tombstones, forget plans (2026-10) ──────────
+        crate::lineage::db::init_schema(conn)?;
+
         Ok(())
     }
 
@@ -3275,22 +4400,41 @@ impl MemoryEngine for SqliteMemoryEngine {
         let timestamp_str = entry.timestamp.to_rfc3339();
         let last_accessed_str = entry.last_accessed.map(|t| t.to_rfc3339());
 
-        conn.execute(
-            "INSERT INTO memories (id, agent_id, content, timestamp, tags, layer, importance, access_count, last_accessed, source_event)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                entry.id, agent_id, entry.content, timestamp_str, tags_json,
-                entry.layer.as_str(), entry.importance, entry.access_count,
-                last_accessed_str, entry.source_event
-            ],
-        )
-        .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+        // P2-B: the trait method has no caller-supplied provenance (its
+        // signature lives in duduclaw-core); it records itself as a system
+        // producer. Row, FTS and lineage are written in one transaction.
+        let provenance = crate::lineage::Provenance::System {
+            producer: "memory_engine_trait",
+        };
+        Self::in_immediate_txn(&conn, || {
+            let lineage = match self.resolve_lineage(&conn, agent_id, &provenance, &[])? {
+                Ok(rows) => rows,
+                Err(r) => return Err(r.into_error()),
+            };
+            conn.execute(
+                "INSERT INTO memories (id, agent_id, content, timestamp, tags, layer, importance, access_count, last_accessed, source_event)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    entry.id, agent_id, entry.content, timestamp_str, tags_json,
+                    entry.layer.as_str(), entry.importance, entry.access_count,
+                    last_accessed_str, entry.source_event
+                ],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
 
-        conn.execute(
-            "INSERT INTO memories_fts (content, agent_id, memory_id) VALUES (?1, ?2, ?3)",
-            params![entry.content, agent_id, entry.id],
-        )
-        .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO memories_fts (content, agent_id, memory_id) VALUES (?1, ?2, ?3)",
+                params![entry.content, agent_id, entry.id],
+            )
+            .map_err(|e| DuDuClawError::Memory(e.to_string()))?;
+            crate::lineage::db::insert_origins(
+                &conn,
+                crate::lineage::db::STORE_MEMORIES,
+                &entry.id,
+                agent_id,
+                &lineage,
+            )
+        })?;
 
         self.embed_on_write(&conn, agent_id, &entry.id, &entry.content);
 
@@ -3611,6 +4755,10 @@ async fn call_claude_summarize(raw_memories: &str) -> String {
 
 impl SqliteMemoryEngine {
     /// Store a key fact extracted from a conversation turn.
+    ///
+    /// A fact whose source was forgotten (P2-B) is an `Err` starting with
+    /// `source forgotten:`; use [`store_fact_outcome`](Self::store_fact_outcome)
+    /// to receive the refusal as a value.
     pub async fn store_fact(
         &self,
         agent_id: &str,
@@ -3618,25 +4766,63 @@ impl SqliteMemoryEngine {
         channel: &str,
         chat_id: &str,
         source_session: &str,
+        provenance: crate::lineage::Provenance,
     ) -> Result<String> {
+        match self
+            .store_fact_outcome(agent_id, fact, channel, chat_id, source_session, provenance)
+            .await?
+        {
+            crate::lineage::FactWriteOutcome::Stored(id) => Ok(id),
+            crate::lineage::FactWriteOutcome::Fenced(r) => {
+                Err(r.into_error())
+            }
+        }
+    }
+
+    /// [`store_fact`](Self::store_fact) with the source-fence refusal as a
+    /// value. The fence check, the fact, its FTS row and its lineage are one
+    /// `BEGIN IMMEDIATE` transaction.
+    pub async fn store_fact_outcome(
+        &self,
+        agent_id: &str,
+        fact: &str,
+        channel: &str,
+        chat_id: &str,
+        source_session: &str,
+        provenance: crate::lineage::Provenance,
+    ) -> Result<crate::lineage::FactWriteOutcome> {
+        self.hooks.fire_publish(crate::lineage::HookPoint::BeforeTxn);
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
-        conn.execute(
-            "INSERT INTO key_facts (id, agent_id, fact, channel, chat_id, source_session, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, agent_id, fact, channel, chat_id, source_session, now],
-        )
-        .map_err(|e| DuDuClawError::Memory(format!("store_fact: {e}")))?;
+        Self::in_immediate_txn(&conn, || {
+            let lineage = match self.resolve_lineage(&conn, agent_id, &provenance, &[])? {
+                Ok(rows) => rows,
+                Err(r) => return Ok(crate::lineage::FactWriteOutcome::Fenced(r)),
+            };
+            self.hooks.fire_publish(crate::lineage::HookPoint::AfterFenceCheck);
+            conn.execute(
+                "INSERT INTO key_facts (id, agent_id, fact, channel, chat_id, source_session, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, agent_id, fact, channel, chat_id, source_session, now],
+            )
+            .map_err(|e| DuDuClawError::Memory(format!("store_fact: {e}")))?;
 
-        // Sync FTS5 index
-        let _ = conn.execute(
-            "INSERT INTO key_facts_fts (rowid, fact) VALUES (last_insert_rowid(), ?1)",
-            params![fact],
-        );
-
-        Ok(id)
+            // Sync FTS5 index (best effort, as before).
+            let _ = conn.execute(
+                "INSERT INTO key_facts_fts (rowid, fact) VALUES (last_insert_rowid(), ?1)",
+                params![fact],
+            );
+            crate::lineage::db::insert_origins(
+                &conn,
+                crate::lineage::db::STORE_KEY_FACTS,
+                &id,
+                agent_id,
+                &lineage,
+            )?;
+            Ok(crate::lineage::FactWriteOutcome::Stored(id.clone()))
+        })
     }
 
     /// Get the most recent key facts for an agent.
@@ -3786,6 +4972,11 @@ pub fn word_jaccard(a: &str, b: &str) -> f64 {
     let union = words_a.union(&words_b).count();
     if union == 0 { 0.0 } else { intersection as f64 / union as f64 }
 }
+
+mod namespace_migration;
+pub use namespace_migration::{MigrationDisposition, NamespaceRow, OnRefused};
+
+pub mod forget_source;
 
 #[cfg(test)]
 mod tests {
@@ -4194,7 +5385,7 @@ mod tests {
 
         // store_temporal is gated on the same predicate.
         let temporal_err = engine
-            .store_temporal(agent, make_entry(agent, "temporal over cap", vec![]), TemporalMeta::default())
+            .store_temporal(agent, make_entry(agent, "temporal over cap", vec![]), TemporalMeta::default(), crate::lineage::Provenance::test_only())
             .await
             .expect_err("store_temporal over quota must also be rejected");
         assert!(matches!(temporal_err, DuDuClawError::Memory(_)));
@@ -4397,7 +5588,7 @@ mod tests {
         // First triple fact.
         let e1 = make_entry(agent, "the deploy target is asia-east1", vec![]);
         engine
-            .store_temporal(agent, e1, triple_meta("deploy", "target_is", "asia-east1"))
+            .store_temporal(agent, e1, triple_meta("deploy", "target_is", "asia-east1"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -4405,7 +5596,7 @@ mod tests {
         // still be accepted (the gate never runs on a triple-carrying write).
         let e2 = make_entry(agent, "the deploy target is asia-east1", vec![]);
         engine
-            .store_temporal(agent, e2, triple_meta("backup", "target_is", "asia-east1"))
+            .store_temporal(agent, e2, triple_meta("backup", "target_is", "asia-east1"), crate::lineage::Provenance::test_only())
             .await
             .expect("a triple-carrying write must bypass the B1 gate entirely");
         assert_eq!(engine.novelty_gate_rejections(), 0);
@@ -4424,14 +5615,14 @@ mod tests {
         let mut e1 = make_entry(agent, "always double-check the currency before quoting", vec![]);
         e1.layer = duduclaw_core::types::MemoryLayer::Semantic;
         engine
-            .store_temporal(agent, e1, TemporalMeta::default())
+            .store_temporal(agent, e1, TemporalMeta::default(), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         let mut e2 = make_entry(agent, "always double-check the currency before quoting", vec![]);
         e2.layer = duduclaw_core::types::MemoryLayer::Semantic;
         let err = engine
-            .store_temporal(agent, e2, TemporalMeta::default())
+            .store_temporal(agent, e2, TemporalMeta::default(), crate::lineage::Provenance::test_only())
             .await
             .unwrap_err();
         assert!(err.to_string().contains("novelty gate"));
@@ -4611,13 +5802,13 @@ mod tests {
 
         let e1 = make_entry(agent, "user prefers python", vec![]);
         let id1 = engine
-            .store_temporal(agent, e1, triple_meta("user:main", "prefers_language", "python"))
+            .store_temporal(agent, e1, triple_meta("user:main", "prefers_language", "python"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         let e2 = make_entry(agent, "user prefers typescript", vec![]);
         let id2 = engine
-            .store_temporal(agent, e2, triple_meta("user:main", "prefers_language", "typescript"))
+            .store_temporal(agent, e2, triple_meta("user:main", "prefers_language", "typescript"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -4645,12 +5836,12 @@ mod tests {
 
         let e1 = make_entry(agent, "alpha keyword python rust", vec![]);
         engine
-            .store_temporal(agent, e1, triple_meta("s", "p", "old"))
+            .store_temporal(agent, e1, triple_meta("s", "p", "old"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let e2 = make_entry(agent, "alpha keyword python rust", vec![]);
         let id2 = engine
-            .store_temporal(agent, e2, triple_meta("s", "p", "new"))
+            .store_temporal(agent, e2, triple_meta("s", "p", "new"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -4669,7 +5860,7 @@ mod tests {
             valid_until: Some(Utc::now() - Duration::hours(1)),
             ..Default::default()
         };
-        engine.store_temporal(agent, e, meta).await.unwrap();
+        engine.store_temporal(agent, e, meta, crate::lineage::Provenance::test_only()).await.unwrap();
 
         let results = engine.search(agent, "zzzkeyword", 10).await.unwrap();
         assert!(results.is_empty(), "expired memory must not be returned");
@@ -4687,12 +5878,12 @@ mod tests {
             valid_from: Some(t0),
             ..triple_meta("user", "lang", "python")
         };
-        engine.store_temporal(agent, e1, m1).await.unwrap();
+        engine.store_temporal(agent, e1, m1, crate::lineage::Provenance::test_only()).await.unwrap();
 
         // Switch happens "now"; supersession closes the python row at now.
         let e2 = make_entry(agent, "typescript era", vec![]);
         engine
-            .store_temporal(agent, e2, triple_meta("user", "lang", "typescript"))
+            .store_temporal(agent, e2, triple_meta("user", "lang", "typescript"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -4712,7 +5903,7 @@ mod tests {
 
         let e = make_entry(agent, "python era", vec![]);
         let id = engine
-            .store_temporal(agent, e, triple_meta("user", "lang", "python"))
+            .store_temporal(agent, e, triple_meta("user", "lang", "python"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -4727,7 +5918,7 @@ mod tests {
         // A plain (non-triple) row → None.
         let plain = make_entry(agent, "no triple here", vec![]);
         let plain_id = engine
-            .store_temporal(agent, plain, TemporalMeta::default())
+            .store_temporal(agent, plain, TemporalMeta::default(), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         assert_eq!(engine.triple_for_id(agent, &plain_id).await.unwrap(), None);
@@ -4747,7 +5938,7 @@ mod tests {
         let agent = "plain-agent";
         let e = make_entry(agent, "plain temporal content findme", vec![]);
         engine
-            .store_temporal(agent, e, TemporalMeta::default())
+            .store_temporal(agent, e, TemporalMeta::default(), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let results = engine.search(agent, "findme", 10).await.unwrap();
@@ -4779,7 +5970,7 @@ mod tests {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "trust-default";
         let e = make_entry(agent, "x", vec![]);
-        let id = engine.store_temporal(agent, e, TemporalMeta::default()).await.unwrap();
+        let id = engine.store_temporal(agent, e, TemporalMeta::default(), crate::lineage::Provenance::test_only()).await.unwrap();
         assert_eq!(engine.get_origin_trust(agent, &id).await.unwrap(), Some(0.6));
         // origin is stamped, not left NULL.
         let origin = engine.get_origin(agent, &id).await.unwrap().flatten();
@@ -4792,7 +5983,7 @@ mod tests {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "trust-plain";
         let id = engine
-            .store_temporal(agent, make_entry(agent, "y", vec![]), TemporalMeta::default())
+            .store_temporal(agent, make_entry(agent, "y", vec![]), TemporalMeta::default(), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let trust = engine.get_origin_trust(agent, &id).await.unwrap().unwrap();
@@ -4811,7 +6002,7 @@ mod tests {
             ..Default::default()
         };
         let id = engine
-            .store_temporal(agent, make_entry(agent, "self claim", vec![]), meta)
+            .store_temporal(agent, make_entry(agent, "self claim", vec![]), meta, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         assert_eq!(engine.get_origin_trust(agent, &id).await.unwrap(), Some(0.6));
@@ -4828,7 +6019,7 @@ mod tests {
             origin_trust: Some(0.3),
             ..Default::default()
         };
-        let id = engine.store_temporal(agent, e, meta).await.unwrap();
+        let id = engine.store_temporal(agent, e, meta, crate::lineage::Provenance::test_only()).await.unwrap();
         assert_eq!(engine.get_origin_trust(agent, &id).await.unwrap(), Some(0.3));
 
         // Above-range trust is clamped to 1.0 — under a full-trust origin
@@ -4843,7 +6034,7 @@ mod tests {
                     origin: Some("operator".into()),
                     origin_trust: Some(5.0),
                     ..Default::default()
-                },
+                }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -4861,7 +6052,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "hi src", vec![]),
-                TemporalMeta { origin_trust: Some(0.8), ..Default::default() },
+                TemporalMeta { origin_trust: Some(0.8), ..Default::default() }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -4869,7 +6060,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "lo src", vec![]),
-                TemporalMeta { origin_trust: Some(0.2), ..Default::default() },
+                TemporalMeta { origin_trust: Some(0.2), ..Default::default() }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -4883,31 +6074,45 @@ mod tests {
                     origin_trust: Some(0.9),
                     derived_from: Some(vec![hi.clone(), lo.clone()]),
                     ..Default::default()
-                },
+                }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
         assert_eq!(engine.get_origin_trust(agent, &derived).await.unwrap(), Some(0.2));
     }
 
-    /// An unknown source id contributes trust 0.0 (fail-closed): can't vouch for it.
+    /// An unknown source id is fail-closed: we cannot vouch for a source we
+    /// cannot find. Since P2-B (design D9, a specification change, not a
+    /// relaxed assertion) that means the write is refused outright — it used
+    /// to be stored with trust 0.0.
     #[tokio::test]
     async fn derived_from_unknown_source_is_fail_closed() {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "trust-unknown";
-        let derived = engine
-            .store_temporal(
+        let entry = make_entry(agent, "derived from ghost", vec![]);
+        let id = entry.id.clone();
+        let outcome = engine
+            .store_temporal_outcome(
                 agent,
-                make_entry(agent, "derived from ghost", vec![]),
+                entry,
                 TemporalMeta {
                     origin_trust: Some(1.0),
                     derived_from: Some(vec!["does-not-exist".into()]),
                     ..Default::default()
                 },
+                crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
-        assert_eq!(engine.get_origin_trust(agent, &derived).await.unwrap(), Some(0.0));
+        match outcome {
+            crate::supersession_guard::TemporalWriteOutcome::Fenced(r) => {
+                assert_eq!(r.reason, crate::lineage::FenceReason::ParentMissing);
+                assert_eq!(r.parent_id.as_deref(), Some("does-not-exist"));
+            }
+            other => panic!("expected a fence refusal, got {other:?}"),
+        }
+        // Nothing was written.
+        assert_eq!(engine.get_origin_trust(agent, &id).await.unwrap(), None);
     }
 
     // ── D1: bi-temporal out-of-order resilience + provenance ────────────────────
@@ -4939,15 +6144,15 @@ mod tests {
 
         // Ingest order deliberately scrambled vs. world-time order.
         let divorce_id = engine
-            .store_temporal(agent, make_entry(agent, "divorced", vec![]), spouse_meta("none", t_mid))
+            .store_temporal(agent, make_entry(agent, "divorced", vec![]), spouse_meta("none", t_mid), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         engine
-            .store_temporal(agent, make_entry(agent, "married Alice", vec![]), spouse_meta("Alice", t_early))
+            .store_temporal(agent, make_entry(agent, "married Alice", vec![]), spouse_meta("Alice", t_early), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let bob_id = engine
-            .store_temporal(agent, make_entry(agent, "married Bob", vec![]), spouse_meta("Bob", t_late))
+            .store_temporal(agent, make_entry(agent, "married Bob", vec![]), spouse_meta("Bob", t_late), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -4990,7 +6195,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "current spouse", vec![]),
-                spouse_meta("Current", now - Duration::days(100)),
+                spouse_meta("Current", now - Duration::days(100)), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -4999,7 +6204,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "old spouse", vec![]),
-                spouse_meta("Old", now - Duration::days(500)),
+                spouse_meta("Old", now - Duration::days(500)), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5028,7 +6233,7 @@ mod tests {
             ..Default::default()
         };
         let id1 = engine
-            .store_temporal(agent, make_entry(agent, "likes python", vec![]), meta1)
+            .store_temporal(agent, make_entry(agent, "likes python", vec![]), meta1, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5040,7 +6245,7 @@ mod tests {
             ..Default::default()
         };
         let id2 = engine
-            .store_temporal(agent, make_entry(agent, "likes python", vec![]), meta2)
+            .store_temporal(agent, make_entry(agent, "likes python", vec![]), meta2, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5076,14 +6281,14 @@ mod tests {
         let content = "likes python";
 
         engine
-            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", "e0"))
+            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", "e0"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         // Three reaffirmations, all from the SAME origin class.
         for ev in ["e1", "e2", "e3"] {
             engine
-                .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", ev))
+                .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", ev), crate::lineage::Provenance::test_only())
                 .await
                 .unwrap();
         }
@@ -5109,13 +6314,13 @@ mod tests {
 
         // Row origin = operator (corroborating class #1), confidence 0.85.
         engine
-            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("operator", "e0"))
+            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("operator", "e0"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         // Reaffirm from import (distinct class #2) → boost to 0.95.
         engine
-            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("import", "e1"))
+            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("import", "e1"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let h = engine.get_history(agent, "user", "lang").await.unwrap();
@@ -5123,7 +6328,7 @@ mod tests {
 
         // Reaffirm from channel (distinct class #3) → +0.1 but capped at 1.0.
         engine
-            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", "e2"))
+            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", "e2"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let h = engine.get_history(agent, "user", "lang").await.unwrap();
@@ -5131,11 +6336,11 @@ mod tests {
 
         // Agent-derived reaffirm never corroborates; repeat-class does not boost.
         engine
-            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("agent_derived", "e3"))
+            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("agent_derived", "e3"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         engine
-            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", "e4"))
+            .store_temporal(agent, make_entry(agent, content, vec![]), reaffirm_meta("channel", "e4"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let h = engine.get_history(agent, "user", "lang").await.unwrap();
@@ -5148,11 +6353,11 @@ mod tests {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "reaffirm-neg";
         engine
-            .store_temporal(agent, make_entry(agent, "old", vec![]), triple_meta("s", "p", "v1"))
+            .store_temporal(agent, make_entry(agent, "old", vec![]), triple_meta("s", "p", "v1"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         engine
-            .store_temporal(agent, make_entry(agent, "new", vec![]), triple_meta("s", "p", "v2"))
+            .store_temporal(agent, make_entry(agent, "new", vec![]), triple_meta("s", "p", "v2"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let hist = engine.get_history(agent, "s", "p").await.unwrap();
@@ -5165,7 +6370,7 @@ mod tests {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "ingested";
         engine
-            .store_temporal(agent, make_entry(agent, "x", vec![]), triple_meta("s", "p", "o"))
+            .store_temporal(agent, make_entry(agent, "x", vec![]), triple_meta("s", "p", "o"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         let hist = engine.get_history(agent, "s", "p").await.unwrap();
@@ -5194,7 +6399,7 @@ mod tests {
                     origin: Some("chan-bad".into()),
                     origin_trust: Some(0.3),
                     ..Default::default()
-                },
+                }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5209,7 +6414,7 @@ mod tests {
                     origin_trust: Some(0.9),
                     derived_from: Some(vec![f1.clone()]),
                     ..Default::default()
-                },
+                }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5220,7 +6425,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "clean findmeee", vec![]),
-                TemporalMeta { origin: Some("chan-good".into()), ..Default::default() },
+                TemporalMeta { origin: Some("chan-good".into()), ..Default::default() }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5252,7 +6457,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "exact aaa", vec![]),
-                TemporalMeta { origin: Some("chan".into()), ..Default::default() },
+                TemporalMeta { origin: Some("chan".into()), ..Default::default() }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5260,7 +6465,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "prefix bbb", vec![]),
-                TemporalMeta { origin: Some("chan-extra".into()), ..Default::default() },
+                TemporalMeta { origin: Some("chan-extra".into()), ..Default::default() }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5281,7 +6486,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "sinceable ccc", vec![]),
-                TemporalMeta { origin: Some("chan".into()), ..Default::default() },
+                TemporalMeta { origin: Some("chan".into()), ..Default::default() }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5327,7 +6532,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "alice reports to bob", vec![]),
-                triple_meta("alice", "reports_to", "bob"),
+                triple_meta("alice", "reports_to", "bob"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5335,7 +6540,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "bob leads the big initiative", vec![]),
-                triple_meta("bob", "leads", "project-x"),
+                triple_meta("bob", "leads", "project-x"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5362,7 +6567,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "alice reports to bob", vec![]),
-                triple_meta("alice", "reports_to", "bob"),
+                triple_meta("alice", "reports_to", "bob"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5372,7 +6577,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "bob leads codename zeta", vec![]),
-                triple_meta("bob", "leads", "project-x"),
+                triple_meta("bob", "leads", "project-x"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5380,7 +6585,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "bob leads codename omega", vec![]),
-                triple_meta("bob", "leads", "project-y"),
+                triple_meta("bob", "leads", "project-y"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5407,7 +6612,7 @@ mod tests {
             .store_temporal(
                 "agent-a",
                 make_entry("agent-a", "alice reports to bob", vec![]),
-                triple_meta("alice", "reports_to", "bob"),
+                triple_meta("alice", "reports_to", "bob"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5415,7 +6620,7 @@ mod tests {
             .store_temporal(
                 "agent-a",
                 make_entry("agent-a", "bob leads project-x", vec![]),
-                triple_meta("bob", "leads", "project-x"),
+                triple_meta("bob", "leads", "project-x"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5424,7 +6629,7 @@ mod tests {
             .store_temporal(
                 "agent-b",
                 make_entry("agent-b", "carol likes tea", vec![]),
-                triple_meta("carol", "likes", "tea"),
+                triple_meta("carol", "likes", "tea"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5475,7 +6680,7 @@ mod tests {
             .store_temporal(
                 agent,
                 make_entry(agent, "alice reports to bob", vec![]),
-                triple_meta("alice", "reports_to", "bob"),
+                triple_meta("alice", "reports_to", "bob"), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -5500,7 +6705,7 @@ mod tests {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "facts-agent";
         engine
-            .store_fact(agent, "the deploy password is hunter2", "tg", "c1", "s1")
+            .store_fact(agent, "the deploy password is hunter2", "tg", "c1", "s1", crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5520,7 +6725,7 @@ mod tests {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
         let agent = "facts-agent-2";
         engine
-            .store_fact(agent, "favorite editor is neovim", "tg", "c1", "s1")
+            .store_fact(agent, "favorite editor is neovim", "tg", "c1", "s1", crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5580,7 +6785,7 @@ mod tests {
 
         let e = make_entry(agent, "superseding value", vec![]);
         let new_id = engine
-            .store_temporal(agent, e, triple_meta("s", "p", "z"))
+            .store_temporal(agent, e, triple_meta("s", "p", "z"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5618,7 +6823,7 @@ mod tests {
 
         let e = make_entry(agent, "the vault password is hunter2", vec![]);
         let id = engine
-            .store_temporal(agent, e, quarantined_meta("vault", "password_is", "hunter2"))
+            .store_temporal(agent, e, quarantined_meta("vault", "password_is", "hunter2"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         assert_eq!(engine.is_quarantined(agent, &id).await.unwrap(), Some(true));
@@ -5632,7 +6837,7 @@ mod tests {
             .is_empty());
 
         // Release → now visible.
-        assert_eq!(engine.release_quarantine(agent, &[id.clone()]).await.unwrap(), 1);
+        assert_eq!(engine.release_quarantine(agent, &[id.clone()]).await.unwrap().released, 1);
         assert_eq!(engine.is_quarantined(agent, &id).await.unwrap(), Some(false));
         let hits = engine.search(agent, "vault password", 10).await.unwrap();
         assert_eq!(hits.len(), 1);
@@ -5648,14 +6853,14 @@ mod tests {
 
         let clean = make_entry(agent, "capital of france is paris", vec![]);
         let clean_id = engine
-            .store_temporal(agent, clean, triple_meta("france", "capital_is", "paris"))
+            .store_temporal(agent, clean, triple_meta("france", "capital_is", "paris"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         // Poison: same (subject, predicate), quarantined.
         let poison = make_entry(agent, "capital of france is berlin", vec![]);
         let poison_id = engine
-            .store_temporal(agent, poison, quarantined_meta("france", "capital_is", "berlin"))
+            .store_temporal(agent, poison, quarantined_meta("france", "capital_is", "berlin"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5680,7 +6885,7 @@ mod tests {
         let mut meta = quarantined_meta("acme", "status_is", "bankrupt");
         meta.origin = Some("channel".to_string());
         meta.origin_trust = Some(0.3);
-        let id = engine.store_temporal(agent, e, meta).await.unwrap();
+        let id = engine.store_temporal(agent, e, meta, crate::lineage::Provenance::test_only()).await.unwrap();
 
         let n = engine
             .reject_quarantine(agent, &[id.clone()], "quarantine_reject")
@@ -5713,7 +6918,7 @@ mod tests {
         // origin_trust. The high-trust one must rank first under default weights.
         let high = make_entry(agent, "widget price is 100 dollars", vec![]);
         let high_meta = TemporalMeta { origin_trust: Some(1.0), ..Default::default() };
-        engine.store_temporal(agent, high, high_meta).await.unwrap();
+        engine.store_temporal(agent, high, high_meta, crate::lineage::Provenance::test_only()).await.unwrap();
 
         let low = make_entry(agent, "widget price is 999 dollars", vec![]);
         let low_meta = TemporalMeta {
@@ -5721,7 +6926,7 @@ mod tests {
             origin_trust: Some(0.3),
             ..Default::default()
         };
-        engine.store_temporal(agent, low, low_meta).await.unwrap();
+        engine.store_temporal(agent, low, low_meta, crate::lineage::Provenance::test_only()).await.unwrap();
 
         let results = engine.search(agent, "widget price", 10).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -5749,7 +6954,7 @@ mod tests {
         for i in 0..n {
             let e = make_entry(agent, &format!("person {i} knows the hub"), vec![]);
             engine
-                .store_temporal(agent, e, triple_meta(&format!("person{i}"), "knows", "hub"))
+                .store_temporal(agent, e, triple_meta(&format!("person{i}"), "knows", "hub"), crate::lineage::Provenance::test_only())
                 .await
                 .unwrap();
         }
@@ -5822,7 +7027,7 @@ mod tests {
         // A new triple on a fresh subject connected to "hub".
         let e = make_entry(agent, "newcomer knows the hub", vec![]);
         engine
-            .store_temporal(agent, e, triple_meta("newcomer", "knows", "hub"))
+            .store_temporal(agent, e, triple_meta("newcomer", "knows", "hub"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         assert!(engine.graph_generation(agent) > gen_before, "store must bump generation");
@@ -5880,7 +7085,7 @@ mod tests {
         // does NOT contain the alias, so only graph seeding can bridge it.
         let e = make_entry(agent, "李老闆 prefers oolong", vec![]);
         engine
-            .store_temporal(agent, e, triple_meta("李老闆", "prefers", "oolong"))
+            .store_temporal(agent, e, triple_meta("李老闆", "prefers", "oolong"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5901,14 +7106,14 @@ mod tests {
         let agent = "export-agent";
         engine
             .store_temporal(agent, make_entry(agent, "alice knows bob", vec![]),
-                triple_meta("alice", "knows", "bob"))
+                triple_meta("alice", "knows", "bob"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         // A quarantined triple must still appear in the export, flagged.
         let mut qmeta = triple_meta("mallory", "claims", "admin");
         qmeta.quarantined = true;
         engine
-            .store_temporal(agent, make_entry(agent, "mallory claims admin", vec![]), qmeta)
+            .store_temporal(agent, make_entry(agent, "mallory claims admin", vec![]), qmeta, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -5929,7 +7134,7 @@ mod tests {
         for i in 0..5 {
             engine
                 .store_temporal(agent, make_entry(agent, &format!("f{i}"), vec![]),
-                    triple_meta(&format!("s{i}"), "rel", &format!("o{i}")))
+                    triple_meta(&format!("s{i}"), "rel", &format!("o{i}")), crate::lineage::Provenance::test_only())
                 .await
                 .unwrap();
         }
@@ -6020,18 +7225,18 @@ mod tests {
 
         // Fact A: superseded by a newer write of the same triple.
         let a = engine
-            .store_temporal(agent, make_entry(agent, "price is 100", vec![]), triple_meta("product:price", "is", "100"))
+            .store_temporal(agent, make_entry(agent, "price is 100", vec![]), triple_meta("product:price", "is", "100"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         // Newer value supersedes A.
         engine
-            .store_temporal(agent, make_entry(agent, "price is 120", vec![]), triple_meta("product:price", "is", "120"))
+            .store_temporal(agent, make_entry(agent, "price is 120", vec![]), triple_meta("product:price", "is", "120"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         // Fact B: still valid, never superseded.
         let b = engine
-            .store_temporal(agent, make_entry(agent, "sky is blue", vec![]), triple_meta("sky", "color", "blue"))
+            .store_temporal(agent, make_entry(agent, "sky is blue", vec![]), triple_meta("sky", "color", "blue"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -6050,11 +7255,11 @@ mod tests {
         let other = "other";
 
         let a = engine
-            .store_temporal(owner, make_entry(owner, "v1", vec![]), triple_meta("k", "is", "1"))
+            .store_temporal(owner, make_entry(owner, "v1", vec![]), triple_meta("k", "is", "1"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         engine
-            .store_temporal(owner, make_entry(owner, "v2", vec![]), triple_meta("k", "is", "2"))
+            .store_temporal(owner, make_entry(owner, "v2", vec![]), triple_meta("k", "is", "2"), crate::lineage::Provenance::test_only())
             .await
             .unwrap();
 

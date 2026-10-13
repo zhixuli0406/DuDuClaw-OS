@@ -27,7 +27,7 @@
 //!   [`ApprovalBroker::request`] itself, so every action kind is covered by
 //!   construction rather than by remembering to call it at each site.
 //!   [`notify_reminder`] sends the ⅔-TTL "about to auto-deny" nudge. Both go
-//!   out through the shared [`crate::decision_notify::deliver`] path.
+//!   out through the shared [`crate::notify_push::push`] path.
 //! - **Inbound** [`apply_decision`] — reached from the unified router
 //!   ([`crate::decision_notify::route_press`]), authorized by the shared
 //!   matrix and applied via `ApprovalBroker::decide`.
@@ -37,13 +37,13 @@
 
 use std::path::Path;
 
-use tracing::info;
-
-use crate::approval::{ApprovalBroker, ApprovalId, ApprovalRecord, ApprovalStatus, SimulationNarrative};
+use crate::approval::{
+    ApprovalBroker, ApprovalId, ApprovalRecord, ApprovalStatus, SimulationNarrative,
+};
 use crate::decision_action::{DecisionAct, DecisionSource};
 use crate::decision_notify::{
-    approver_links, authorize_press, destination_matches_any, identity_system_active, mapped_role,
-    origin_target, refusal_text, resolve_targets, DecisionCard, PressAuth,
+    DecisionCard, PressAuth, approver_links, authorize_press, destination_matches_any,
+    identity_system_active, mapped_role, origin_target, refusal_text, resolve_targets,
 };
 use crate::task_store::{ActivityRow, TaskStore};
 
@@ -71,6 +71,8 @@ pub(crate) fn zh_action_kind(kind: &str) -> &str {
         "induced_rule" => "新增自動化規則",
         "bus_task" => "執行委派任務",
         "browser_action" => "操作瀏覽器",
+        "support_pilot_review" => "檢視合成決策模擬",
+        "computer_workspace_admin" => "管理電腦操作工作區",
         _ => "執行需要核可的動作",
     }
 }
@@ -133,7 +135,10 @@ pub(crate) fn approval_body(rec: &ApprovalRecord, reminder: bool) -> String {
         prefix = crate::decision_notify::reason_prefix(DecisionSource::Approval),
         agent = crate::goal_state::xml_escape(&rec.agent_id),
         kind = zh_action_kind(&rec.action_kind),
-        summary = crate::goal_state::xml_escape(&duduclaw_core::truncate_chars(&rec.summary, SUMMARY_MAX_CHARS)),
+        summary = crate::goal_state::xml_escape(&duduclaw_core::truncate_chars(
+            &rec.summary,
+            SUMMARY_MAX_CHARS
+        )),
         trajectory = crate::goal_state::xml_escape(&trajectory_line(rec)),
         deadline = deadline_phrase(rec),
         id = duduclaw_core::truncate_chars(rec.id.as_str(), 8),
@@ -150,6 +155,8 @@ pub async fn notify_new_approval(
     home_dir: &Path,
     rec: &ApprovalRecord,
 ) -> Option<(String, String)> {
+    // Workflow audiences are checked in authenticated, task-scoped dashboard RPCs.
+    // Generic channel fallback cannot establish the private audience identity.
     push(home_dir, rec, false).await
 }
 
@@ -159,7 +166,219 @@ pub async fn notify_reminder(home_dir: &Path, rec: &ApprovalRecord) -> Option<(S
     push(home_dir, rec, true).await
 }
 
+/// Approval kinds decided in the dashboard only (H1, v1.67.1). Their channel
+/// push is a plain notice without decision buttons or a text-reply verb, it is
+/// never sent to the conversation the action came from, and a channel press /
+/// text decision that still arrives for one is refused (see
+/// [`apply_decision`]).
+///
+/// Members: `knowledge_quarantine`, `workflow_activation` and every
+/// operator-CLI kind registered in
+/// `approval::operator_cli_gate::OPERATOR_CLI_KINDS` (LINE inbox, continuous
+/// responsibilities, forget by source, computer workspaces: the terminal
+/// cannot prove who typed the command, so an Admin decides in the dashboard).
+///
+/// `knowledge_quarantine`: approving it writes knowledge
+/// with operator authority (a held claim is promoted, a burst is released),
+/// and a channel press can only be authorised by the push destination when no
+/// identity system is configured — which, for a claim that came from a chat,
+/// could be the very person who made the claim.
+///
+/// `workflow_activation` joined in F1b: accepting a workflow version grants a
+/// standing authority to act, only an Admin may decide it, and a channel
+/// press cannot establish that the presser is a current Admin.
+pub(crate) fn is_dashboard_only_kind(kind: &str) -> bool {
+    kind == crate::wiki_ingest::ACTION_KIND_KNOWLEDGE_QUARANTINE
+        || kind == crate::approval::WORKFLOW_ACTIVATION_KIND
+        || crate::approval::operator_cli_gate::spec_for(kind).is_some()
+}
+
+/// What the dashboard answers when a dashboard-only card is decided after it
+/// lapsed. Each kind names itself; any other kind gets the general wording
+/// (F5-A: a LINE inbox card used to be called a knowledge review here).
+pub(crate) fn dashboard_only_expired_text(kind: &str) -> &'static str {
+    if kind == crate::wiki_ingest::ACTION_KIND_KNOWLEDGE_QUARANTINE {
+        "這則知識審核已逾期，已自動捨棄，無法再核准。"
+    } else if kind == crate::approval::WORKFLOW_ACTIVATION_KIND {
+        "這個工作流程啟用審核已逾期，工作流程不會啟用；要啟用請重新送審。"
+    } else if let Some(spec) = crate::approval::operator_cli_gate::spec_for(kind) {
+        spec.expired_text
+    } else {
+        "這則審核已逾期，已自動拒絕，無法再核准。"
+    }
+}
+
+/// What a refused channel decision for a [`is_dashboard_only_kind`] approval
+/// says.
+pub(crate) const DASHBOARD_ONLY_REFUSAL: &str =
+    "這則審核只能在儀表板的待辦清單決定，請開啟儀表板處理（這裡的回覆不會生效）。";
+
+/// The refusal text for a channel decision on a dashboard-only `kind`.
+pub(crate) fn dashboard_only_refusal(kind: &str) -> &'static str {
+    crate::approval::operator_cli_gate::spec_for(kind)
+        .and_then(|s| s.channel_refusal)
+        .unwrap_or(DASHBOARD_ONLY_REFUSAL)
+}
+
+/// The zh-TW body of the plain notice for a dashboard-only approval. Carries
+/// no claim text, no stored value and no decision verb — only that something
+/// is waiting, for which AI employee, and until when.
+pub(crate) fn dashboard_only_notice_body(rec: &ApprovalRecord, reminder: bool) -> String {
+    if rec.action_kind == crate::approval::WORKFLOW_ACTIVATION_KIND {
+        return activation_notice_body(rec, reminder);
+    }
+    if let Some(spec) = crate::approval::operator_cli_gate::spec_for(&rec.action_kind) {
+        return (spec.notice)(rec, reminder, &deadline_phrase(rec));
+    }
+    let head = if reminder {
+        "⏰ 有一則知識審核快到期了，逾時會自動捨棄"
+    } else {
+        "📥 有一則知識等待審核"
+    };
+    let what = match rec.payload.get("disposition").and_then(|v| v.as_str()) {
+        Some(d) if d == crate::wiki_ingest::DISPOSITION_TRUST_HELD => {
+            "對話中的新說法和目前採用的內容不一致，尚未套用"
+        }
+        _ => "同一來源短時間內寫入大量知識，已暫時隔離",
+    };
+    format!(
+        "{head}\n\
+         AI 員工：{agent}\n\
+         狀況：{what}\n\
+         這類知識變更只能在儀表板的待辦清單決定，請開啟儀表板審核。\n\
+         期限：{deadline}未審核將自動捨棄\n\
+         編號：{id}",
+        agent = crate::goal_state::xml_escape(&duduclaw_core::truncate_chars(&rec.agent_id, 64)),
+        deadline = deadline_phrase(rec),
+        id = duduclaw_core::truncate_chars(rec.id.as_str(), 8),
+    )
+}
+
+/// The plain notice for a workflow activation: no workflow name, steps or
+/// targets (those live behind the dashboard's access checks), only that an
+/// activation waits for an Admin and when it lapses.
+pub(crate) fn activation_notice_body(rec: &ApprovalRecord, reminder: bool) -> String {
+    let head = if reminder {
+        "⏰ 有一個工作流啟用審核快到期了，逾時會自動拒絕，工作流不會啟用"
+    } else {
+        "📥 有一個工作流等待啟用審核"
+    };
+    format!(
+        "{head}\n\
+         AI 員工：{agent}\n\
+         啟用審核只能由管理員在儀表板的待辦清單決定，請開啟儀表板處理。\n\
+         期限：{deadline}未審核將自動拒絕\n\
+         編號：{id}",
+        agent = crate::goal_state::xml_escape(&duduclaw_core::truncate_chars(&rec.agent_id, 64)),
+        deadline = deadline_phrase(rec),
+        id = duduclaw_core::truncate_chars(rec.id.as_str(), 8),
+    )
+}
+
+/// Destinations for a dashboard-only notice: the agent's own control
+/// channel, else the approvers' linked chats — never the originating
+/// conversation, which is excluded explicitly rather than by relying on the
+/// reply-channel task-local being absent.
+fn dashboard_only_targets(
+    home_dir: &Path,
+    rec: &ApprovalRecord,
+    reminder: bool,
+) -> Vec<(String, String)> {
+    let origin = origin_target();
+    let base = match (
+        reminder,
+        rec.notify_channel.as_deref(),
+        rec.notify_chat_id.as_deref(),
+    ) {
+        (true, Some(ch), Some(id)) if !ch.is_empty() && !id.is_empty() => {
+            vec![(ch.to_string(), id.to_string())]
+        }
+        _ => resolve_targets(
+            None,
+            crate::goal_notify::agent_notify_target(home_dir, &rec.agent_id),
+            approver_links(home_dir),
+        ),
+    };
+    // R-L1: the origin recorded on the card at filing (captured before the
+    // distillation was spawned) is the reliable one; the task-local is a
+    // second line for callers that still run inside the reply scope.
+    let recorded = match (
+        rec.payload.get("origin_channel").and_then(|v| v.as_str()),
+        rec.payload.get("origin_chat_id").and_then(|v| v.as_str()),
+    ) {
+        (Some(ch), Some(chat)) => Some((ch.to_string(), chat.to_string())),
+        _ => None,
+    };
+    base.into_iter()
+        .filter(|t| origin.as_ref() != Some(t) && recorded.as_ref() != Some(t))
+        .collect()
+}
+
+/// Test seam: the notice targets for a first push of `rec`.
+#[cfg(test)]
+pub(crate) fn dashboard_only_targets_for_test(
+    home_dir: &Path,
+    rec: &ApprovalRecord,
+) -> Vec<(String, String)> {
+    dashboard_only_targets(home_dir, rec, false)
+}
+
+/// Push the plain dashboard-only notice: no buttons, no card record (so no
+/// text-reply decision can find it), first reachable destination wins.
+async fn push_dashboard_only(
+    home_dir: &Path,
+    rec: &ApprovalRecord,
+    reminder: bool,
+) -> Option<(String, String)> {
+    let targets = dashboard_only_targets(home_dir, rec, reminder);
+    if targets.is_empty() {
+        return None;
+    }
+    // Operator-CLI requests: at most a few first pushes per push scope per
+    // hour (`KindSpec::push_cap_per_hour`); beyond that only the inbox and
+    // the kind's suppression record.
+    if !reminder && !crate::approval::operator_cli_gate::push_allowed(home_dir, rec).await {
+        return None;
+    }
+    let policy = crate::notify_governance::QuietPolicy {
+        window: crate::notify_governance::load_global_window(home_dir),
+        tz: crate::notify_governance::NotifyTz::System,
+    };
+    let level = crate::decision_notify::notify_level(DecisionSource::Approval);
+    if policy.decide(level, chrono::Utc::now()).is_some() {
+        // Quiet hours: the inbox still shows it; the reminder retries.
+        return None;
+    }
+    let mut text = dashboard_only_notice_body(rec, reminder);
+    if let Some(url) = crate::deep_link::deep_link(
+        home_dir,
+        crate::deep_link::DeepLinkKind::Approval,
+        rec.id.as_str(),
+    ) {
+        text.push_str(&format!("\n\n👉 {url}"));
+    }
+    let http = reqwest::Client::new();
+    for (channel, chat_id) in targets {
+        let Some(token) =
+            crate::goal_notify::channel_token(home_dir, &rec.agent_id, &channel).await
+        else {
+            continue;
+        };
+        if crate::channel_sender::send_plain_text(
+            home_dir, &http, &channel, &token, &chat_id, &text,
+        )
+        .await
+        {
+            return Some((channel, chat_id));
+        }
+    }
+    None
+}
+
 async fn push(home_dir: &Path, rec: &ApprovalRecord, reminder: bool) -> Option<(String, String)> {
+    if is_dashboard_only_kind(&rec.action_kind) {
+        return push_dashboard_only(home_dir, rec, reminder).await;
+    }
     // A reminder retraces the delivered destination; a first push resolves the
     // chain. (`notify_channel` is only ever set after a successful delivery.)
     let targets = match (
@@ -180,12 +399,15 @@ async fn push(home_dir: &Path, rec: &ApprovalRecord, reminder: bool) -> Option<(
         return None;
     }
 
-    let http = reqwest::Client::new();
     let body = approval_body(rec, reminder);
     // A clickable deep link to the unified inbox — `None` when no dashboard
     // base URL is configured/derivable, in which case the rendered text stays
     // exactly as it reads without this feature.
-    let link = crate::deep_link::deep_link(home_dir, crate::deep_link::DeepLinkKind::Approval, rec.id.as_str());
+    let link = crate::deep_link::deep_link(
+        home_dir,
+        crate::deep_link::DeepLinkKind::Approval,
+        rec.id.as_str(),
+    );
     let card = DecisionCard {
         source: DecisionSource::Approval,
         decision_id: rec.id.as_str(),
@@ -194,21 +416,19 @@ async fn push(home_dir: &Path, rec: &ApprovalRecord, reminder: bool) -> Option<(
         no_button_hint: "此通道無法顯示按鈕，請至儀表板的待辦決定頁同意或拒絕，\
                          或改用 Telegram／Slack／Discord／LINE 直接按按鈕。",
     };
-    let mut delivered: Option<(String, String)> = None;
-
-    for (channel, chat_id) in targets {
-        let Some(token) =
-            crate::goal_notify::channel_token(home_dir, &rec.agent_id, &channel).await
-        else {
-            info!(approval_id = %rec.id, %channel, "approval push: no bot token; skipping");
-            continue;
-        };
-        let ok = crate::decision_notify::deliver(home_dir, &http, &channel, &token, &chat_id, &card).await;
-        if ok && delivered.is_none() {
-            delivered = Some((channel, chat_id));
-        }
-    }
-    delivered
+    // O5: the token cascade + per-target deliver + first-success bookkeeping
+    // this function used to inline is `notify_push::push`. Which destinations
+    // (the chain above) and what the card says stay here.
+    crate::notify_push::push(
+        home_dir,
+        &card,
+        &crate::notify_push::NotifyDest::Agent {
+            agent_id: rec.agent_id.clone(),
+            targets,
+        },
+    )
+    .await
+    .delivered
 }
 
 // ── Inbound ─────────────────────────────────────────────────────
@@ -245,7 +465,16 @@ pub async fn decide_from_channel(
     if action.source != DecisionSource::Approval {
         return None;
     }
-    Some(apply_decision(home_dir, channel, channel_user_id, &action.id, action.approve()).await)
+    Some(
+        apply_decision(
+            home_dir,
+            channel,
+            channel_user_id,
+            &action.id,
+            action.approve(),
+        )
+        .await,
+    )
 }
 
 /// Apply an already-decoded approve/deny to `approvals.db`. Called by the
@@ -262,6 +491,20 @@ pub(crate) async fn apply_decision(
     let Some(rec) = broker.get(&id).await.map_err(|e| e.to_string())? else {
         return Err("找不到這筆核可（可能已過期並被清除）".into());
     };
+    if rec.binding.is_some() || rec.request_kind != crate::approval::RequestKind::Approval {
+        return Err("此請求需由完整的帳號與會話身分入口處理。".into());
+    }
+    let role = mapped_role(home_dir, channel, channel_user_id);
+    // A generic manager or destination-only channel press cannot inspect the
+    // admin-only Decision Lab. Check terminal rows before disclosing status.
+    if rec.action_kind == "support_pilot_review" && role != Some(duduclaw_auth::UserRole::Admin) {
+        return Err("此人工檢視需由可開啟 Decision Lab 的管理員決定。".into());
+    }
+    // H1: decided in the dashboard only — an older card's button, a crafted
+    // callback or a text reply never decides it; the approval stays pending.
+    if is_dashboard_only_kind(&rec.action_kind) {
+        return Err(dashboard_only_refusal(&rec.action_kind).into());
+    }
     if rec.status.is_terminal() {
         return Ok(match rec.status {
             ApprovalStatus::Approved => "這項要求先前已同意。".into(),
@@ -276,7 +519,7 @@ pub(crate) async fn apply_decision(
     // configured at all, only a press from the exact account the approval was
     // delivered to is honoured. Fail-closed everywhere else.
     let auth = authorize_press(
-        mapped_role(home_dir, channel, channel_user_id),
+        role,
         identity_system_active(home_dir),
         destination_matches_any(&delivered_targets(&rec), channel, channel_user_id),
     );
@@ -318,7 +561,13 @@ pub(crate) async fn apply_decision(
     // ("已拒絕"); the acknowledgement and the collapsed card take that verb
     // from the same place, so a person is told the same word twice.
     let card_verb = settled_verb_for(&rec, approve);
-    spawn_approval_collapse(home_dir.to_path_buf(), rec.clone(), channel.to_string(), channel_user_id.to_string(), card_verb);
+    spawn_approval_collapse(
+        home_dir.to_path_buf(),
+        rec.clone(),
+        channel.to_string(),
+        channel_user_id.to_string(),
+        card_verb,
+    );
 
     Ok(format!(
         "{} {}：{}",
@@ -336,7 +585,11 @@ fn settled_verb_for(rec: &ApprovalRecord, approve: bool) -> crate::decision_card
     } else {
         DecisionSource::Approval
     };
-    let act = if approve { DecisionAct::Approve } else { DecisionAct::Deny };
+    let act = if approve {
+        DecisionAct::Approve
+    } else {
+        DecisionAct::Deny
+    };
     crate::decision_notify::settled_verb(source, act)
 }
 
@@ -369,7 +622,8 @@ fn spawn_approval_collapse(
 ) {
     tokio::spawn(async move {
         let http = reqwest::Client::new();
-        let decider = crate::decision_card::resolve_decider_name(&home_dir, &channel, &channel_user_id);
+        let decider =
+            crate::decision_card::resolve_decider_name(&home_dir, &channel, &channel_user_id);
         let summary = approval_collapse_summary(&rec);
         let home = home_dir.clone();
         let agent = rec.agent_id.clone();
@@ -436,7 +690,94 @@ mod tests {
     use super::*;
     use crate::approval::ApprovalStatus;
     use chrono::Utc;
+    use duduclaw_auth::{UserDb, UserRole};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn synthetic_pilot_review_channel_decision_requires_verified_admin() {
+        let home = tempfile::tempdir().unwrap();
+        let users = UserDb::new(&home.path().join("users.db")).unwrap();
+        let manager = users
+            .create_user(
+                "manager@example.test",
+                "Manager",
+                "test-password",
+                UserRole::Manager,
+            )
+            .unwrap();
+        let admin = users
+            .create_user(
+                "admin@example.test",
+                "Admin",
+                "test-password",
+                UserRole::Admin,
+            )
+            .unwrap();
+        users
+            .bind_channel_identity(&manager.id, "telegram", "manager-dm", true)
+            .unwrap();
+        users
+            .bind_channel_identity(&admin.id, "telegram", "admin-dm", true)
+            .unwrap();
+        let broker = ApprovalBroker::open(home.path()).unwrap();
+        let approval = broker
+            .request(
+                "requester",
+                "support_pilot_review",
+                "Inspect a synthetic run",
+                json!({}),
+                3600,
+            )
+            .await
+            .unwrap();
+        assert!(
+            apply_decision(
+                home.path(),
+                "telegram",
+                "manager-dm",
+                approval.as_str(),
+                true
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            apply_decision(
+                home.path(),
+                "telegram",
+                "unknown-dm",
+                approval.as_str(),
+                true
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            broker.get(&approval).await.unwrap().unwrap().status,
+            ApprovalStatus::Pending
+        );
+        assert!(
+            apply_decision(home.path(), "telegram", "admin-dm", approval.as_str(), true)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            broker.get(&approval).await.unwrap().unwrap().status,
+            ApprovalStatus::Approved
+        );
+        assert!(
+            apply_decision(
+                home.path(),
+                "telegram",
+                "manager-dm",
+                approval.as_str(),
+                true,
+            )
+            .await
+            .is_err(),
+            "a non-admin must not read this review's terminal decision through a channel",
+        );
+    }
 
     fn rec(kind: &str) -> ApprovalRecord {
         ApprovalRecord {
@@ -454,6 +795,10 @@ mod tests {
             notify_chat_id: None,
             reminded_at: None,
             simulation: None,
+            request_kind: crate::approval::RequestKind::Approval,
+            binding: None,
+            answer: None,
+            invalidated_reason: None,
         }
     }
 
@@ -468,14 +813,26 @@ mod tests {
 
     #[test]
     fn settled_verb_for_install_deny_reads_softer_than_generic_deny() {
-        assert_eq!(settled_verb_for(&rec("mcp_install"), false), crate::decision_card::DecisionVerb::DeclinedInstall);
-        assert_eq!(settled_verb_for(&rec("mcp_call"), false), crate::decision_card::DecisionVerb::Denied);
+        assert_eq!(
+            settled_verb_for(&rec("mcp_install"), false),
+            crate::decision_card::DecisionVerb::DeclinedInstall
+        );
+        assert_eq!(
+            settled_verb_for(&rec("mcp_call"), false),
+            crate::decision_card::DecisionVerb::Denied
+        );
     }
 
     #[test]
     fn settled_verb_for_approve_is_always_approved_regardless_of_kind() {
-        assert_eq!(settled_verb_for(&rec("mcp_install"), true), crate::decision_card::DecisionVerb::Approved);
-        assert_eq!(settled_verb_for(&rec("mcp_call"), true), crate::decision_card::DecisionVerb::Approved);
+        assert_eq!(
+            settled_verb_for(&rec("mcp_install"), true),
+            crate::decision_card::DecisionVerb::Approved
+        );
+        assert_eq!(
+            settled_verb_for(&rec("mcp_call"), true),
+            crate::decision_card::DecisionVerb::Approved
+        );
     }
 
     #[test]
@@ -652,7 +1009,11 @@ mod tests {
             dir.path(),
             "telegram",
             "555",
-            &crate::decision_action::encode(DecisionSource::Approval, DecisionAct::Approve, id.as_str()),
+            &crate::decision_action::encode(
+                DecisionSource::Approval,
+                DecisionAct::Approve,
+                id.as_str(),
+            ),
         )
         .await
         .unwrap();
@@ -678,7 +1039,11 @@ mod tests {
             dir.path(),
             "telegram",
             "999",
-            &crate::decision_action::encode(DecisionSource::Approval, DecisionAct::Approve, id.as_str()),
+            &crate::decision_action::encode(
+                DecisionSource::Approval,
+                DecisionAct::Approve,
+                id.as_str(),
+            ),
         )
         .await
         .unwrap();
@@ -699,7 +1064,11 @@ mod tests {
             .await
             .unwrap();
 
-        let deny = crate::decision_action::encode(DecisionSource::Approval, DecisionAct::Deny, id.as_str());
+        let deny = crate::decision_action::encode(
+            DecisionSource::Approval,
+            DecisionAct::Deny,
+            id.as_str(),
+        );
         let first = decide_from_channel(dir.path(), "telegram", "42", &deny)
             .await
             .unwrap();
@@ -724,7 +1093,9 @@ mod tests {
             .request("sales-bot", "mcp_install", "安裝 skill", json!({}), 300)
             .await
             .unwrap();
-        disk.set_notify_target_for_test(&id, "telegram", "555").await.unwrap();
+        disk.set_notify_target_for_test(&id, "telegram", "555")
+            .await
+            .unwrap();
 
         let legacy = format!("duduclaw:approval_ok:{}", id.as_str());
         let out = decide_from_channel(dir.path(), "telegram", "555", &legacy)
@@ -743,12 +1114,18 @@ mod tests {
             .request("a", "mcp_install", "安裝 skill", json!({}), 300)
             .await
             .unwrap();
-        disk.set_notify_target_for_test(&install, "telegram", "1").await.unwrap();
+        disk.set_notify_target_for_test(&install, "telegram", "1")
+            .await
+            .unwrap();
         let msg = decide_from_channel(
             dir.path(),
             "telegram",
             "1",
-            &crate::decision_action::encode(DecisionSource::Approval, DecisionAct::Deny, install.as_str()),
+            &crate::decision_action::encode(
+                DecisionSource::Approval,
+                DecisionAct::Deny,
+                install.as_str(),
+            ),
         )
         .await
         .unwrap()
@@ -759,12 +1136,18 @@ mod tests {
             .request("a", "mcp_call", "刪除資料", json!({}), 300)
             .await
             .unwrap();
-        disk.set_notify_target_for_test(&risky, "telegram", "1").await.unwrap();
+        disk.set_notify_target_for_test(&risky, "telegram", "1")
+            .await
+            .unwrap();
         let msg = decide_from_channel(
             dir.path(),
             "telegram",
             "1",
-            &crate::decision_action::encode(DecisionSource::Approval, DecisionAct::Deny, risky.as_str()),
+            &crate::decision_action::encode(
+                DecisionSource::Approval,
+                DecisionAct::Deny,
+                risky.as_str(),
+            ),
         )
         .await
         .unwrap()
@@ -784,5 +1167,122 @@ mod tests {
         .await
         .unwrap();
         assert!(out.is_err());
+    }
+
+    // ── H1: knowledge review is dashboard-only ─────────────────
+
+    #[tokio::test]
+    async fn knowledge_quarantine_cannot_be_decided_from_a_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = ApprovalBroker::open(dir.path()).unwrap();
+        let id = disk
+            .request(
+                "sales-bot",
+                "knowledge_quarantine",
+                "知識審核",
+                json!({ "disposition": "trust_held", "promote_on_approve": true }),
+                300,
+            )
+            .await
+            .unwrap();
+        // Even the exact destination the notice landed on (the solo-operator
+        // authority path) cannot decide it — by button, legacy button or
+        // text reply (all of which route through `apply_decision`).
+        disk.set_notify_target_for_test(&id, "telegram", "555")
+            .await
+            .unwrap();
+        for data in [
+            crate::decision_action::encode(
+                DecisionSource::Approval,
+                DecisionAct::Approve,
+                id.as_str(),
+            ),
+            crate::decision_action::encode(
+                DecisionSource::Approval,
+                DecisionAct::Deny,
+                id.as_str(),
+            ),
+            format!("duduclaw:approval_ok:{}", id.as_str()),
+        ] {
+            let out = decide_from_channel(dir.path(), "telegram", "555", &data)
+                .await
+                .unwrap();
+            assert_eq!(out, Err(DASHBOARD_ONLY_REFUSAL.to_string()));
+        }
+        assert_eq!(disk.poll(&id).await.unwrap(), ApprovalStatus::Pending);
+    }
+
+    #[test]
+    fn dashboard_only_notice_has_no_claim_text_and_points_to_the_dashboard() {
+        let mut r = rec("knowledge_quarantine");
+        r.summary = "對話中有一則關於「退款」的新說法 內容摘要：永久退款".into();
+        r.payload = json!({ "disposition": "trust_held" });
+        let body = dashboard_only_notice_body(&r, false);
+        assert!(body.contains("儀表板"));
+        assert!(!body.contains("永久退款") && !body.contains("退款"));
+        assert!(!body.contains("knowledge_quarantine"));
+        // No reply verb is offered.
+        assert!(!body.contains("同意") && !body.contains("核准"));
+        r.payload = json!({});
+        assert!(dashboard_only_notice_body(&r, true).contains("快到期"));
+    }
+
+    #[test]
+    fn each_dashboard_only_kind_has_its_own_expiry_text() {
+        let knowledge = dashboard_only_expired_text(crate::wiki_ingest::ACTION_KIND_KNOWLEDGE_QUARANTINE);
+        let activation = dashboard_only_expired_text(crate::approval::WORKFLOW_ACTIVATION_KIND);
+        let ingress = dashboard_only_expired_text(crate::channel_ingress::cli_approval::ACTION_KIND);
+        let other = dashboard_only_expired_text("something_else");
+        assert!(knowledge.contains("知識"));
+        assert!(activation.contains("工作流程") && !activation.contains("知識"));
+        assert!(ingress.contains("收件") && !ingress.contains("知識"));
+        assert!(!other.contains("知識") && other.contains("逾期"));
+    }
+
+    #[test]
+    fn activation_is_dashboard_only_with_its_own_notice() {
+        assert!(is_dashboard_only_kind(crate::approval::WORKFLOW_ACTIVATION_KIND));
+        assert!(!DASHBOARD_ONLY_REFUSAL.contains("知識"));
+        let mut r = rec(crate::approval::WORKFLOW_ACTIVATION_KIND);
+        r.summary = "接受固定工作流版本與排程範圍".into();
+        r.payload = json!({"kind": "workflow_activation", "draft_id": "secret-draft"});
+        let body = dashboard_only_notice_body(&r, false);
+        assert!(body.contains("工作流等待啟用審核") && body.contains("管理員"));
+        assert!(!body.contains("知識") && !body.contains("secret-draft"));
+        assert!(!body.contains("同意") && !body.contains("核准"));
+        let reminder = dashboard_only_notice_body(&r, true);
+        assert!(reminder.contains("快到期") && reminder.contains("不會啟用"));
+    }
+
+    #[tokio::test]
+    async fn dashboard_only_notice_never_targets_the_originating_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("agents").join("sales-bot");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("agent.toml"),
+            "[proactive]\nnotify_channel = \"telegram\"\nnotify_chat_id = \"555\"\n",
+        )
+        .unwrap();
+        let r = rec("knowledge_quarantine");
+        let home = dir.path().to_path_buf();
+        // The claim came from the very chat the agent's control channel
+        // points at: excluded explicitly.
+        let got = crate::claude_runner::REPLY_CHANNEL
+            .scope("telegram:555".to_string(), async move {
+                dashboard_only_targets(&home, &r, false)
+            })
+            .await;
+        assert!(got.is_empty(), "{got:?}");
+        // A different origin leaves the control channel in place, and the
+        // origin itself is never chosen.
+        let r = rec("knowledge_quarantine");
+        let home = dir.path().to_path_buf();
+        let got = crate::claude_runner::REPLY_CHANNEL
+            .scope("telegram:777".to_string(), async move {
+                dashboard_only_targets(&home, &r, false)
+            })
+            .await;
+        assert_eq!(got, vec![("telegram".to_string(), "555".to_string())]);
     }
 }

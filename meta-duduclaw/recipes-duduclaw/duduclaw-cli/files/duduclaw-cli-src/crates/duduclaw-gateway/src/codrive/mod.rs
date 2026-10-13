@@ -8,7 +8,7 @@
 //! down by the serde shape tests at the bottom of that file. Do not import
 //! `duduclaw_comp` from this module.
 //!
-//! Design authority: `commercial/docs/DESIGN-codrive-desktop-2026-08.md`
+//! Design authority: `commercial/docs/specs/DESIGN-codrive-desktop-2026-08.md`
 //! §3.2 (execution ladder), §3.4 (approval/guardrails reuse), §5 (CD-1
 //! row), §6 (safety red lines), §8-3 (refuse-list). This module is the
 //! CD-1 gateway-side driver: agent-seat injection over the comp socket,
@@ -89,20 +89,18 @@ mod tests_mode;
 #[cfg(all(test, unix))]
 mod live_tests;
 
-pub use atspi_locate::{locate as atspi_locate_dispatch, LocateOutcome as AtspiLocateOutcome};
+pub use atspi_locate::{LocateOutcome as AtspiLocateOutcome, locate as atspi_locate_dispatch};
 pub use client::{
     CodriveAck, CodriveButton, CodriveButtonState, CodriveClient, CodriveClientError, CodriveCmd,
     CodriveEvent,
 };
 pub use config::CodriveConfig;
 pub use driver::{CodriveRunReport, CodriveStepReport, run_script};
+pub use identity::{RunIdentityError, resolve_run_identity};
 pub use mode::{CodriveDrivingMode, CodriveHandoverReason};
-pub use status::{
-    query_status as query_codrive_status, CodriveDrivingState, CodriveStatusReport,
-};
-pub use identity::{resolve_run_identity, RunIdentityError};
-pub use registry::{dispatch as registry_dispatch, DispatchOutcome as RegistryDispatchOutcome};
+pub use registry::{DispatchOutcome as RegistryDispatchOutcome, dispatch as registry_dispatch};
 pub use script::{
     ApiActionRequest, CodriveAction, CodriveConsequential, CodriveHighlight, CodriveScript,
     CodriveStep, ConsequentialClass, LocateRequest,
 };
+pub use status::{CodriveDrivingState, CodriveStatusReport, query_status as query_codrive_status};

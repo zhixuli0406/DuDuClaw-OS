@@ -99,9 +99,17 @@ impl RuntimeSettings {
 /// RPC that acts on a caller-supplied runtime name must refuse instead of
 /// silently driving the default one. If you are handling a request, do not
 /// reach for this function.
-fn parse_provider_or_default(agent_dir: &Path, field: &str, value: &str) -> RuntimeType {
+fn parse_provider_or_default(
+    agent_dir: &Path,
+    field: &str,
+    value: &str,
+    source: DeprecatedRuntimeSource,
+) -> RuntimeType {
     match RuntimeType::parse(value) {
-        Some(rt) => rt,
+        Some(rt) => {
+            warn_once_if_deprecated_runtime_for(rt, source, agent_name(agent_dir).as_deref());
+            rt
+        }
         None => {
             tracing::error!(
                 agent_dir = %agent_dir.display(),
@@ -117,6 +125,125 @@ fn parse_provider_or_default(agent_dir: &Path, field: &str, value: &str) -> Runt
     }
 }
 
+// ── Deprecated-runtime read notices (R1, 2026-10) ─────────────────────────
+
+/// Which kind of setting a deprecated runtime was read from. The warn-once
+/// key is `(runtime, source)`: an operator who set `gemini` both as an
+/// agent's provider and as the judge provider hears about each once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeprecatedRuntimeSource {
+    /// `agent.toml [runtime] provider`
+    AgentProvider,
+    /// `agent.toml [runtime] fallback`
+    AgentFallback,
+    /// `config.toml [runtime] utility_provider`
+    UtilityProvider,
+    /// `config.toml [dispatch] judge_provider`
+    JudgeProvider,
+    /// `[team.roles.<role>] runtime`
+    TeamRole,
+    /// a Discovery attempt runtime (`[discovery.attempt.runtimes.<id>]`)
+    DiscoveryAttempt,
+}
+
+impl DeprecatedRuntimeSource {
+    /// The setting's name as an operator would search for it.
+    pub fn setting(&self) -> &'static str {
+        match self {
+            Self::AgentProvider => "agent.toml [runtime] provider",
+            Self::AgentFallback => "agent.toml [runtime] fallback",
+            Self::UtilityProvider => "config.toml [runtime] utility_provider",
+            Self::JudgeProvider => "config.toml [dispatch] judge_provider",
+            Self::TeamRole => "[team.roles.*] runtime",
+            Self::DiscoveryAttempt => "[discovery.attempt.runtimes] runtime",
+        }
+    }
+}
+
+/// The agent a per-agent setting belongs to: its directory name.
+fn agent_name(agent_dir: &Path) -> Option<String> {
+    agent_dir.file_name().and_then(|n| n.to_str()).map(str::to_string)
+}
+
+/// Pure half of [`warn_once_if_deprecated_runtime`]: `Some(message)` the
+/// first time a deprecated `(runtime, source)` pair is seen in `seen`,
+/// `None` for a non-deprecated runtime or a repeat sighting. `agent` names
+/// the agent whose setting triggered the first sighting, when the caller
+/// knows it (later agents with the same value are not named — the notice is
+/// per value and source, not per agent; `duduclaw doctor` lists them all).
+pub(crate) fn deprecated_runtime_first_notice(
+    seen: &mut std::collections::HashSet<(&'static str, DeprecatedRuntimeSource)>,
+    rt: RuntimeType,
+    source: DeprecatedRuntimeSource,
+    agent: Option<&str>,
+) -> Option<String> {
+    let dep = rt.deprecation()?;
+    if !seen.insert((rt.as_str(), source)) {
+        return None;
+    }
+    let setting = match agent {
+        Some(agent) => format!("{} (agent `{agent}`)", source.setting()),
+        None => source.setting().to_string(),
+    };
+    Some(format!("{setting}: {}", dep.notice(rt.as_str())))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: every deprecated-runtime notice consulted on this thread,
+    /// whether or not the process-wide de-duplication let it through.
+    pub(crate) static CONSULTED_NOTICES: std::cell::RefCell<Vec<(&'static str, DeprecatedRuntimeSource, Option<String>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Emit a deprecation `warn!` at most once per process per
+/// `(runtime, source)`. Behaviour is otherwise untouched: the caller keeps
+/// using the value it parsed. Readers on hot paths (`load_runtime_settings`
+/// runs per reply) call this unconditionally — the de-duplication is here so
+/// the log is not flooded with one line forever.
+///
+/// Returns `true` iff this call emitted the warning.
+pub fn warn_once_if_deprecated_runtime(rt: RuntimeType, source: DeprecatedRuntimeSource) -> bool {
+    warn_once_if_deprecated_runtime_for(rt, source, None)
+}
+
+/// [`warn_once_if_deprecated_runtime`] for a setting that belongs to one
+/// agent: the first warning names it.
+pub fn warn_once_if_deprecated_runtime_for(
+    rt: RuntimeType,
+    source: DeprecatedRuntimeSource,
+    agent: Option<&str>,
+) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    if !rt.is_deprecated() {
+        return false;
+    }
+    #[cfg(test)]
+    CONSULTED_NOTICES.with(|n| n.borrow_mut().push((rt.as_str(), source, agent.map(str::to_string))));
+    static SEEN: OnceLock<Mutex<HashSet<(&'static str, DeprecatedRuntimeSource)>>> =
+        OnceLock::new();
+    let mut seen = SEEN
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    match deprecated_runtime_first_notice(&mut seen, rt, source, agent) {
+        Some(msg) => {
+            let dep = rt.deprecation();
+            tracing::warn!(
+                agent = agent.unwrap_or(""),
+                value = rt.as_str(),
+                setting = source.setting(),
+                replacement = dep.map(|d| d.replacement).unwrap_or(""),
+                remove_in = dep.map(|d| d.remove_in).unwrap_or(""),
+                "{msg}"
+            );
+            true
+        }
+        None => false,
+    }
+}
+
 /// Load `[runtime] provider` / `[runtime] fallback` / `[model] utility` from the
 /// agent's `agent.toml` in a single read. Missing/malformed file ⇒ defaults
 /// (Claude / no fallback / [`DEFAULT_UTILITY_MODEL`]).
@@ -127,7 +254,14 @@ pub fn load_runtime_settings(agent_dir: &Path) -> RuntimeSettings {
         .runtime
         .provider
         .as_deref()
-        .map(|v| parse_provider_or_default(agent_dir, "[runtime] provider", v))
+        .map(|v| {
+            parse_provider_or_default(
+                agent_dir,
+                "[runtime] provider",
+                v,
+                DeprecatedRuntimeSource::AgentProvider,
+            )
+        })
         .unwrap_or_default();
     // A malformed FALLBACK is dropped, not defaulted: "no fallback" is a valid
     // state, so there is nothing to lose by refusing it — unlike `provider`,
@@ -140,6 +274,13 @@ pub fn load_runtime_settings(agent_dir: &Path) -> RuntimeSettings {
                 value = %v,
                 valid = %RuntimeType::valid_values(),
                 "[runtime] fallback names an unknown runtime — ignoring it (no fallback)"
+            );
+        }
+        if let Some(rt) = parsed {
+            warn_once_if_deprecated_runtime_for(
+                rt,
+                DeprecatedRuntimeSource::AgentFallback,
+                agent_name(agent_dir).as_deref(),
             );
         }
         parsed
@@ -168,19 +309,15 @@ pub fn load_runtime_settings(agent_dir: &Path) -> RuntimeSettings {
 
 /// Read the agent's `[runtime]` section as a JSON object for `agents.inspect`.
 ///
-/// Emits ONLY keys actually present in `agent.toml` (`provider`, `fallback`,
-/// `pty_pool_enabled`, `worker_managed`) so the dashboard can distinguish
-/// "unset" from an explicit `false` — the PTY-pool OAuth default-enable logic
-/// materializes the toggle only when it was never written. A missing/malformed
-/// file or absent `[runtime]` table yields an empty object.
+/// Emits ONLY keys actually present in `agent.toml` (`provider`, `fallback`)
+/// so the dashboard can distinguish "unset" from an explicitly written value.
+/// A missing/malformed file or absent `[runtime]` table yields an empty
+/// object.
 pub fn read_runtime_json(agent_dir: &Path) -> serde_json::Value {
     // Every `RuntimeSection` field is `Option` precisely so this function can
-    // still tell "unset" from an explicit `false` — collapsing unset into a
-    // materialized default here would silently opt agents out of the PTY-pool
-    // default-enable migration, which only fires when the key was never
-    // written. The four keys are emitted individually (not via
-    // `serde_json::to_value`) to keep that contract explicit and to keep the
-    // two PTY timeout keys — which this form does not edit — out of the payload.
+    // still tell "unset" from an explicitly written value. Keys are emitted
+    // individually (not via `serde_json::to_value`) to keep that contract
+    // explicit and to keep fields this form does not edit out of the payload.
     let rt = read_sections(agent_dir).runtime;
     let mut obj = serde_json::Map::new();
     if let Some(s) = rt.provider {
@@ -188,12 +325,6 @@ pub fn read_runtime_json(agent_dir: &Path) -> serde_json::Value {
     }
     if let Some(s) = rt.fallback {
         obj.insert("fallback".into(), serde_json::Value::String(s));
-    }
-    if let Some(b) = rt.pty_pool_enabled {
-        obj.insert("pty_pool_enabled".into(), serde_json::Value::Bool(b));
-    }
-    if let Some(b) = rt.worker_managed {
-        obj.insert("worker_managed".into(), serde_json::Value::Bool(b));
     }
     serde_json::Value::Object(obj)
 }
@@ -229,6 +360,39 @@ pub fn model_matches_provider(model: &str, provider: RuntimeType) -> bool {
             .any(|p| owner.model_prefixes.contains(p))
 }
 
+/// The model-id family a model id **confidently** belongs to, expressed as the
+/// owning runtime catalog id (`"claude"`, `"gemini"`, `"codex"`, …).
+///
+/// `None` for an id whose naming prefix no catalog entry claims — never a
+/// guess.
+pub fn model_family(model: &str) -> Option<&'static str> {
+    duduclaw_core::runtime_catalog::runtime_for_model(model).map(|s| s.id)
+}
+
+/// Do two model ids come from the same vendor family?
+///
+/// P0/WP-B (verifier decorrelation, arXiv:2607.13918): an acceptance judge
+/// drawn from the worker's own family inherits the worker's blind spots, so
+/// the goal-loop settle path warns (never rejects) when this returns `true`.
+///
+/// Deliberately conservative in the *quiet* direction: two ids are "same
+/// family" when they are literally the same id, or when both resolve to the
+/// same catalog family. An unrecognised id paired with a known one is never
+/// reported — a warning an operator cannot act on is worse than silence.
+pub fn same_model_family(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    match (model_family(a), model_family(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// Best-effort model-family → runtime mapping for the dashboard save-time
 /// auto-align (`agents.update`): a confident family match returns that
 /// family's CLI runtime when its binary is installed, else `openai_compat`
@@ -238,6 +402,12 @@ pub fn model_matches_provider(model: &str, provider: RuntimeType) -> bool {
 ///
 /// WP-B: driven by the catalog's `model_prefixes` + the catalog-driven binary
 /// probe, so a new runtime's models auto-align the moment its entry lands.
+/// Test-only: exact model ids for which [`infer_provider_for_model`] treats
+/// the family CLI as installed (handler tests must not depend on which CLIs
+/// the machine running them has).
+#[cfg(test)]
+pub(crate) static FAMILY_CLI_INSTALLED_FOR_MODEL: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 pub fn infer_provider_for_model(model: &str) -> Option<RuntimeType> {
     let spec = duduclaw_core::runtime_catalog::runtime_for_model(model)?;
     let family = RuntimeType::from_id(spec.id)?;
@@ -246,7 +416,11 @@ pub fn infer_provider_for_model(model: &str) -> Option<RuntimeType> {
     }
     // The family's own CLI when it is installed; otherwise the API-mode
     // backend, which serves any model, so the aligned config is runnable.
-    Some(if duduclaw_core::which_runtime(spec.id).is_some() {
+    let installed = duduclaw_core::which_runtime(spec.id).is_some();
+    #[cfg(test)]
+    let installed = installed
+        || FAMILY_CLI_INSTALLED_FOR_MODEL.lock().is_ok_and(|models| models.iter().any(|m| m == model));
+    Some(if installed {
         family
     } else {
         RuntimeType::OpenAiCompat
@@ -439,7 +613,14 @@ pub fn global_utility_provider(home_dir: &Path) -> RuntimeType {
         .and_then(|v| v.get("runtime"))
         .and_then(|r| r.get("utility_provider"))
         .and_then(|s| s.as_str())
-        .map(|v| parse_provider_or_default(home_dir, "[runtime] utility_provider", v))
+        .map(|v| {
+            parse_provider_or_default(
+                home_dir,
+                "[runtime] utility_provider",
+                v,
+                DeprecatedRuntimeSource::UtilityProvider,
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -464,7 +645,14 @@ fn global_utility_spec(home_dir: &Path) -> UtilitySpec {
     let provider = runtime
         .and_then(|r| r.get("utility_provider"))
         .and_then(|s| s.as_str())
-        .map(|v| parse_provider_or_default(home_dir, "[runtime] utility_provider", v))
+        .map(|v| {
+            parse_provider_or_default(
+                home_dir,
+                "[runtime] utility_provider",
+                v,
+                DeprecatedRuntimeSource::UtilityProvider,
+            )
+        })
         .unwrap_or_default();
     let model = runtime
         .and_then(|r| r.get("utility_model"))
@@ -549,7 +737,79 @@ mod tests {
             "[runtime]\nprovider = \"gemini\"\nfallback = \"claude\"\n",
         );
         assert_eq!(agent_runtime_provider(dir.path()), RuntimeType::Gemini);
-        assert_eq!(agent_runtime_fallback(dir.path()), Some(RuntimeType::Claude));
+        assert_eq!(
+            agent_runtime_fallback(dir.path()),
+            Some(RuntimeType::Claude)
+        );
+    }
+
+    /// R1 (2026-10): a deprecated runtime parses exactly as before; the
+    /// notice is emitted once per (runtime, source) and never for a live one.
+    #[test]
+    fn deprecated_runtime_notice_is_first_sighting_only_and_value_unchanged() {
+        let mut seen = std::collections::HashSet::new();
+        let first = deprecated_runtime_first_notice(
+            &mut seen,
+            RuntimeType::Gemini,
+            DeprecatedRuntimeSource::AgentProvider,
+            Some("writer"),
+        )
+        .expect("first sighting warns");
+        assert!(first.contains("(agent `writer`)"), "{first}");
+        assert!(first.contains("agent.toml [runtime] provider"), "{first}");
+        assert!(first.contains("antigravity"), "{first}");
+        assert!(first.contains("v1.74.0"), "{first}");
+        assert!(first.contains("docs/guides/deprecations.md"), "{first}");
+        assert!(deprecated_runtime_first_notice(
+            &mut seen,
+            RuntimeType::Gemini,
+            DeprecatedRuntimeSource::AgentProvider,
+            Some("another-agent"),
+        )
+        .is_none());
+        // Different source kind ⇒ its own one-time notice.
+        for src in [
+            DeprecatedRuntimeSource::AgentFallback,
+            DeprecatedRuntimeSource::UtilityProvider,
+            DeprecatedRuntimeSource::JudgeProvider,
+            DeprecatedRuntimeSource::TeamRole,
+            DeprecatedRuntimeSource::DiscoveryAttempt,
+        ] {
+            let notice = deprecated_runtime_first_notice(&mut seen, RuntimeType::Gemini, src, None);
+            assert!(notice.as_deref().is_some_and(|n| !n.contains("(agent")), "{notice:?}");
+            assert!(deprecated_runtime_first_notice(&mut seen, RuntimeType::Gemini, src, None).is_none());
+        }
+        for rt in [RuntimeType::Antigravity, RuntimeType::Claude, RuntimeType::Codex] {
+            assert!(deprecated_runtime_first_notice(
+                &mut seen,
+                rt,
+                DeprecatedRuntimeSource::AgentProvider,
+                None,
+            )
+            .is_none());
+        }
+        assert!(!warn_once_if_deprecated_runtime(
+            RuntimeType::Antigravity,
+            DeprecatedRuntimeSource::AgentProvider
+        ));
+
+        // Parsing is unchanged: provider, fallback and utility_provider all
+        // still resolve to the Gemini CLI.
+        let dir = TempDir::new().unwrap();
+        write_agent_toml(
+            dir.path(),
+            "[runtime]\nprovider = \"gemini\"\nfallback = \"gemini\"\n",
+        );
+        let s = load_runtime_settings(dir.path());
+        assert_eq!(s.provider, RuntimeType::Gemini);
+        assert_eq!(s.fallback, Some(RuntimeType::Gemini));
+        let home = TempDir::new().unwrap();
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[runtime]\nutility_provider = \"gemini\"\n",
+        )
+        .unwrap();
+        assert_eq!(global_utility_provider(home.path()), RuntimeType::Gemini);
     }
 
     #[test]
@@ -909,29 +1169,21 @@ mod tests {
         // Missing file → empty object.
         assert_eq!(read_runtime_json(dir.path()), serde_json::json!({}));
         // Present [runtime] but only some keys → only those keys emitted;
-        // absent keys (worker_managed) must stay absent so the frontend can
-        // distinguish "unset" from an explicit false.
+        // an absent key must stay absent so the frontend can distinguish
+        // "unset" from a written value.
+        write_agent_toml(dir.path(), "[runtime]\nprovider = \"claude\"\n");
+        assert_eq!(
+            read_runtime_json(dir.path()),
+            serde_json::json!({ "provider": "claude" })
+        );
+        // Both keys present → both emitted, correct types.
         write_agent_toml(
             dir.path(),
-            "[runtime]\nprovider = \"claude\"\npty_pool_enabled = false\n",
+            "[runtime]\nprovider = \"codex\"\nfallback = \"claude\"\n",
         );
         assert_eq!(
             read_runtime_json(dir.path()),
-            serde_json::json!({ "provider": "claude", "pty_pool_enabled": false })
-        );
-        // All four keys present → all emitted, correct types.
-        write_agent_toml(
-            dir.path(),
-            "[runtime]\nprovider = \"codex\"\nfallback = \"claude\"\npty_pool_enabled = true\nworker_managed = true\n",
-        );
-        assert_eq!(
-            read_runtime_json(dir.path()),
-            serde_json::json!({
-                "provider": "codex",
-                "fallback": "claude",
-                "pty_pool_enabled": true,
-                "worker_managed": true,
-            })
+            serde_json::json!({ "provider": "codex", "fallback": "claude" })
         );
         // Malformed toml → empty object (fail-safe).
         write_agent_toml(dir.path(), "not valid toml ===");
@@ -1016,24 +1268,14 @@ mod tests {
 
     #[test]
     fn default_direction_runtime_json_omits_unset_keys() {
-        // `read_runtime_json` must distinguish "never written" from an
-        // explicit `false`: the PTY-pool default-enable migration only fires
-        // on the former. Materializing a default here would silently opt
-        // agents out of it.
+        // `read_runtime_json` must distinguish "never written" from a written
+        // value; materializing a default here would make the dashboard show a
+        // setting the file does not actually carry.
         let dir = TempDir::new().unwrap();
         write_agent_toml(dir.path(), "[runtime]\nprovider = \"codex\"\n");
         let json = read_runtime_json(dir.path());
         assert_eq!(json.get("provider").and_then(|v| v.as_str()), Some("codex"));
-        assert!(json.get("pty_pool_enabled").is_none(), "unset must be absent");
-        assert!(json.get("worker_managed").is_none(), "unset must be absent");
-
-        write_agent_toml(dir.path(), "[runtime]\npty_pool_enabled = false\n");
-        let json = read_runtime_json(dir.path());
-        assert_eq!(
-            json.get("pty_pool_enabled").and_then(|v| v.as_bool()),
-            Some(false),
-            "explicit false must be present and false"
-        );
+        assert!(json.get("fallback").is_none(), "unset must be absent");
 
         // No `[runtime]` at all ⇒ empty object, not a defaults object.
         let empty = TempDir::new().unwrap();
@@ -1155,6 +1397,26 @@ mod tests {
             agent_runtime_provider(dir.path()),
             RuntimeType::Gemini,
             "a live agent.toml edit must be visible on the next call"
+        );
+    }
+
+    /// R1 follow-up: the agent-scoped notices name the agent directory.
+    #[test]
+    fn agent_provider_notice_names_the_agent() {
+        let root = TempDir::new().unwrap();
+        let dir = root.path().join("sales-helper");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_agent_toml(&dir, "[runtime]\nprovider = \"gemini\"\nfallback = \"gemini\"\n");
+        CONSULTED_NOTICES.with(|n| n.borrow_mut().clear());
+        let s = load_runtime_settings(&dir);
+        assert_eq!(s.provider, RuntimeType::Gemini);
+        let consulted = CONSULTED_NOTICES.with(|n| n.borrow().clone());
+        assert_eq!(
+            consulted,
+            vec![
+                ("gemini", DeprecatedRuntimeSource::AgentProvider, Some("sales-helper".to_string())),
+                ("gemini", DeprecatedRuntimeSource::AgentFallback, Some("sales-helper".to_string())),
+            ]
         );
     }
 }

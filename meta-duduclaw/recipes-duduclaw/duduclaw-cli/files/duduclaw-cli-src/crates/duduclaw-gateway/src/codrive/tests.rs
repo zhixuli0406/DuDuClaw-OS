@@ -1,6 +1,6 @@
 //! Integration tests for the CD-1 co-drive driver against a fake comp
 //! socket server that speaks the exact wire protocol described in the WP
-//! brief (`commercial/docs/DESIGN-codrive-desktop-2026-08.md`). unix-only
+//! brief (`commercial/docs/specs/DESIGN-codrive-desktop-2026-08.md`). unix-only
 //! (see `mod.rs`'s `#[cfg(all(test, unix))]`) — `CodriveClient` itself is
 //! a no-op stub on non-unix targets.
 //!
@@ -325,18 +325,32 @@ async fn credential_class_auto_converts_to_take_over_and_never_sends_the_credent
         .await
         .expect("run_script must finish");
 
-    assert_eq!(report.final_state, "completed", "detail: {:?}", report.detail);
+    assert_eq!(
+        report.final_state, "completed",
+        "detail: {:?}",
+        report.detail
+    );
     assert_eq!(report.steps.len(), 1);
     assert_eq!(report.steps[0].outcome, "taken_over");
-    assert_eq!(report.steps[0].approval_id, None, "a take_over step must never carry an approval id");
+    assert_eq!(
+        report.steps[0].approval_id, None,
+        "a take_over step must never carry an approval id"
+    );
 
     let received = fake.received.lock().await;
     // [take_over, status] — `wait_for_resume` always polls `status` at
     // least once (see `step::wait_for_resume`), even against this fake
     // server, which starts unfrozen and so hands back on the first poll.
-    assert_eq!(received.len(), 2, "expected exactly [take_over, status]: {received:?}");
+    assert_eq!(
+        received.len(),
+        2,
+        "expected exactly [take_over, status]: {received:?}"
+    );
     assert_eq!(received[0]["op"], "take_over");
-    assert_eq!(received[0]["reason"], "輸入登入密碼", "the reason should be the consequential description, not the credential text");
+    assert_eq!(
+        received[0]["reason"], "輸入登入密碼",
+        "the reason should be the consequential description, not the credential text"
+    );
     assert!(
         !received.iter().any(|v| v["op"] == "text"),
         "the credential text must NEVER be sent to comp: {received:?}"

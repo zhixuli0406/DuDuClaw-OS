@@ -683,7 +683,7 @@ run_smoke_test() {
 #                                            independent of the embedded
 #                                            platform version since the
 #                                            2026-09 split
-#     "platform_version": "<embedded CLI>", e.g. "1.63.0" — the vendored
+#     "platform_version": "<embedded CLI>", e.g. "1.73.1" — the vendored
 #                                            DuDuClaw gateway/CLI snapshot's
 #                                            version (duduclaw-platform-
 #                                            version.inc); provenance only

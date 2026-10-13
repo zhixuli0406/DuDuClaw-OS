@@ -63,13 +63,14 @@ pub fn mcp_cold_start_status_and_message(
     provision_error: Option<&str>,
 ) -> (&'static str, String) {
     match outcome {
-        McpColdStartOutcome::Pass => {
-            ("pass", "MCP server 啟動並回應 initialize，工具面可用。".to_string())
-        }
+        McpColdStartOutcome::Pass => (
+            "pass",
+            "MCP server 啟動並回應 initialize，工具面可用。".to_string(),
+        ),
         McpColdStartOutcome::AuthFailed => (
             "fail",
             format!(
-                "MCP server 因認證被拒而終止 — agent 會完全叫不到 duduclaw 工具。{}重啟 gateway 讓它自動配發 internal key，或設定 env DUDUCLAW_MCP_API_KEY。",
+                "MCP server 因認證被拒而終止 — agent 會完全叫不到 duduclaw 工具。{}internal key 30 天到期，gateway 開機會自動配發並輪替，重啟即可修復過期的金鑰；或設定 env DUDUCLAW_MCP_API_KEY。",
                 provision_error
                     .map(|e| format!("（internal key 配發失敗：{e}）"))
                     .unwrap_or_default()
@@ -89,7 +90,11 @@ pub fn mcp_cold_start_status_and_message(
             format!(
                 "mcp-server 異常結束（exit={}，無 initialize 回應）。stderr：{}",
                 exit.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
-                if stderr_tail.is_empty() { "(空)" } else { stderr_tail }
+                if stderr_tail.is_empty() {
+                    "(空)"
+                } else {
+                    stderr_tail
+                }
             ),
         ),
     }
@@ -99,7 +104,10 @@ pub fn mcp_cold_start_status_and_message(
 /// spawn one `mcp-server` child and classify its cold-start behavior.
 /// Idempotent and side-effect-light: provisioning reuses the existing
 /// `gateway-internal` key (or mints it on a fresh home, exactly like a first
-/// gateway boot would).
+/// gateway boot would). Same age rules as boot — a key past
+/// `mcp_internal_key::ROTATE_AFTER_DAYS` is rotated here too, so running
+/// `duduclaw doctor` on an install whose key expired both reports and repairs
+/// it.
 pub async fn mcp_cold_start_probe(home: &Path) -> McpColdStartReport {
     let bin = duduclaw_core::resolve_duduclaw_bin();
     if !bin.is_absolute() {
@@ -159,16 +167,16 @@ pub async fn mcp_cold_start_probe(home: &Path) -> McpColdStartReport {
         // Drop stdin → EOF, so a healthy server answers then exits cleanly.
     }
 
-    let outcome = match tokio::time::timeout(Duration::from_secs(10), child.wait_with_output()).await
-    {
-        Err(_) => McpColdStartOutcome::Timeout,
-        Ok(Err(e)) => McpColdStartOutcome::SpawnFailed(format!("wait failed: {e}")),
-        Ok(Ok(out)) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            classify_mcp_cold_start(out.status.code(), &stdout, &stderr)
-        }
-    };
+    let outcome =
+        match tokio::time::timeout(Duration::from_secs(10), child.wait_with_output()).await {
+            Err(_) => McpColdStartOutcome::Timeout,
+            Ok(Err(e)) => McpColdStartOutcome::SpawnFailed(format!("wait failed: {e}")),
+            Ok(Ok(out)) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                classify_mcp_cold_start(out.status.code(), &stdout, &stderr)
+            }
+        };
 
     McpColdStartReport {
         binary: Some(bin),
@@ -179,11 +187,7 @@ pub async fn mcp_cold_start_probe(home: &Path) -> McpColdStartReport {
 }
 
 /// Pure classification of an mcp-server cold-start run (unit-testable).
-fn classify_mcp_cold_start(
-    exit: Option<i32>,
-    stdout: &str,
-    stderr: &str,
-) -> McpColdStartOutcome {
+fn classify_mcp_cold_start(exit: Option<i32>, stdout: &str, stderr: &str) -> McpColdStartOutcome {
     if stdout.contains("\"result\"") && stdout.contains("\"id\":1") {
         return McpColdStartOutcome::Pass;
     }
@@ -381,9 +385,13 @@ pub fn credential_audit(home: &Path) -> CredentialAudit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrokProbeOutcome {
     /// Non-empty stdout on exit 0 — headless path healthy.
-    Ok { stdout_chars: usize },
+    Ok {
+        stdout_chars: usize,
+    },
     /// stderr matched a not-logged-in / expired-credential signature.
-    AuthFailed { stderr_tail: String },
+    AuthFailed {
+        stderr_tail: String,
+    },
     /// Exit 0 but empty stdout — the headless-under-pipe class (the runtime
     /// applies a PTY one-shot retry for this; the CLI doctor demonstrates it).
     EmptyExit0,
@@ -430,8 +438,7 @@ pub async fn grok_probe(home: &Path) -> Option<GrokProbeReport> {
     let user_home =
         crate::runtime::grok::resolve_user_home(home, std::env::var("HOME").ok().as_deref());
     let grok_home_override = std::env::var("GROK_HOME").ok();
-    let home_env =
-        crate::runtime::grok::build_home_env(&user_home, grok_home_override.as_deref());
+    let home_env = crate::runtime::grok::build_home_env(&user_home, grok_home_override.as_deref());
 
     let mut cmd = duduclaw_core::platform::async_command_for(&path);
     cmd.args(["-p", "ping"]).stdin(Stdio::null());

@@ -329,10 +329,8 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 
 /// Strip leading separators/space from option content.
 fn strip_leading_sep(s: &str) -> &str {
-    s.trim_start_matches([
-        '：', ':', '.', '、', ')', '-', '—', '·', ' ', '\t', '　',
-    ])
-    .trim()
+    s.trim_start_matches(['：', ':', '.', '、', ')', '-', '—', '·', ' ', '\t', '　'])
+        .trim()
 }
 
 // ── P1.2 Persistence ────────────────────────────────────────────────────────
@@ -348,7 +346,8 @@ pub async fn persist_decision(
     id: &str,
     draft: &DecisionDraft,
     ctx_meta: serde_json::Value,
-) -> Result<(), String> {
+    provenance: duduclaw_memory::lineage::Provenance,
+) -> duduclaw_core::error::Result<()> {
     let subject = decision_subject(id);
 
     write_triple(
@@ -358,6 +357,7 @@ pub async fn persist_decision(
         PRED_QUESTION,
         &draft.question,
         &ctx_meta,
+        &provenance,
     )
     .await?;
 
@@ -369,6 +369,7 @@ pub async fn persist_decision(
             &pred_option(key),
             content,
             &ctx_meta,
+            &provenance,
         )
         .await?;
     }
@@ -380,6 +381,7 @@ pub async fn persist_decision(
         PRED_STATUS,
         STATUS_OPEN,
         &ctx_meta,
+        &provenance,
     )
     .await?;
     Ok(())
@@ -392,7 +394,8 @@ async fn write_triple(
     predicate: &str,
     object: &str,
     ctx_meta: &serde_json::Value,
-) -> Result<(), String> {
+    provenance: &duduclaw_memory::lineage::Provenance,
+) -> duduclaw_core::error::Result<()> {
     let entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         agent_id: agent_id.to_string(),
@@ -419,10 +422,16 @@ async fn write_triple(
         ..Default::default()
     };
     engine
-        .store_temporal(agent_id, entry, meta)
+        .store_temporal(agent_id, entry, meta, provenance.clone())
         .await
         .map(|_| ())
-        .map_err(|e| format!("store decision triple ({predicate}): {e}"))
+        .map_err(|e| match e {
+            // A fence refusal keeps its type (callers audit it).
+            f @ duduclaw_core::error::DuDuClawError::SourceFenced { .. } => f,
+            other => duduclaw_core::error::DuDuClawError::Memory(format!(
+                "store decision triple ({predicate}): {other}"
+            )),
+        })
 }
 
 // ── P1.4 Injection ──────────────────────────────────────────────────────────
@@ -502,7 +511,15 @@ pub fn detect_decision_reference(
 /// alphanumeric label, or one of the explicit "用方案"/"選方案" verbs is present.
 pub fn mentions_decision_reference(user_text: &str) -> bool {
     let hay = user_text.to_lowercase();
-    for verb in ["用方案", "選方案", "照方案", "用選項", "選選項", "用第", "選第"] {
+    for verb in [
+        "用方案",
+        "選方案",
+        "照方案",
+        "用選項",
+        "選選項",
+        "用第",
+        "選第",
+    ] {
         if hay.contains(verb) {
             return true;
         }
@@ -805,7 +822,7 @@ mod tests {
             "agent-a",
             &id,
             &draft,
-            serde_json::json!({"channel":"discord"}),
+            serde_json::json!({"channel":"discord"}), duduclaw_memory::lineage::Provenance::test_only(),
         )
         .await
         .unwrap();
@@ -830,7 +847,7 @@ mod tests {
             ],
         };
         let id = decision_id("agent-b", "m1");
-        persist_decision(&engine, "agent-b", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agent-b", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -856,10 +873,10 @@ mod tests {
             options: vec![("A".into(), "one".into()), ("B".into(), "two".into())],
         };
         let id = decision_id("agent-c", "m1");
-        persist_decision(&engine, "agent-c", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agent-c", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
-        persist_decision(&engine, "agent-c", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agent-c", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
 
@@ -885,7 +902,7 @@ mod tests {
             ],
         };
         let id = decision_id("agent-d", "m1");
-        persist_decision(&engine, "agent-d", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agent-d", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
         let hits = engine.search("agent-d", "Hyperledger", 10).await.unwrap();
@@ -924,7 +941,7 @@ mod tests {
             agent,
             &id,
             &draft,
-            serde_json::json!({"channel":"discord"}),
+            serde_json::json!({"channel":"discord"}), duduclaw_memory::lineage::Provenance::test_only(),
         )
         .await
         .unwrap();
@@ -971,7 +988,7 @@ mod tests {
         let id = decision_id("agent-r", "m1");
         {
             let engine = SqliteMemoryEngine::new(&db).unwrap();
-            persist_decision(&engine, "agent-r", &id, &draft, serde_json::json!({}))
+            persist_decision(&engine, "agent-r", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
                 .await
                 .unwrap();
         } // engine dropped → connection closed
@@ -997,12 +1014,12 @@ mod tests {
             ],
         };
         let id = decision_id("agnes", "m1");
-        persist_decision(&engine, "agnes", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agnes", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         // Resolve to C.
-        let outcome = engine.resolve_decision("agnes", &id, "C").await.unwrap();
+        let outcome = engine.resolve_decision("agnes", &id, "C", duduclaw_memory::lineage::Provenance::test_only()).await.unwrap();
         match outcome {
             DecisionResolveOutcome::Resolved {
                 chosen_key,
@@ -1016,9 +1033,19 @@ mod tests {
         }
 
         // No longer open; status reflects the choice.
-        assert!(engine.list_open_decisions("agnes", 5).await.unwrap().is_empty());
+        assert!(
+            engine
+                .list_open_decisions("agnes", 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            engine.decision_status("agnes", &id).await.unwrap().as_deref(),
+            engine
+                .decision_status("agnes", &id)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("resolved:C")
         );
         // The choice is recorded as a searchable long-lived fact.
@@ -1036,32 +1063,38 @@ mod tests {
             options: vec![("A".into(), "one".into()), ("B".into(), "two".into())],
         };
         let id = decision_id("agnes", "m1");
-        persist_decision(&engine, "agnes", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agnes", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
 
         // Unknown decision id → NotFound, nothing written.
         assert!(matches!(
-            engine.resolve_decision("agnes", "deadbeef", "A").await.unwrap(),
+            engine
+                .resolve_decision("agnes", "deadbeef", "A", duduclaw_memory::lineage::Provenance::test_only())
+                .await
+                .unwrap(),
             DecisionResolveOutcome::NotFound
         ));
         // Unknown option key → UnknownKey, nothing written.
         assert!(matches!(
-            engine.resolve_decision("agnes", &id, "Z").await.unwrap(),
+            engine.resolve_decision("agnes", &id, "Z", duduclaw_memory::lineage::Provenance::test_only()).await.unwrap(),
             DecisionResolveOutcome::UnknownKey { .. }
         ));
         // Other agent cannot resolve this decision (namespace isolation).
         assert!(matches!(
-            engine.resolve_decision("intruder", &id, "A").await.unwrap(),
+            engine.resolve_decision("intruder", &id, "A", duduclaw_memory::lineage::Provenance::test_only()).await.unwrap(),
             DecisionResolveOutcome::NotFound
         ));
         // Still open after the failed attempts.
-        assert_eq!(engine.list_open_decisions("agnes", 5).await.unwrap().len(), 1);
+        assert_eq!(
+            engine.list_open_decisions("agnes", 5).await.unwrap().len(),
+            1
+        );
 
         // Resolve, then a second resolve is rejected as AlreadyResolved.
-        engine.resolve_decision("agnes", &id, "A").await.unwrap();
+        engine.resolve_decision("agnes", &id, "A", duduclaw_memory::lineage::Provenance::test_only()).await.unwrap();
         assert!(matches!(
-            engine.resolve_decision("agnes", &id, "B").await.unwrap(),
+            engine.resolve_decision("agnes", &id, "B", duduclaw_memory::lineage::Provenance::test_only()).await.unwrap(),
             DecisionResolveOutcome::AlreadyResolved(_)
         ));
     }
@@ -1072,7 +1105,10 @@ mod tests {
         duduclaw_memory::DecisionView {
             id: id.to_string(),
             question: "Q".into(),
-            options: keys.iter().map(|k| (k.to_string(), format!("c{k}"))).collect(),
+            options: keys
+                .iter()
+                .map(|k| (k.to_string(), format!("c{k}")))
+                .collect(),
             created_at: None,
         }
     }
@@ -1112,7 +1148,10 @@ mod tests {
     fn reference_none_when_no_choice_context() {
         let open = vec![view("d1", &["A", "B", "C"])];
         // Bare letters in prose must NOT match (no choice anchor).
-        assert_eq!(detect_decision_reference("A car drove by, basically", &open), None);
+        assert_eq!(
+            detect_decision_reference("A car drove by, basically", &open),
+            None
+        );
         assert_eq!(detect_decision_reference("沒什麼想法", &open), None);
     }
 
@@ -1123,7 +1162,10 @@ mod tests {
         assert_eq!(detect_decision_reference("用方案 C", &open), None);
         // Two distinct keys referenced → ambiguous → None.
         let open2 = vec![view("d1", &["A", "B"])];
-        assert_eq!(detect_decision_reference("方案 A 還是 方案 B?", &open2), None);
+        assert_eq!(
+            detect_decision_reference("方案 A 還是 方案 B?", &open2),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1134,7 +1176,11 @@ mod tests {
         // Build a 10-day-old open decision directly (backdated valid_from).
         let old = chrono::Utc::now() - chrono::Duration::days(10);
         let subject = decision_subject("old1");
-        for (pred, obj) in [("question", "舊決策"), ("option:A", "一"), ("status", "open")] {
+        for (pred, obj) in [
+            ("question", "舊決策"),
+            ("option:A", "一"),
+            ("status", "open"),
+        ] {
             let mut entry = MemoryEntry {
                 id: uuid::Uuid::new_v4().to_string(),
                 agent_id: "agnes".into(),
@@ -1162,7 +1208,7 @@ mod tests {
                         confidence: Some(1.0),
                         metadata: None,
                         ..Default::default()
-                    },
+                    }, duduclaw_memory::lineage::Provenance::test_only(),
                 )
                 .await
                 .unwrap();
@@ -1173,11 +1219,14 @@ mod tests {
             options: vec![("A".into(), "x".into()), ("B".into(), "y".into())],
         };
         let fresh_id = decision_id("agnes", "fresh");
-        persist_decision(&engine, "agnes", &fresh_id, &fresh, serde_json::json!({}))
+        persist_decision(&engine, "agnes", &fresh_id, &fresh, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
 
-        assert_eq!(engine.list_open_decisions("agnes", 10).await.unwrap().len(), 2);
+        assert_eq!(
+            engine.list_open_decisions("agnes", 10).await.unwrap().len(),
+            2
+        );
 
         // TTL 7 days: the 10-day-old decision expires, the fresh one stays.
         let n = engine.expire_stale_decisions("agnes", 7).await.unwrap();
@@ -1256,12 +1305,21 @@ mod tests {
             options: vec![("A".into(), "one".into()), ("B".into(), "two".into())],
         };
         let id = decision_id("agnes", "m1");
-        persist_decision(&engine, "agnes", &id, &draft, serde_json::json!({}))
+        persist_decision(&engine, "agnes", &id, &draft, serde_json::json!({}), duduclaw_memory::lineage::Provenance::test_only())
             .await
             .unwrap();
 
-        assert!(engine.dismiss_decision("agnes", &id).await.unwrap(), "existed");
-        assert!(engine.list_open_decisions("agnes", 5).await.unwrap().is_empty());
+        assert!(
+            engine.dismiss_decision("agnes", &id).await.unwrap(),
+            "existed"
+        );
+        assert!(
+            engine
+                .list_open_decisions("agnes", 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         // Dismissing again / unknown id → false (nothing closed).
         assert!(!engine.dismiss_decision("agnes", &id).await.unwrap());
         assert!(!engine.dismiss_decision("agnes", "nope").await.unwrap());

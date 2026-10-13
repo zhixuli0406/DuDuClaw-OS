@@ -2,14 +2,14 @@
 //!
 //! # Why this exists
 //!
-//! `commercial/docs/DESIGN-app-compat-layer-2026-08.md` §1 specifies a
+//! `commercial/docs/specs/DESIGN-app-compat-layer-2026-08.md` §1 specifies a
 //! SteamOS-style compat layer, copied verbatim in shape: a **discovery
 //! directory** (scan `compat.d/` for declaration files), a **declaration**
 //! (`from_os → to_os` capability claim), and an **entry point** (execution
 //! command + a `require_tool` layer of PATH-resolvable dependencies). This
 //! module is the discovery + declaration half — [`discover_runners`] scans
 //! and reports; nothing here executes an `entrypoint` (that is a later
-//! wave, see `commercial/docs/TODO-compat-cp1-2026-08.md`'s "整合" row).
+//! wave, see `commercial/docs/plans/TODO-compat-cp1-2026-08.md`'s "整合" row).
 //!
 //! Third-party runners (a GE-Proton-style community package) plug into the
 //! exact same interface by dropping a `.toml` file into either scan layer —
@@ -295,7 +295,11 @@ pub fn discover_runners_from(roots: &[PathBuf]) -> Vec<RunnerStatus> {
 fn compat_roots() -> Vec<PathBuf> {
     if let Ok(raw) = std::env::var(COMPAT_DIRS_ENV) {
         let roots: Vec<PathBuf> =
-            raw.split(':').map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from).collect();
+            // `std::env::split_paths`, not `split(':')` — the latter splits a
+            // Windows `C:\...` entry at the drive colon (Windows CI test leg).
+            std::env::split_paths(&raw)
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect();
         if !roots.is_empty() {
             return roots;
         }
@@ -393,13 +397,26 @@ require_tool = ["flatpak"]
 
     /// RAII `$PATH` override for tests. Callers must hold [`ENV_LOCK`] for
     /// the guard's lifetime — `PATH` is process-global.
+    ///
+    /// `dir` is *prepended* to the real `PATH`, never substituted for it:
+    /// `PATH` is process-global, and other test modules in this crate spawn
+    /// tools through it concurrently (`data_migrations` runs `bash`) — a
+    /// wholesale replacement made those fail whenever the scheduler
+    /// interleaved them with these tests. The assertions here only need
+    /// "present-tool is findable" and "definitely-missing-tool-xyz is not",
+    /// which prepending preserves.
     struct PathOverride {
         prev: Option<std::ffi::OsString>,
     }
     impl PathOverride {
         fn set(dir: &Path) -> Self {
             let prev = std::env::var_os("PATH");
-            unsafe { std::env::set_var("PATH", dir) };
+            let mut entries = vec![dir.to_path_buf()];
+            if let Some(p) = &prev {
+                entries.extend(std::env::split_paths(p));
+            }
+            let joined = std::env::join_paths(entries).expect("PATH entries contain no separator");
+            unsafe { std::env::set_var("PATH", joined) };
             Self { prev }
         }
     }

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
@@ -59,7 +59,19 @@ pub mod keys {
 /// path validating "discord" while the other silently accepts "Discord" would
 /// split the settings store into two unreachable halves.
 pub const VALID_CHANNEL_TYPES: &[&str] = &[
-    "discord", "telegram", "slack", "line", "whatsapp", "feishu", "wecom", "dingtalk",
+    "discord",
+    "telegram",
+    "slack",
+    "line",
+    "whatsapp",
+    "feishu",
+    "wecom",
+    "dingtalk",
+    // v1.68.0: Google Chat and Teams gained a real `admin_users` gate
+    // (`chat_commands::handle_command_for_sender`), so the list must be
+    // settable for them. "teams" matches the dashboard's channel id.
+    "googlechat",
+    "teams",
 ];
 
 /// "Behavior" setting keys — response shape / routing, not access control.
@@ -79,7 +91,11 @@ pub const CONFIG_KEYS: &[&str] = &[
 /// `channel_config` MCP tool. Deliberately excludes [`keys::ADMIN_USERS`] — an
 /// agent must never be able to grant itself (or anyone else) `!STOP`
 /// authority over channel automation from inside a chat.
-pub const MCP_ACCESS_KEYS: &[&str] = &[keys::REQUIRE_PAIRING, keys::ALLOWED_USERS, keys::BLOCKED_USERS];
+pub const MCP_ACCESS_KEYS: &[&str] = &[
+    keys::REQUIRE_PAIRING,
+    keys::ALLOWED_USERS,
+    keys::BLOCKED_USERS,
+];
 
 /// Access-control keys the dashboard (admin-only, human-operated GUI) may
 /// read/write (E2). Superset of [`MCP_ACCESS_KEYS`]: `admin_users` decides who
@@ -123,7 +139,10 @@ pub fn validate_setting_value(key: &str, value: &str) -> Result<(), String> {
                 return Err(format!("{key} must be 'true' or 'false'"));
             }
         }
-        keys::ALLOWED_CHANNELS | keys::ALLOWED_GUILDS | keys::ALLOWED_USERS | keys::BLOCKED_USERS
+        keys::ALLOWED_CHANNELS
+        | keys::ALLOWED_GUILDS
+        | keys::ALLOWED_USERS
+        | keys::BLOCKED_USERS
         | keys::ADMIN_USERS => {
             if serde_json::from_str::<Vec<String>>(value).is_err() {
                 return Err(format!(
@@ -198,13 +217,89 @@ impl ChannelSettingsManager {
             );
 
             CREATE INDEX IF NOT EXISTS idx_channel_settings_scope
-                ON channel_settings(channel_type, scope_id);"
-        ).map_err(|e| e.to_string())?;
+                ON channel_settings(channel_type, scope_id);",
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     fn cache_key(channel_type: &str, scope_id: &str, key: &str) -> CacheKey {
-        (channel_type.to_string(), scope_id.to_string(), key.to_string())
+        (
+            channel_type.to_string(),
+            scope_id.to_string(),
+            key.to_string(),
+        )
+    }
+
+    /// Refresh a scope from authoritative SQLite before durable dispatch.
+    /// Never accept the in-memory fallback as an authorization snapshot.
+    pub(crate) async fn refresh_channel_snapshot(
+        &self,
+        channel: &str,
+        scope: &str,
+    ) -> Result<Vec<(String, String, String)>, String> {
+        self.refresh_snapshot_filtered(channel, scope, None).await
+    }
+
+    /// Like [`Self::refresh_channel_snapshot`], but only `keys` are validated
+    /// and returned: an invalid value under an unrelated key does not make
+    /// the snapshot unavailable (LINE ingress review I-MEDIUM-7). The cache
+    /// is still refreshed for every row of the two scopes.
+    pub(crate) async fn refresh_channel_snapshot_for(
+        &self,
+        channel: &str,
+        scope: &str,
+        keys: &[&str],
+    ) -> Result<Vec<(String, String, String)>, String> {
+        self.refresh_snapshot_filtered(channel, scope, Some(keys))
+            .await
+    }
+
+    async fn refresh_snapshot_filtered(
+        &self,
+        channel: &str,
+        scope: &str,
+        only: Option<&[&str]>,
+    ) -> Result<Vec<(String, String, String)>, String> {
+        let wanted = |key: &str| only.is_none_or(|keys| keys.contains(&key));
+        let conn = self.conn.lock().await;
+        let rows = {
+            let disk: String = conn
+                .query_row("PRAGMA database_list", [], |r| r.get(2))
+                .map_err(|e| e.to_string())?;
+            if disk.is_empty() {
+                return Err("durable authorization requires on-disk settings".into());
+            }
+            let mut stmt = conn
+                .prepare("SELECT scope_id,key,value FROM channel_settings WHERE channel_type=?1
+                    AND scope_id IN ('global',?2) ORDER BY scope_id,key")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map(params![channel, scope], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+        };
+        for (_, key, value) in &rows {
+            if wanted(key) {
+                validate_setting_value(key, value)?;
+            }
+        }
+        #[cfg(test)]
+        pause_after_settings_read().await;
+        // All database-to-cache publications keep the connection lock until
+        // cache installation completes. No reader holds cache while taking DB.
+        let mut cache = self.cache.write().await;
+        cache.retain(|(ch, sc, _), _| ch != channel || (sc != "global" && sc != scope));
+        for (sc, key, value) in &rows {
+            cache.insert(Self::cache_key(channel, sc, key), Some(value.clone()));
+        }
+        Ok(rows.into_iter().filter(|(_, key, _)| wanted(key)).collect())
     }
 
     /// Get a setting value. Returns `None` if not set.
@@ -227,7 +322,8 @@ impl ChannelSettingsManager {
             params![channel_type, scope_id, key],
             |row| row.get(0),
         ).ok();
-        drop(conn);
+        #[cfg(test)]
+        pause_after_settings_read().await;
 
         // Store in cache (including None to avoid repeated DB misses)
         let mut cache = self.cache.write().await;
@@ -255,9 +351,46 @@ impl ChannelSettingsManager {
         default.to_string()
     }
 
+    /// Non-empty value at `scope_id`, else the non-empty `global` value.
+    /// (Unlike [`Self::get_with_fallback`], an empty string counts as unset
+    /// at both levels, so clearing a per-guild value falls back to global.)
+    pub async fn get_scoped_or_global(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+        key: &str,
+    ) -> Option<String> {
+        if let Some(v) = self
+            .get(channel_type, scope_id, key)
+            .await
+            .filter(|v| !v.is_empty())
+        {
+            return Some(v);
+        }
+        if scope_id == "global" {
+            return None;
+        }
+        self.get(channel_type, "global", key)
+            .await
+            .filter(|v| !v.is_empty())
+    }
+
     /// Get a boolean setting with fallback.
-    pub async fn get_bool(&self, channel_type: &str, scope_id: &str, key: &str, default: bool) -> bool {
-        let val = self.get_with_fallback(channel_type, scope_id, key, if default { "true" } else { "false" }).await;
+    pub async fn get_bool(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+        key: &str,
+        default: bool,
+    ) -> bool {
+        let val = self
+            .get_with_fallback(
+                channel_type,
+                scope_id,
+                key,
+                if default { "true" } else { "false" },
+            )
+            .await;
         val == "true"
     }
 
@@ -285,8 +418,14 @@ impl ChannelSettingsManager {
     /// Returns `None` when the key is unset/empty (so the caller can fall back),
     /// and `Some(vec)` otherwise. Corrupt JSON degrades to `Some(empty)` =
     /// allow-all for that scope to avoid locking everyone out on bad data.
-    async fn parse_allowed_channels(&self, channel_type: &str, scope_id: &str) -> Option<Vec<String>> {
-        let val = self.get(channel_type, scope_id, keys::ALLOWED_CHANNELS).await?;
+    async fn parse_allowed_channels(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+    ) -> Option<Vec<String>> {
+        let val = self
+            .get(channel_type, scope_id, keys::ALLOWED_CHANNELS)
+            .await?;
         if val.is_empty() {
             return None;
         }
@@ -297,7 +436,13 @@ impl ChannelSettingsManager {
     }
 
     /// Set a setting value (upsert). Invalidates cache for this key.
-    pub async fn set(&self, channel_type: &str, scope_id: &str, key: &str, value: &str) -> Result<(), String> {
+    pub async fn set(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -305,8 +450,8 @@ impl ChannelSettingsManager {
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(channel_type, scope_id, key) DO UPDATE SET value = ?4, updated_at = ?5",
             params![channel_type, scope_id, key, value, now],
-        ).map_err(|e| e.to_string())?;
-        drop(conn);
+        )
+        .map_err(|e| e.to_string())?;
 
         // Invalidate cache
         let mut cache = self.cache.write().await;
@@ -317,13 +462,18 @@ impl ChannelSettingsManager {
     }
 
     /// Delete a setting. Invalidates cache for this key.
-    pub async fn delete(&self, channel_type: &str, scope_id: &str, key: &str) -> Result<(), String> {
+    pub async fn delete(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+        key: &str,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().await;
         conn.execute(
             "DELETE FROM channel_settings WHERE channel_type = ?1 AND scope_id = ?2 AND key = ?3",
             params![channel_type, scope_id, key],
-        ).map_err(|e| e.to_string())?;
-        drop(conn);
+        )
+        .map_err(|e| e.to_string())?;
 
         // Invalidate cache
         let mut cache = self.cache.write().await;
@@ -337,7 +487,7 @@ impl ChannelSettingsManager {
     pub async fn get_all(&self, channel_type: &str, scope_id: &str) -> Vec<(String, String)> {
         let conn = self.conn.lock().await;
         let mut stmt = match conn.prepare(
-            "SELECT key, value FROM channel_settings WHERE channel_type = ?1 AND scope_id = ?2"
+            "SELECT key, value FROM channel_settings WHERE channel_type = ?1 AND scope_id = ?2",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -351,12 +501,43 @@ impl ChannelSettingsManager {
 
     /// Check if a channel_id is allowed for a given scope.
     /// Returns true if no whitelist is set (empty = allow all).
-    pub async fn is_channel_allowed(&self, channel_type: &str, scope_id: &str, channel_id: &str) -> bool {
+    pub async fn is_channel_allowed(
+        &self,
+        channel_type: &str,
+        scope_id: &str,
+        channel_id: &str,
+    ) -> bool {
         let allowed = self.get_allowed_channels(channel_type, scope_id).await;
         if allowed.is_empty() {
             return true;
         }
         allowed.iter().any(|id| id == channel_id)
+    }
+
+    /// Group-chat gate shared by the webhook channels that carry group
+    /// context (Feishu, DingTalk; v1.68.0): `allowed_channels` (global
+    /// whitelist of group/chat ids, exact match) and `mention_only` (per
+    /// chat, else global). Direct messages are never filtered, as on LINE.
+    pub async fn group_message_allowed(
+        &self,
+        channel_type: &str,
+        chat_id: &str,
+        is_group: bool,
+        mentioned: bool,
+    ) -> bool {
+        if !is_group {
+            return true;
+        }
+        if !self
+            .is_channel_allowed(channel_type, "global", chat_id)
+            .await
+        {
+            return false;
+        }
+        let mention_only = self
+            .get_bool(channel_type, chat_id, keys::MENTION_ONLY, false)
+            .await;
+        !mention_only || mentioned
     }
 
     /// Check if a guild/server is allowed. The guild whitelist lives at the
@@ -396,9 +577,112 @@ impl ChannelSettingsManager {
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
+tokio::task_local! {
+    static SETTINGS_READ_HOOK: (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+}
+#[cfg(test)]
+async fn pause_after_settings_read() {
+    if let Ok((read, resume)) = SETTINGS_READ_HOOK.try_with(Clone::clone) {
+        read.notify_one();
+        resume.notified().await;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn stale_refresh_and_cache_miss_cannot_overwrite_completed_set_or_delete() {
+        for refresh in [true, false] {
+            for delete in [true, false] {
+                let (_db, manager) = temp_db();
+                let manager = Arc::new(manager);
+                manager
+                    .set("line", "global", keys::BLOCKED_USERS, "[]")
+                    .await
+                    .unwrap();
+                manager.cache.write().await.clear();
+                let read = Arc::new(tokio::sync::Notify::new());
+                let resume = Arc::new(tokio::sync::Notify::new());
+                let reader_manager = manager.clone();
+                let reader = tokio::spawn(SETTINGS_READ_HOOK.scope(
+                    (read.clone(), resume.clone()),
+                    async move {
+                        if refresh {
+                            reader_manager
+                                .refresh_channel_snapshot("line", "global")
+                                .await
+                                .unwrap();
+                        } else {
+                            assert_eq!(
+                                reader_manager
+                                    .get("line", "global", keys::BLOCKED_USERS)
+                                    .await
+                                    .as_deref(),
+                                Some("[]")
+                            );
+                        }
+                    },
+                ));
+                read.notified().await;
+                let attempted = Arc::new(tokio::sync::Notify::new());
+                let completed = Arc::new(tokio::sync::Notify::new());
+                let writer_manager = manager.clone();
+                let writer_attempted = attempted.clone();
+                let writer_completed = completed.clone();
+                let writer = tokio::spawn(async move {
+                    writer_attempted.notify_one();
+                    if delete {
+                        writer_manager
+                            .delete("line", "global", keys::BLOCKED_USERS)
+                            .await
+                            .unwrap();
+                    } else {
+                        writer_manager
+                            .set("line", "global", keys::BLOCKED_USERS, "[\"revoked\"]")
+                            .await
+                            .unwrap();
+                    }
+                    writer_completed.notify_one();
+                });
+                attempted.notified().await;
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(40),
+                        completed.notified()
+                    )
+                    .await
+                    .is_err(),
+                    "writer must serialize behind the pending database-to-cache publication"
+                );
+                resume.notify_one();
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    reader.await.unwrap();
+                    writer.await.unwrap();
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    manager
+                        .get("line", "global", keys::BLOCKED_USERS)
+                        .await
+                        .as_deref(),
+                    if delete { None } else { Some("[\"revoked\"]") }
+                );
+                assert_eq!(
+                    manager
+                        .get_all("line", "global")
+                        .await
+                        .iter()
+                        .find(|(k, _)| k == keys::BLOCKED_USERS)
+                        .map(|(_, v)| v.as_str()),
+                    if delete { None } else { Some("[\"revoked\"]") }
+                );
+            }
+        }
+    }
 
     fn temp_db() -> (NamedTempFile, ChannelSettingsManager) {
         let tmp = NamedTempFile::new().unwrap();
@@ -407,36 +691,149 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_gate_applies_whitelist_and_mention_only_to_groups_only() {
+        let (_tmp, mgr) = temp_db();
+        // Nothing configured ⇒ everything passes.
+        assert!(
+            mgr.group_message_allowed("feishu", "oc_1", true, false)
+                .await
+        );
+        mgr.set("feishu", "global", keys::ALLOWED_CHANNELS, r#"["oc_1"]"#)
+            .await
+            .unwrap();
+        assert!(
+            mgr.group_message_allowed("feishu", "oc_1", true, false)
+                .await
+        );
+        assert!(
+            !mgr.group_message_allowed("feishu", "oc_2", true, true)
+                .await
+        );
+        // Prefix of an allowed id is not allowed.
+        assert!(!mgr.group_message_allowed("feishu", "oc_", true, true).await);
+        // DMs are never filtered.
+        assert!(
+            mgr.group_message_allowed("feishu", "ou_dm", false, false)
+                .await
+        );
+        mgr.set("feishu", "global", keys::MENTION_ONLY, "true")
+            .await
+            .unwrap();
+        assert!(
+            !mgr.group_message_allowed("feishu", "oc_1", true, false)
+                .await
+        );
+        assert!(
+            mgr.group_message_allowed("feishu", "oc_1", true, true)
+                .await
+        );
+        // Per-chat override wins over global.
+        mgr.set("feishu", "oc_1", keys::MENTION_ONLY, "false")
+            .await
+            .unwrap();
+        assert!(
+            mgr.group_message_allowed("feishu", "oc_1", true, false)
+                .await
+        );
+        // Other platforms unaffected.
+        assert!(
+            mgr.group_message_allowed("dingtalk", "oc_2", true, false)
+                .await
+        );
+    }
+
+    /// The dashboard writes `agent_override` at `global`; Discord reads per
+    /// guild. A guild value wins; otherwise the global one applies.
+    #[tokio::test]
+    async fn agent_override_falls_back_to_global() {
+        let (_tmp, mgr) = temp_db();
+        let k = keys::AGENT_OVERRIDE;
+        assert_eq!(mgr.get_scoped_or_global("discord", "g1", k).await, None);
+        mgr.set("discord", "global", k, "sales").await.unwrap();
+        assert_eq!(
+            mgr.get_scoped_or_global("discord", "g1", k)
+                .await
+                .as_deref(),
+            Some("sales")
+        );
+        assert_eq!(
+            mgr.get_scoped_or_global("discord", "dm", k)
+                .await
+                .as_deref(),
+            Some("sales")
+        );
+        mgr.set("discord", "g1", k, "support").await.unwrap();
+        assert_eq!(
+            mgr.get_scoped_or_global("discord", "g1", k)
+                .await
+                .as_deref(),
+            Some("support")
+        );
+        // Clearing the guild value falls back again.
+        mgr.set("discord", "g1", k, "").await.unwrap();
+        assert_eq!(
+            mgr.get_scoped_or_global("discord", "g1", k)
+                .await
+                .as_deref(),
+            Some("sales")
+        );
+        // Another platform's global value does not leak.
+        assert_eq!(mgr.get_scoped_or_global("telegram", "g1", k).await, None);
+    }
+
+    #[tokio::test]
     async fn test_set_and_get() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "guild123", "mention_only", "true").await.unwrap();
-        assert_eq!(mgr.get("discord", "guild123", "mention_only").await, Some("true".to_string()));
+        mgr.set("discord", "guild123", "mention_only", "true")
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.get("discord", "guild123", "mention_only").await,
+            Some("true".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_cache_hit() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "guild123", "mention_only", "true").await.unwrap();
+        mgr.set("discord", "guild123", "mention_only", "true")
+            .await
+            .unwrap();
         // First read populates cache
         let _ = mgr.get("discord", "guild123", "mention_only").await;
         // Second read should hit cache (no way to assert directly, but ensures no panic)
-        assert_eq!(mgr.get("discord", "guild123", "mention_only").await, Some("true".to_string()));
+        assert_eq!(
+            mgr.get("discord", "guild123", "mention_only").await,
+            Some("true".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_cache_invalidation_on_set() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "g1", "mention_only", "true").await.unwrap();
-        assert_eq!(mgr.get("discord", "g1", "mention_only").await, Some("true".to_string()));
+        mgr.set("discord", "g1", "mention_only", "true")
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.get("discord", "g1", "mention_only").await,
+            Some("true".to_string())
+        );
         // Update should invalidate cache
-        mgr.set("discord", "g1", "mention_only", "false").await.unwrap();
-        assert_eq!(mgr.get("discord", "g1", "mention_only").await, Some("false".to_string()));
+        mgr.set("discord", "g1", "mention_only", "false")
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.get("discord", "g1", "mention_only").await,
+            Some("false".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_cache_invalidation_on_delete() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "g1", "mention_only", "true").await.unwrap();
+        mgr.set("discord", "g1", "mention_only", "true")
+            .await
+            .unwrap();
         let _ = mgr.get("discord", "g1", "mention_only").await; // populate cache
         mgr.delete("discord", "g1", "mention_only").await.unwrap();
         assert_eq!(mgr.get("discord", "g1", "mention_only").await, None);
@@ -445,17 +842,27 @@ mod tests {
     #[tokio::test]
     async fn test_fallback_to_global() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", "mention_only", "true").await.unwrap();
-        let val = mgr.get_with_fallback("discord", "guild999", "mention_only", "false").await;
+        mgr.set("discord", "global", "mention_only", "true")
+            .await
+            .unwrap();
+        let val = mgr
+            .get_with_fallback("discord", "guild999", "mention_only", "false")
+            .await;
         assert_eq!(val, "true");
     }
 
     #[tokio::test]
     async fn test_scope_overrides_global() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", "mention_only", "true").await.unwrap();
-        mgr.set("discord", "guild123", "mention_only", "false").await.unwrap();
-        let val = mgr.get_with_fallback("discord", "guild123", "mention_only", "true").await;
+        mgr.set("discord", "global", "mention_only", "true")
+            .await
+            .unwrap();
+        mgr.set("discord", "guild123", "mention_only", "false")
+            .await
+            .unwrap();
+        let val = mgr
+            .get_with_fallback("discord", "guild123", "mention_only", "true")
+            .await;
         assert_eq!(val, "false");
     }
 
@@ -468,7 +875,14 @@ mod tests {
     #[tokio::test]
     async fn test_allowed_channels_whitelist() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "guild123", "allowed_channels", r#"["ch1","ch2"]"#).await.unwrap();
+        mgr.set(
+            "discord",
+            "guild123",
+            "allowed_channels",
+            r#"["ch1","ch2"]"#,
+        )
+        .await
+        .unwrap();
         assert!(mgr.is_channel_allowed("discord", "guild123", "ch1").await);
         assert!(!mgr.is_channel_allowed("discord", "guild123", "ch999").await);
     }
@@ -477,7 +891,9 @@ mod tests {
     async fn test_allowed_channels_global_fallback() {
         // M24: a global allowlist must apply to scopes without their own list.
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", "allowed_channels", r#"["chA"]"#).await.unwrap();
+        mgr.set("discord", "global", "allowed_channels", r#"["chA"]"#)
+            .await
+            .unwrap();
         // guild999 has no per-scope allowlist → inherits global.
         assert!(mgr.is_channel_allowed("discord", "guild999", "chA").await);
         assert!(!mgr.is_channel_allowed("discord", "guild999", "chZ").await);
@@ -487,8 +903,12 @@ mod tests {
     async fn test_allowed_channels_scope_overrides_global() {
         // A per-scope allowlist takes precedence over the global one.
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", "allowed_channels", r#"["chA"]"#).await.unwrap();
-        mgr.set("discord", "guild1", "allowed_channels", r#"["chB"]"#).await.unwrap();
+        mgr.set("discord", "global", "allowed_channels", r#"["chA"]"#)
+            .await
+            .unwrap();
+        mgr.set("discord", "guild1", "allowed_channels", r#"["chB"]"#)
+            .await
+            .unwrap();
         assert!(mgr.is_channel_allowed("discord", "guild1", "chB").await);
         assert!(!mgr.is_channel_allowed("discord", "guild1", "chA").await);
     }
@@ -496,15 +916,25 @@ mod tests {
     #[tokio::test]
     async fn test_get_bool() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("telegram", "global", "mention_only", "true").await.unwrap();
-        assert!(mgr.get_bool("telegram", "global", "mention_only", false).await);
-        assert!(!mgr.get_bool("telegram", "global", "auto_thread", false).await);
+        mgr.set("telegram", "global", "mention_only", "true")
+            .await
+            .unwrap();
+        assert!(
+            mgr.get_bool("telegram", "global", "mention_only", false)
+                .await
+        );
+        assert!(
+            !mgr.get_bool("telegram", "global", "auto_thread", false)
+                .await
+        );
     }
 
     #[tokio::test]
     async fn test_delete() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("slack", "global", "mention_only", "true").await.unwrap();
+        mgr.set("slack", "global", "mention_only", "true")
+            .await
+            .unwrap();
         mgr.delete("slack", "global", "mention_only").await.unwrap();
         assert_eq!(mgr.get("slack", "global", "mention_only").await, None);
     }
@@ -512,8 +942,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_all() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "guild1", "mention_only", "true").await.unwrap();
-        mgr.set("discord", "guild1", "auto_thread", "false").await.unwrap();
+        mgr.set("discord", "guild1", "mention_only", "true")
+            .await
+            .unwrap();
+        mgr.set("discord", "guild1", "auto_thread", "false")
+            .await
+            .unwrap();
         let all = mgr.get_all("discord", "guild1").await;
         assert_eq!(all.len(), 2);
     }
@@ -527,7 +961,9 @@ mod tests {
     #[tokio::test]
     async fn test_guild_whitelist_filters() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", keys::ALLOWED_GUILDS, r#"["g1","g2"]"#).await.unwrap();
+        mgr.set("discord", "global", keys::ALLOWED_GUILDS, r#"["g1","g2"]"#)
+            .await
+            .unwrap();
         assert!(mgr.is_guild_allowed("discord", "g1").await);
         assert!(!mgr.is_guild_allowed("discord", "g999").await);
     }
@@ -537,7 +973,9 @@ mod tests {
         // Fail-open on corrupt data mirrors allowed_channels: never lock every
         // guild out because of a bad write.
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", keys::ALLOWED_GUILDS, "not json").await.unwrap();
+        mgr.set("discord", "global", keys::ALLOWED_GUILDS, "not json")
+            .await
+            .unwrap();
         assert!(mgr.is_guild_allowed("discord", "g1").await);
     }
 
@@ -609,10 +1047,18 @@ mod tests {
     #[tokio::test]
     async fn test_list_scopes_excludes_global() {
         let (_tmp, mgr) = temp_db();
-        mgr.set("discord", "global", "mention_only", "true").await.unwrap();
-        mgr.set("discord", "g1", "guild_name", "Guild One").await.unwrap();
-        mgr.set("discord", "g2", "guild_name", "Guild Two").await.unwrap();
-        mgr.set("telegram", "c1", "mention_only", "true").await.unwrap();
+        mgr.set("discord", "global", "mention_only", "true")
+            .await
+            .unwrap();
+        mgr.set("discord", "g1", "guild_name", "Guild One")
+            .await
+            .unwrap();
+        mgr.set("discord", "g2", "guild_name", "Guild Two")
+            .await
+            .unwrap();
+        mgr.set("telegram", "c1", "mention_only", "true")
+            .await
+            .unwrap();
         let mut scopes = mgr.list_scopes("discord").await;
         scopes.sort();
         assert_eq!(scopes, vec!["g1".to_string(), "g2".to_string()]);

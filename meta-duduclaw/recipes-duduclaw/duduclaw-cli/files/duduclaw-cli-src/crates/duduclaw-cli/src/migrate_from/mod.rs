@@ -1,4 +1,4 @@
-//! `duduclaw migrate-from <openclaw|hermes|paperclip>` — painless migration
+//! `duduclaw migrate from <openclaw|hermes|paperclip|claude-code>` — painless migration
 //! from the three big competitor platforms into DuDuClaw.
 //!
 //! Default is a **dry-run** that prints the migration plan; `--apply` performs
@@ -9,7 +9,7 @@
 //! `~/.duduclaw/imported/<platform>/raw/` so no data is lost even when v1 does
 //! not parse it into `sessions.db`.
 //!
-//! Design spec: `commercial/docs/TODO-migrate-from-2026-07-11.md` (L3).
+//! Design spec: `commercial/docs/plans/TODO-migrate-from-2026-07-11.md` (L3).
 
 mod apply;
 mod claude_code;
@@ -77,7 +77,7 @@ impl Ctx {
 
 // ─────────────────────────── Entry point ───────────────────────────
 
-/// CLI entry for `duduclaw migrate-from`.
+/// CLI entry for `duduclaw migrate from`.
 ///
 /// `json` switches the human console output for a single machine-readable JSON
 /// object on stdout (consumed by the dashboard `migrate.scan`/`migrate.apply`
@@ -123,7 +123,8 @@ pub async fn run(
     // paperclip --source gate above, rather than silently no-op-ing.
     if plat == Platform::ClaudeCode && agent.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err(DuDuClawError::Config(
-            "claude-code 轉移需要 --agent <id> 指定匯入目標 agent（不會自動建立新 agent）".to_string(),
+            "claude-code 轉移需要 --agent <id> 指定匯入目標 agent（不會自動建立新 agent）"
+                .to_string(),
         ));
     }
 

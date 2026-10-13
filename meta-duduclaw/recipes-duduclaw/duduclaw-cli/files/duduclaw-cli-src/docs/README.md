@@ -1,50 +1,49 @@
 # DuDuClaw Documentation
 
-> Public documentation for the DuDuClaw Multi-Runtime AI Agent Platform (v1.21.1).
+> Public documentation for the DuDuClaw Multi-Runtime AI Agent Platform (v1.63.0).
 
 ---
 
 ## Feature Highlights
+
+Release maintainers: [Release documentation and website synchronization](guides/release-delivery-sync.md)
+describes the mandatory two-manual / three-website delivery gate.
 
 Detailed introductions to DuDuClaw's standout features, with metaphors and flow diagrams for developers.
 
 | Document | Description |
 |----------|-------------|
 | [features/README.md](features/README.md) | Feature index + full inventory |
+| [features/feature-inventory.md](features/feature-inventory.md) | Complete feature inventory — one table row per shipped capability, grouped by area (also in `zh-TW/` and `ja-JP/`) |
 | [features/01-prediction-driven-evolution.md](features/01-prediction-driven-evolution.md) | Prediction-driven evolution — 90% zero-cost conversations |
-| [features/02-gvu-self-play-loop.md](features/02-gvu-self-play-loop.md) | GVU self-play loop — agent self-improvement pipeline |
 | [features/03-confidence-router.md](features/03-confidence-router.md) | Confidence router & local inference — smart model selection |
 | [features/04-file-based-ipc.md](features/04-file-based-ipc.md) | File-based IPC — zero-dependency agent communication |
-| [features/05-security-defense.md](features/05-security-defense.md) | Three-phase security defense — layered threat filtering |
-| [features/06-soul-versioning.md](features/06-soul-versioning.md) | SOUL.md versioning — atomic updates with auto-rollback |
+| [features/05-security-defense.md](features/05-security-defense.md) | Security defense — the four live guards and what none of them covers |
 | [features/07-account-rotation.md](features/07-account-rotation.md) | Multi-account rotation — intelligent credential scheduling |
-| [features/08-browser-automation.md](features/08-browser-automation.md) | 5-layer browser automation — progressive escalation |
-| [features/09-behavioral-contracts.md](features/09-behavioral-contracts.md) | Behavioral contracts — machine-enforceable agent boundaries |
+| [features/08-browser-automation.md](features/08-browser-automation.md) | Browser automation & computer use — two fetch tools, an optional browser server and computer-use sessions driven through eight `computer_*` MCP tools; no auto-router |
+| [features/09-behavioral-contracts.md](features/09-behavioral-contracts.md) | Behavioral contracts — machine-enforceable agent boundaries, red-team coverage ledger (11 techniques, `--emit-evals`) |
 | [features/10-cognitive-memory.md](features/10-cognitive-memory.md) | Cognitive memory — human-inspired memory with forgetting |
-| [features/11-token-compression.md](features/11-token-compression.md) | Token compression triad — lossless, lossy, and streaming |
+| [features/11-token-compression.md](features/11-token-compression.md) | Prompt budget enforcement — estimate, three stages, or refuse |
 | [features/12-industry-templates.md](features/12-industry-templates.md) | Industry templates & Odoo ERP bridge |
-| [features/13-multi-runtime.md](features/13-multi-runtime.md) | Multi-runtime agent execution — Claude / Codex / Gemini / OpenAI |
-| [features/14-voice-pipeline.md](features/14-voice-pipeline.md) | Voice pipeline — ASR / TTS / VAD / LiveKit |
-| [features/15-skill-lifecycle.md](features/15-skill-lifecycle.md) | Skill lifecycle engine — 7-stage automated extraction |
+| [features/13-multi-runtime.md](features/13-multi-runtime.md) | Multi-runtime agent execution — Claude / Codex / Antigravity / Grok / OpenAI-compatible (Gemini CLI deprecated) |
+| [features/14-voice-pipeline.md](features/14-voice-pipeline.md) | Voice pipeline — STT/TTS over two separately-wired paths |
+| [features/15-skill-lifecycle.md](features/15-skill-lifecycle.md) | Skill lifecycle engine — 6-stage automated extraction |
 | [features/16-session-memory-stack.md](features/16-session-memory-stack.md) | Session memory stack — pinned instructions + snowball recap + key facts |
 | [features/17-wiki-knowledge-layer.md](features/17-wiki-knowledge-layer.md) | Wiki knowledge layer — L0-L3 trust-weighted auto-injection |
-| [features/18-worktree-isolation.md](features/18-worktree-isolation.md) | Git worktree L0 isolation — lightweight per-task sandbox |
-| [features/19-agent-client-protocol.md](features/19-agent-client-protocol.md) | Agent Client Protocol — `duduclaw acp` (ACP v1 for IDE panels: Zed / JetBrains / nvim) + `duduclaw acp-server` (A2A over stdio) |
+| [features/19-agent-client-protocol.md](features/19-agent-client-protocol.md) | Agent Client Protocol — `duduclaw acp` (ACP v1 for IDE panels: Zed / JetBrains / nvim) + `duduclaw acp server` (A2A over stdio) |
 | [features/20-memory-intelligence.md](features/20-memory-intelligence.md) | Memory intelligence — temporal facts + reflexion loop + batch fetch |
-| [features/21-governance-layer.md](features/21-governance-layer.md) | Governance layer — policy registry + per-agent quotas |
-| [features/22-durability-framework.md](features/22-durability-framework.md) | Durability — idempotency / retry / circuit breaker / checkpoint / DLQ |
 | [features/23-autopilot-engine.md](features/23-autopilot-engine.md) | Autopilot rule engine — event-driven automation + circuit breaker |
 | [features/24-task-board.md](features/24-task-board.md) | Task Board & Activity Feed — agent-as-teammate task management |
 | [features/25-identity-resolution.md](features/25-identity-resolution.md) | Identity resolution — WikiCache / Notion / Chained providers |
 | [features/26-mcp-http-sse.md](features/26-mcp-http-sse.md) | MCP HTTP/SSE transport — Bearer-authed REST + SSE |
-| [features/27-pty-pool-runtime.md](features/27-pty-pool-runtime.md) | Cross-platform PTY pool + worker — drive interactive claude REPL |
-| [features/28-live-forking.md](features/28-live-forking.md) | Live run forking — parallel branches + AI judge (duduclaw-fork) |
+| [features/27-pty-pool-runtime.md](features/27-pty-pool-runtime.md) | One-shot PTY invocation — give a CLI a real terminal (session pool removed 2026-09) |
+| [features/28-live-forking.md](features/28-live-forking.md) | Live run forking — parallel branches, AI judge, filtered copies and actual adoption of retained branches |
 | [features/29-evolution-events.md](features/29-evolution-events.md) | Evolution events — black-box recorder with batch+retry delivery |
 | [features/30-custom-widgets.md](features/30-custom-widgets.md) | Custom dashboard widgets — sandboxed HTML cards, AI-guided authoring, instance sharing |
 | [features/31-office-document-suite.md](features/31-office-document-suite.md) | Office document suite — real docx/xlsx/pptx/pdf output, DELIVER protocol, archive + preview |
 | [features/32-expert-packs.md](features/32-expert-packs.md) | Expert packs — installable AI teams, built-in catalog, LLM-guided authoring, org placement |
 | [features/33-os-native-perception.md](features/33-os-native-perception.md) | OS-native perception & proactive care — sensing, footprint memory, care checks, automations |
-| [features/34-goal-loop.md](features/34-goal-loop.md) | Autonomous goal loop — /goal to completion with an MAV acceptance judge |
+| [features/34-goal-loop.md](features/34-goal-loop.md) | Autonomous goal loop — MAV acceptance, round state and cost ledger, weekly survival report with sample limits |
 | [features/35-photo-desktop-pet.md](features/35-photo-desktop-pet.md) | Photo → desktop pet — local pixel-art pipeline + wander engine |
 | [features/36-recording-to-skill.md](features/36-recording-to-skill.md) | Recording → skill — approval-gated skill drafts from browser/desktop recordings |
 | [features/37-delegation-isolation.md](features/37-delegation-isolation.md) | Delegation isolation — who can hand work to whom, decided by the reports_to tree, departments, and a white-list |
@@ -59,12 +58,19 @@ Detailed introductions to DuDuClaw's standout features, with metaphors and flow 
 | [features/46-belief-loop.md](features/46-belief-loop.md) | Belief loop — structured predictions about the outside world, deterministically scored against reality |
 | [features/47-agent-mail.md](features/47-agent-mail.md) | Agent Mail — per-agent inbox (Gmail / drop folder); outbound mail always requires human confirmation |
 | [features/48-goal-intent-router.md](features/48-goal-intent-router.md) | Goal intent router — chat channels notice task delegation and offer to create a goal; never auto-created |
-| [features/49-code-security-audit.md](features/49-code-security-audit.md) | Code security audit — `duduclaw secaudit`: static scanners + AI deep audit + adversarial review + sandboxed PoC |
+| [features/49-code-security-audit.md](features/49-code-security-audit.md) | Code security audit — `duduclaw secaudit`: static scanners + AI deep audit with threat model and pre-check + adversarial review + coverage ledger + report validator + sandboxed PoC |
 | [features/50-duduclaw-os-appliance.md](features/50-duduclaw-os-appliance.md) | DuDuClaw OS appliance — bootable image, LAN dashboard onboarding, device page, sysd privilege separation, webhook relay |
 | [features/51-os-keyboard-shortcuts.md](features/51-os-keyboard-shortcuts.md) | DuDuClaw OS keyboard shortcuts — global compositor bindings, shell UI, first-run setup, lock screen |
 | [features/52-desktop-edition.md](features/52-desktop-edition.md) | DuDuClaw OS desktop edition — one machine shared by a person and the AI: shadow workspace, human input always wins, explicit hand-back, off-by-default co-driving |
 | [features/53-local-models.md](features/53-local-models.md) | Local models on the device — six verified GGUFs served by the image's llama.cpp `llama-server`, one click to download and one to switch on; hybrid by default |
 | [features/54-finetune.md](features/54-finetune.md) | Fine-tuning and post-training — curate the dataset from stored conversations/tasks/approvals here, train on a remote GPU host or Together, import the GGUF/LoRA back into the local models directory; never trains locally |
+| [features/55-data-sources.md](features/55-data-sources.md) | Data sources & native DB connector — a registry any `db_field` rule can bind to, an MCP proxy that redacts a customer's own external MCP servers, and a first-party read-only PostgreSQL/MySQL/SQLite connector (`duduclaw-db`) with four MCP tools; custom rule sets (keyword list or pattern, no regex required, importable TOML rule packs, paste-examples-to-pattern) and on-device AI detection of names / addresses / dates / account numbers (OpenAI Privacy Filter via ONNX Runtime, opt-in model download) |
+| [features/56-team-as-agent.md](features/56-team-as-agent.md) | Team as employee — four roles (規劃/執行/審核/合成) inside one AI employee, each bound to its own `(runtime, model, effort)`; `[team] enabled` is on by default, but an unconfigured `[team.roles]` still runs Solo because executor and verifier cascade onto one model and the "verifier must not share the executor's model family" rule refuses it. Zero-LLM decomposability gate, first-batch runtime allowlist, `TaskPacket` as the only cross-role handoff, and the measured role×model matrix read as a prior for an unset role model |
+| [features/57-ucci-calibrated-cascade.md](features/57-ucci-calibrated-cascade.md) | UCCI calibrated cascade — experimental, opt-in local-routing tier: an isotonic-calibrated router (top-2 token margin uncertainty) can replace the legacy post-hoc `g = sigmoid(α·p̄+β)` gate for LocalFast/LocalStrong; fitted offline by `scripts/ucci_fit.py`/`ucci_pair.py`, off by default |
+| [features/58-night-engine.md](features/58-night-engine.md) | Night engine — idle-window memory tidy-up (N1 sleep-time compute / N2 prefetch on the utility model, N3 schema induction / N4 recurrence-gated consolidation deterministic); per-agent enablement, plus global `[night] llm_enabled` for N1/N2, per-pass spend cap + daily circuit breaker; productive passes appear in Activity Feed |
+| [features/59-local-proxy.md](features/59-local-proxy.md) | `duduclaw proxy` — OpenAI-compatible localhost endpoint lending the account pool to Aider / Cline / Codex; Bearer key mandatory, loopback default, per-IP rate limit, OAuth subscription seats explicitly not forwardable |
+| [features/60-discovery.md](features/60-discovery.md) | Discovery — approved workspace IDs, approval, tree/cost evidence, verified downloads and zero-LLM held-out replay (integration validation in progress); [繁體中文](features/zh-TW/60-discovery.md) / [日本語](features/ja-JP/60-discovery.md) |
+| [features/61-odoo-livechat.md](features/61-odoo-livechat.md) | Odoo website live chat — AI employees answer visitors as a Live Chat operator, audience rules (分眾) pick the employee, Odoo-native human takeover and handoff; [繁體中文](features/zh-TW/61-odoo-livechat.md) / [日本語](features/ja-JP/61-odoo-livechat.md) |
 | [features/live-forking.md](features/live-forking.md) | Live forking usage scenarios — when to use, when not to, vs `duduclaw eval` |
 | [features/erp-support-matrix.md](features/erp-support-matrix.md) | ERP / CRM support matrix — sales-facing coverage table |
 
@@ -79,14 +85,20 @@ Open standards that define the DuDuClaw agent ecosystem.
 | [spec/soul-md-spec.md](spec/soul-md-spec.md) | SOUL.md agent identity format v1.0 | Draft |
 | [spec/contract-toml-spec.md](spec/contract-toml-spec.md) | CONTRACT.toml behavioral boundary format v1.0 | Draft |
 | [spec/contract-toml-schema.json](spec/contract-toml-schema.json) | CONTRACT.toml JSON Schema | Draft |
+| [spec/skill-md-spec.md](spec/skill-md-spec.md) | SKILL.md format — YAML frontmatter fields parsed into `SkillMeta`, the `<skill-name>/SKILL.md` and flat `<skill>.md` layouts | Draft |
 | [spec/expert-pack-spec.md](spec/expert-pack-spec.md) | Expert Pack format v1.0 — 可攜「完整 AI 員工/團隊」單位：layout、expert.toml 欄位、安裝語意（拓撲/深合併/hooks 隔離）、與 SKILL.md/AGENTS.md/.af/agent card 的互補定位與映射 | Draft |
+| [spec/task-packet.md](spec/task-packet.md) | TaskPacket format v1.0 — the only cross-role handoff type inside a team-as-employee: field table, caps (12×200-char constraints, 16 KB whole-packet reject-never-truncate), the deliberately-absent field list, a worked JSON example, the `team_handoff` MCP tool (params, refusal codes, on-disk path, audit/provenance side effects) and the never-trim section headers | Draft |
+| [spec/reversible-context-ccr.md](spec/reversible-context-ccr.md) | Reversible context retrieval (CCR) — scope/lease model for compressing a tool result into a preview while the original stays retrievable only to the same principal, until the bound source is revoked | Draft |
+| [spec/support-pilot-data-contract.md](spec/support-pilot-data-contract.md) | Support-queue pilot data contract — the ticket/staffing export shape the decision twin and its synthetic/operator-upload validation paths both consume | Draft |
+| [spec/causal-evidence-graph.md](spec/causal-evidence-graph.md) | Scoped causal claims, reviewed DAGs, estimator gates, and observational limits | Draft |
+| [spec/support-decision-twin.md](spec/support-decision-twin.md) | Support queue pilot data dictionary, transition model, and calibration gates | Draft |
 
 ## Architecture & Technical Reference
 
 | Document | Description | Status |
 |----------|-------------|--------|
 | [architecture/overview.md](architecture/overview.md) | System architecture overview | Current |
-| [architecture/evolution-engine.md](architecture/evolution-engine.md) | Evolution Engine — Prediction + GVU (legacy SOUL.md path) + AEE/Playbook (v3 default, ch.12) + Cognitive Memory | Current |
+| [architecture/evolution-engine.md](architecture/evolution-engine.md) | Evolution Engine — Prediction + AEE/Playbook (the only evolution path; the legacy SOUL.md rewrite path was removed) + Cognitive Memory | Current |
 
 ## Design Proposals (RFC / ADR)
 
@@ -97,19 +109,19 @@ Open standards that define the DuDuClaw agent ecosystem.
 | [rfc/RFC-22-multi-agent-coordination-principles.md](rfc/RFC-22-multi-agent-coordination-principles.md) | Multi-agent coordination principles |
 | [rfc/RFC-24-decision-continuity.md](rfc/RFC-24-decision-continuity.md) | Cross-session decision/proposal durability (fixes session-chain breakage) |
 | [rfc/RFC-26-deep-agents-alignment.md](rfc/RFC-26-deep-agents-alignment.md) | Deep-agents / live-forking alignment |
+| [rfc/RFC-27-personal-edition-concurrency-cap.md](rfc/RFC-27-personal-edition-concurrency-cap.md) | Personal-edition concurrency cap — cross-process limit on in-flight goal dispatches |
 | [adr/ADR-002-x-duduclaw-capability-negotiation.md](adr/ADR-002-x-duduclaw-capability-negotiation.md) | ACP capability negotiation decision |
 | [adr/ADR-003-excluded-channels.md](adr/ADR-003-excluded-channels.md) | Excluded channels (Signal / personal WeChat / Viber) |
 | [adr/ADR-004-erp-connector-abstraction.md](adr/ADR-004-erp-connector-abstraction.md) | ERP connector abstraction (`trait ErpConnector`) |
 | [adr/ADR-005-document-export.md](adr/ADR-005-document-export.md) | Document export selection (md → Slide / Word / PPT / PDF) |
 | [adr/ADR-006-local-ocr.md](adr/ADR-006-local-ocr.md) | Local OCR for sensitive images — measure before choosing |
+| [adr/ADR-007-board-governance-mode.md](adr/ADR-007-board-governance-mode.md) | CEO/Board governance mode — opt-in, off by default |
 
 ## Planning (TODO)
 
 | Document | Description |
 |----------|-------------|
-| [todo/TODO-bootstrap-admin-ws-deadlock.md](todo/TODO-bootstrap-admin-ws-deadlock.md) | 🟠 Bootstrap admin deadlock — a fresh containerised install logs in fine yet spins forever, because `must_change_password` blocks the WS handshake and the passwordless escape needs Personal + loopback |
-| [todo/TODO-spawn-env-allowlist-fallout.md](todo/TODO-spawn-env-allowlist-fallout.md) | 🔴 The v1.61.0 spawn-env allowlist silently broke every consumer that relied on inheritance — one instance put a real-money agent on a mock broker, another killed all gateway dispatch |
-| [todo/TODO-rate-limit-warning-misread-as-failure.md](todo/TODO-rate-limit-warning-misread-as-failure.md) | 🟡 The CLI's `allowed_warning` quota notice is dropped by the stream parser and reported as a failed call, so successful runs get retried near the ceiling |
+| [todo/TODO-reversible-context-causal-simulation.md](todo/TODO-reversible-context-causal-simulation.md) | Reversible context retrieval, causal evidence graph, and versioned strategy simulation implementation checklist |
 | [todo/TODO-client-ws-protocol-mismatch.md](todo/TODO-client-ws-protocol-mismatch.md) | 🟠 VS Code / Chrome / Stream Deck send JSON-RPC 2.0 frames the gateway's `WsFrame` protocol rejects — every dashboard RPC dies as a misleading "connection closed" |
 | [todo/TODO-agent-toml-silent-skip.md](todo/TODO-agent-toml-silent-skip.md) | 🟠 One missing `agent.toml` field drops the whole agent with a single WARN — `agents.list` goes empty and `FirstRunGate` shows a working install as brand-new |
 | [todo/TODO-agent-honesty.md](todo/TODO-agent-honesty.md) | Agent honesty / anti-hallucination tasks |
@@ -124,6 +136,8 @@ Open standards that define the DuDuClaw agent ecosystem.
 | [todo/TODO-channel-quote-context-remaining.md](todo/TODO-channel-quote-context-remaining.md) | 其餘通道引用/回覆上下文缺口（全通道掃描結果）追蹤 |
 | [todo/TODO-gateway-store-reopen-per-rpc.md](todo/TODO-gateway-store-reopen-per-rpc.md) | gateway 三個 SQLite store 每次 dashboard RPC 都重開（日誌噪音；已排除洩漏嫌疑） |
 | [todo/TODO-ai-runtimes-2026-09.md](todo/TODO-ai-runtimes-2026-09.md) | 全 runtime 開箱即用、本地模型、微調介面（2026-09）：決策紀錄與 WP-A～WP-F 工作單元規格／完成狀態 |
+| [todo/TODO-antigravity-cli-migration.md](todo/TODO-antigravity-cli-migration.md) | Gemini CLI → Antigravity CLI (`agy`) migration tracking |
+| [todo/TODO-genspark-workspace-shell.md](todo/TODO-genspark-workspace-shell.md) | 「工作空間」雙層體驗（消費級外殼＋進階儀表板）與桌面 app 的實作追蹤 |
 
 ## User & Developer Guides
 
@@ -132,6 +146,7 @@ Open standards that define the DuDuClaw agent ecosystem.
 | [guides/memory-and-knowledge.md](guides/memory-and-knowledge.md) | 記憶與知識庫完整使用說明（兩者差異、知識庫寫入/分類/L0–L3 層級、自動帶入 vs 主動搜尋、記憶刪除、FAQ） | Current |
 | [guides/memory-vs-knowledge.html](guides/memory-vs-knowledge.html) | 記憶 vs 知識庫（終端使用者版，自包含 HTML，可直接寄給客戶；WP5c 全自動分流上線後改寫） | Current |
 | [guides/goal-loop.md](guides/goal-loop.md) | 自主目標迴圈（`/goal` 入口、AutonomyLevel 五級、`[goal_loop]`/`[dispatch]`/`[dispatch_guard]` 設定、needs_human 按鈕） | Current |
+| [guides/reviewable-workflow-drafts.md](guides/reviewable-workflow-drafts.md) | 審查證據與工作流程草稿（擷取快照、接受最新快照、五種試跑與負面案例規則、送審與管理者核准、私有任務的可見對象與通知、啟用後的執行與暫停；另有 [zh-TW](guides/zh-TW/reviewable-workflow-drafts.md)、[ja-JP](guides/ja-JP/reviewable-workflow-drafts.md)） | Current |
 | [guides/topology-evolution.md](guides/topology-evolution.md) | 半自動拓撲演化（D5，human-gated 路由改派提案、`[topology_evolution]` 設定、觀察期自動回滾、`topology.list` RPC） | Current |
 | [guides/line-touch-nfc.md](guides/line-touch-nfc.md) | 實體觸點：QR 桌牌列印、自製 NFC 桌牌（NTAG213 寫入/鎖定）、LINE Touch readiness 檢查清單（藍盾認證＋OA Shop 標籤時程） | Current |
 | [guides/build-your-own-pack.md](guides/build-your-own-pack.md) | Expert pack 創作教學（最小可用包 10 分鐘、本機測試迴路、團隊/wiki/requires 進階、convert-teams/claude-plugin 轉出、品質建議） | Current |
@@ -139,14 +154,23 @@ Open standards that define the DuDuClaw agent ecosystem.
 | [guides/remote-mcp.md](guides/remote-mcp.md) | Remote MCP：claude.ai 自訂連接器直連自家 DuDuClaw（標準 `/mcp` 端點＋OAuth 2.1 流程、scope 收斂模型、tunnel 部署與撤銷） | Current |
 | [guides/hardware-requirements.md](guides/hardware-requirements.md) | DuDuClaw OS 硬體需求與相容性指南（硬性條件 x86-64+AVX2／UEFI／SSD、最低/建議/舒適配置表、自組 PC 相容性檢查清單、x86 筆電評估、推薦迷你主機 N100/N305/8845HS、驅動缺口 MT7927/RTL8125、樹莓派/Arduino/ESP32 為何跑不了 OS＋作為 resident sensing 感測端點的接入方式、兩層總矩陣、為何不能用 ARM/Mac 模擬、燒 USB 而非光碟） | Current |
 | [guides/remote-gpu-host.md](guides/remote-gpu-host.md) | 遠端 GPU 主機準備指南（Ubuntu + CUDA 驅動、venv 安裝 LLaMA-Factory、工作目錄、選用 llama.cpp 轉 GGUF、SSH 金鑰授權與 `BatchMode` 驗證、表單欄位對照、先跑乾跑、template 對照表、故障排除） | Current |
-| [guides/app-compat.md](guides/app-compat.md) | app 相容層：`compat.d` 宣告式 runner 登記（出貨層/資料層覆蓋序）、`duduclaw compat list` 用法、Bottles（Flathub 安裝＋Silver 級以上適用範圍，Office/LINE/AutoCAD 明文不承諾）、Waydroid（不含 GApps/ARM 轉譯，自裝入口＋風險揭露）、macOS 應用程式不做本機執行的話術鐵則 | Current |
+| guides/app-compat.md | 已移至 DuDuClaw-OS repo `docs/guides/app-compat.md`（2026-09-29） | Moved |
+| [guides/deprecations.md](guides/deprecations.md) | 棄用與移除總表（v1.69.0 已移除：`shared_wiki_*`→`wiki_* scope`、`schedule_task`→`tasks_create schedule`、`skill_bank_search`→`skill_search source`、舊 CLI 拼法與 `expert install`、`[dispatch] judge` 的 `evaluator_only`／`human_only`；仍在棄用期：Gemini CLI runtime（v1.74.0）、板模舊格式（未訂版號）） | Current |
+| [guides/desktop-build.md](guides/desktop-build.md) | Desktop app — local build guide (Tauri 2 shell running the gateway as a sidecar) | Current |
+| [guides/desktop-release.md](guides/desktop-release.md) | Desktop app — release, signing and auto-update pipeline | Current |
+| [guides/desktop-unblock.md](guides/desktop-unblock.md) | Desktop app — what the remaining blocked items need (toolchain, credentials, a second machine) | Current |
+| [guides/workforce-analytics.md](guides/workforce-analytics.md) | Workforce analytics — per-user and per-channel AI usage and cost | Current |
 | [guides/deployment-guide.md](guides/deployment-guide.md) | Production deployment (Tailscale/ngrok/Docker/systemd) | Current |
 | [guides/development-guide.md](guides/development-guide.md) | Developer setup, agent development, browser automation | Current |
 | [guides/custom-mcp-tool.md](guides/custom-mcp-tool.md) | Extending MCP tools — step-by-step guide | Current |
+| [guides/dashboard-settings.md](guides/dashboard-settings.md) | 儀表板設定對照（v1.68.0）：每個開關的頁面位置、寫入的設定鍵、是否需要重啟；AI 員工編輯頁欄位與管理員限定欄位；`[permissions]` 生效與開機遷移；「設定檔進階編輯」（遮罩、驗證、備份、稽核、衝突偵測）（also in `zh-TW/` and `ja-JP/`） | Current |
+| [guides/mcp-standalone.md](guides/mcp-standalone.md) | 單獨使用 MCP server（不裝 gateway）：`duduclaw mcp init` 為 Claude Code／Codex／Cursor 簽發金鑰並寫好設定、24 個記憶與 wiki 工具、實測的 scope 對照表、升級到完整平台、MCP Registry 上架（also in `zh-TW/` and `ja-JP/`） | Current |
+| [guides/mcp-tools.md](guides/mcp-tools.md) | `tools/list` 宣告面（O7）：依呼叫者能力裁剪的規則表、`notifications/tools/list_changed`、200-byte 說明預算與唯一例外，以及從說明搬出的長版細節（`codrive_run` 三段階梯、`working_state_handoff` 結構化模式、`skill_search` source、`evolution_toggle` 停滯子欄位） | Current |
+| [guides/mcp-ecosystem.md](guides/mcp-ecosystem.md) | More MCP tools: official MCP Registry search and install, native remote MCP servers with OAuth 2.1 / bearer sign-in (`duduclaw mcp-remote-bridge`, encrypted token store, replaces `npx mcp-remote`), Zapier / Composio aggregator cards (also in `zh-TW/` and `ja-JP/`) | Current |
 | [guides/mcp-bridge.md](guides/mcp-bridge.md) | Mounting external MCP servers (`[[mcp.external]]`, stdio + Streamable HTTP `url` mounts) + `secret://`/`bearer_token` credentials + per-SaaS recipes (Gmail/Plane/Chatwoot/Invoice Ninja/WooCommerce) | Current |
 | [guides/google-workspace-integration.md](guides/google-workspace-integration.md) | Google Workspace 設定指南（選路徑導覽：自建 OAuth client／服務帳號網域委派／Apps Script 橋接三選一，逐步操作 + 11 個 scope 用途一覽 + 設定頁按鈕對照，D5：不預埋官方憑證） | Current |
 | [guides/google-mcp.md](guides/google-mcp.md) | Google 官方 remote MCP 掛載（**進階選項**：`preset = "google:<svc>"`、preview 資格與不可出貨條款、與原生工具的覆蓋對照） | Current |
-| [guides/docuseal.md](guides/docuseal.md) | DocuSeal 簽署工作流（`duduclaw-docuseal-mcp` 開源 wrapper：10 工具、cloud+self-hosted、webhook 驗簽） | Current |
+| [guides/docuseal.md](guides/docuseal.md) | DocuSeal 簽署工作流（掛載 DocuSeal 官方 MCP server、cloud 走 REST、webhook 驗簽） | Current |
 | [guides/professional-software.md](guides/professional-software.md) | 專業軟體整合（Photoshop / AutoCAD 社群 MCP）：支援矩陣、per-agent `.mcp.json` 安裝、capability 治理、ezdxf 降級、RCE 風險聲明 | Current |
 | [guides/google-workspace.md](guides/google-workspace.md) | Native Google Workspace integration — all eight services (Gmail / Calendar / Sheets / Drive / Docs / Slides / Forms / Tasks), nineteen MCP tools, GA APIs only (no preview gate), OAuth setup, draft-only + append-only safety | Current |
 | [guides/google-no-oauth-client.md](guides/google-no-oauth-client.md) | Google 兩條免自建 OAuth client 的路徑（服務帳號網域委派、Apps Script 橋接），含覆蓋度差異、安全性質與已排除方案的實測數據 | Current |
@@ -155,15 +179,22 @@ Open standards that define the DuDuClaw agent ecosystem.
 | [guides/evals.md](guides/evals.md) | Agent behavior evals / regression suite (`duduclaw eval`), CI gate, GVU/AEE yardstick (`--case`/`--exclude-dir`/`--report`) | Current |
 | [guides/evolution-switches.md](guides/evolution-switches.md) | Evolution switches — master kill-switch, per-feature toggles, AEE vs legacy SOUL.md path, `strategy`/`noise_band`, freeze/unfreeze | Current |
 | [guides/docker.md](guides/docker.md) | Docker build & run | Current |
+| [guides/durable-channel-decisions.md](guides/durable-channel-decisions.md) | Approvals and answers in chat channels — only "verb + full request ID" is a decision, who may decide (the person who triggered the turn, a verified Admin/Manager once dashboard users exist), channels that cannot ask or decide, dashboard-only kinds, Slack `users:read`, execution ledger (also in `zh-TW/` and `ja-JP/`) | Current |
+| [guides/durable-line-ingress.md](guides/durable-line-ingress.md) | LINE durable ingress — acknowledge only after the event is stored, per-conversation order, `line_late_reply` (Push or fail), event states and alerts, operator actions in the dashboard and `duduclaw ops channel-ingress` (dashboard-approved), the stop switch, relay limits (also in `zh-TW/` and `ja-JP/`) | Current |
+| [guides/task-sandbox.md](guides/task-sandbox.md) | Task sandbox how-to — run an agent's delegated tasks in a locked-down Docker container: prerequisites, `[container.sandbox]` settings, credentials per runtime, fail-closed behaviour, `duduclaw doctor` check (also in `zh-TW/` and `ja-JP/`) | Current |
+| [guides/computer-workspaces.md](guides/computer-workspaces.md) | Computer-use workspaces how-to — keep an AI employee's files across computer-use sessions: `[computer_use.workspaces]` settings, the three `computer_workspace_*` tools, quotas and retention, the one-session lease, `duduclaw ops computer-workspaces` and its dashboard approval, `duduclaw doctor` row, known limitations (also in `zh-TW/` and `ja-JP/`) | Current |
+| [guides/continuous-responsibilities.md](guides/continuous-responsibilities.md) | Continuous responsibilities (an AI employee wakes on a schedule or an event for bounded runs), mid-run directions and stopping a task: `[responsibilities]` / `[goal_loop] steering_enabled` switches, the `duduclaw responsibility` CLI with dashboard approval, spend and run limits, what `cancel_pending` / `stopped` / `stopped_uncertain` mean, security model and known limits (also in `zh-TW/` and `ja-JP/`) | Current |
 | [guides/multi-instance.md](guides/multi-instance.md) | Running multiple instances on one machine (DUDUCLAW_HOME / PORT / INSTANCE) | Current |
+| [guides/isolated-validation.md](guides/isolated-validation.md) | 驗證帳號來源限制：停用主機 OAuth 自偵測與環境金鑰備援；三語指南與隔離邊界 | Current |
 | [guides/observability.md](guides/observability.md) | OpenTelemetry GenAI tracing + OTLP export (`--features otel`, `[telemetry]` config) | Current |
 | [guides/personal-edition-portability.md](guides/personal-edition-portability.md) | 個人版資料可攜：自架 ↔ 代管互轉 | Current |
 | [guides/channels-googlechat-teams.md](guides/channels-googlechat-teams.md) | Google Chat & Microsoft Teams channel setup + per-channel formatting/typing matrix | Current |
-| [guides/migrate-from.md](guides/migrate-from.md) | 從 OpenClaw / Hermes / paperclip 無痛轉移（`duduclaw migrate-from`，預設 dry-run） | Current |
+| [guides/migrate-from.md](guides/migrate-from.md) | 從 OpenClaw / Hermes / paperclip 無痛轉移（`duduclaw migrate from`，預設 dry-run） | Current |
 | [guides/white-label.md](guides/white-label.md) | White-label branding (reseller logo/name) + distributor key console (`/manage/distributors`, `[distributor] issuer_key_path`) | Current |
 | [guides/recording-to-skill.md](guides/recording-to-skill.md) | 錄製 → 技能：瀏覽器/桌面示範錄製、HAR 脫敏、蒸餾成 SKILL.md 草稿＋審批安裝（`[capabilities] recording`） | Current |
 | [guides/feedback-page.md](guides/feedback-page.md) | 問題回報與建議網頁（GitHub Pages 表單 → issue 預填 → Actions + Haiku 自動分類/格式化/上標籤） | Current |
 | [guides/appliance-build.md](guides/appliance-build.md) | Getting / building the DuDuClaw OS image — entry point to the standalone DuDuClaw-OS repo (signed releases, `kas` build pipeline); the Debian/mkosi line is frozen there | Current |
+| [guides/support-shadow-synthetic-validation.md](guides/support-shadow-synthetic-validation.md) | One `cargo test` command for the C7 synthetic backlog/ticket-SLA shadow-forecast harness — deterministic 21-day sequence, content-free JSON summary, test-only time staging | Current |
 
 ## API Reference
 
@@ -201,22 +232,37 @@ docs/                                  # L1 PUBLIC — product & developer docum
 ├── features/                          # Feature highlight articles (+ ja-JP, zh-TW)
 │   ├── README.md
 │   ├── feature-inventory.md
-│   └── 01-…-50-…                      #   50 feature deep-dives
+│   └── 01-…-57-…                      #   57 feature deep-dives
 ├── spec/                              # Open format specifications
 │   ├── soul-md-spec.md                #   SOUL.md format v1.0
 │   ├── contract-toml-spec.md          #   CONTRACT.toml format v1.0
-│   └── contract-toml-schema.json
+│   ├── contract-toml-schema.json
+│   ├── task-packet.md                 #   TaskPacket format v1.0 (team handoff)
+│   ├── reversible-context-ccr.md      #   CCR scope/lease model
+│   ├── support-pilot-data-contract.md #   Support-queue pilot export shape
+│   ├── causal-evidence-graph.md       #   Scoped causal claims & DAGs
+│   └── support-decision-twin.md       #   Support queue decision twin
 ├── guides/                            # User & developer guides (+ ja-JP, zh-TW)
 │   ├── deployment-guide.md
 │   ├── development-guide.md
 │   ├── custom-mcp-tool.md
+│   ├── mcp-tools.md
+│   ├── mcp-standalone.md
+│   ├── mcp-ecosystem.md
 │   ├── evals.md
 │   ├── observability.md
 │   ├── docker.md
 │   └── appliance-build.md
+├── examples/                          # Copy-by-hand reference files (nothing
+│   │                                  #   here is compiled into the binary)
+│   ├── KILLSWITCH.toml                #   → ~/.duduclaw/KILLSWITCH.toml
+│   ├── orchestrator/                  #   → ~/.duduclaw/agents/<id>/
+│   └── redaction-sample*.{csv,json}   #   redaction dry-run fixtures
 └── api/
     ├── README.md                      # WebSocket RPC protocol
     └── openapi.yaml                   # OpenAPI spec
 ```
 
 > **Confidentiality tiers** — `docs/` is **Public**. Internal operational reports (daily/sprint/eval) live under `wiki/` and `reports`-style trees; commercial plans, competitive analysis, and research notes are **Confidential** and kept in the gitignored `commercial/` and `research/` trees. See the project root `CLAUDE.md` → "Documentation Classification & Placement" for the full rule.
+
+- [頻道核准、問題回答與執行核對](guides/durable-channel-decisions.md)（[繁中](guides/zh-TW/durable-channel-decisions.md)、[日本語](guides/ja-JP/durable-channel-decisions.md)）

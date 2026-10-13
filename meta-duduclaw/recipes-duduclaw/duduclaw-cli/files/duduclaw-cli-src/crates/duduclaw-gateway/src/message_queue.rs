@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -90,11 +90,29 @@ pub struct QueueMessage {
     /// Wiki RL trust feedback session id (v1.10). Channel session id used
     /// as the per-conversation cap budget key.
     pub session_id: Option<String>,
+    /// P2-B: the sender had only half of its upstream turn identity and
+    /// dropped both halves; the receiving run records the upstream as
+    /// unknown instead of treating the message as having no upstream.
+    pub upstream_unknown: bool,
+    /// 2026-10-08: the lane the receiving run uses. `Some("explore")` makes
+    /// the dispatcher run it read-only (`DUDUCLAW_LANE=explore`, explore
+    /// built-in tools, third-party MCP servers through the gated proxy);
+    /// any other value is read as explore too. `None` = normal.
+    pub lane: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
+
+/// P2-A M-5: open goal-loop / heartbeat messages (served by
+/// `idx_mq_sender_status`, pinned by a query-plan test).
+const OPEN_TASK_MESSAGES_SQL: &str = "SELECT id, sender, target, payload, status, retry_count, \
+     delegation_depth, origin_agent, sender_agent, error, response, created_at, acked_at, \
+     completed_at, reply_channel, turn_id, session_id, upstream_unknown, lane \
+     FROM message_queue \
+     WHERE sender IN ('goal-loop-driver', 'heartbeat-scheduler') \
+       AND status IN ('pending', 'acked', 'processing')";
 
 /// Thread-safe SQLite message queue.
 pub struct MessageQueue {
@@ -107,8 +125,7 @@ impl MessageQueue {
     /// Open (or create) the message queue at `<home>/message_queue.db`.
     pub fn open(home_dir: &Path) -> Result<Self, String> {
         let db_path = home_dir.join("message_queue.db");
-        let conn =
-            Connection::open(&db_path).map_err(|e| format!("open message queue: {e}"))?;
+        let conn = Connection::open(&db_path).map_err(|e| format!("open message queue: {e}"))?;
         Self::init_schema(&conn)?;
         info!(?db_path, "MessageQueue initialized");
         Ok(Self {
@@ -142,6 +159,7 @@ impl MessageQueue {
              CREATE INDEX IF NOT EXISTS idx_mq_status ON message_queue(status);
              CREATE INDEX IF NOT EXISTS idx_mq_target ON message_queue(target);
              CREATE INDEX IF NOT EXISTS idx_mq_created ON message_queue(created_at);
+             CREATE INDEX IF NOT EXISTS idx_mq_sender_status ON message_queue(sender, status);
 
              -- Delegation callbacks: maps bus message_id → originating channel context
              -- so the dispatcher can forward sub-agent responses back to the user.
@@ -171,6 +189,15 @@ impl MessageQueue {
         // citation tracking (correct fallback — no signal to apply).
         Self::ensure_column(conn, "message_queue", "turn_id", "TEXT")?;
         Self::ensure_column(conn, "message_queue", "session_id", "TEXT")?;
+        // P2-B: explicit "upstream identity dropped" marker.
+        Self::ensure_column(
+            conn,
+            "message_queue",
+            "upstream_unknown",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        // 2026-10-08: read-only explore lane for event-woken runs.
+        Self::ensure_column(conn, "message_queue", "lane", "TEXT")?;
         Ok(())
     }
 
@@ -195,8 +222,10 @@ impl MessageQueue {
         if existing.iter().any(|c| c == column) {
             return Ok(());
         }
-        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
-            .map_err(|e| format!("add {column} to {table}: {e}"))?;
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {coltype}"
+        ))
+        .map_err(|e| format!("add {column} to {table}: {e}"))?;
         info!(table, column, "message_queue migration: added column");
         Ok(())
     }
@@ -209,8 +238,9 @@ impl MessageQueue {
         conn.execute(
             "INSERT INTO message_queue \
              (id, sender, target, payload, status, retry_count, delegation_depth, \
-              origin_agent, sender_agent, created_at, reply_channel, turn_id, session_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              origin_agent, sender_agent, created_at, reply_channel, turn_id, session_id, \
+              upstream_unknown, lane) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 msg.id,
                 msg.sender,
@@ -225,6 +255,8 @@ impl MessageQueue {
                 msg.reply_channel,
                 msg.turn_id,
                 msg.session_id,
+                msg.upstream_unknown,
+                msg.lane,
             ],
         )
         .map_err(|e| format!("enqueue: {e}"))?;
@@ -270,6 +302,18 @@ impl MessageQueue {
     }
 
     /// Reset a stale message back to pending for retry.
+    /// Put a message back to pending without counting a retry: the work was
+    /// deferred (another execution holds the run), not attempted (R-L8).
+    pub async fn defer_to_pending(&self, message_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE message_queue SET status = 'pending', acked_at = NULL WHERE id = ?1",
+            params![message_id],
+        )
+        .map_err(|e| format!("defer_to_pending: {e}"))?;
+        Ok(())
+    }
+
     pub async fn reset_to_pending(&self, message_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().await;
         conn.execute(
@@ -290,7 +334,7 @@ impl MessageQueue {
             .prepare(
                 "SELECT id, sender, target, payload, status, retry_count, delegation_depth, \
                  origin_agent, sender_agent, error, response, created_at, acked_at, completed_at, \
-                 reply_channel, turn_id, session_id \
+                 reply_channel, turn_id, session_id, upstream_unknown, lane \
                  FROM message_queue WHERE status = 'pending' \
                  ORDER BY created_at ASC LIMIT ?1",
             )
@@ -318,7 +362,7 @@ impl MessageQueue {
             .prepare(
                 "SELECT id, sender, target, payload, status, retry_count, delegation_depth, \
                  origin_agent, sender_agent, error, response, created_at, acked_at, completed_at, \
-                 reply_channel, turn_id, session_id \
+                 reply_channel, turn_id, session_id, upstream_unknown, lane \
                  FROM message_queue WHERE status = 'acked' AND acked_at < ?1",
             )
             .map_err(|e| format!("prepare stale: {e}"))?;
@@ -343,13 +387,50 @@ impl MessageQueue {
         conn.query_row(
             "SELECT id, sender, target, payload, status, retry_count, delegation_depth, \
              origin_agent, sender_agent, error, response, created_at, acked_at, completed_at, \
-             reply_channel, turn_id, session_id \
+             reply_channel, turn_id, session_id, upstream_unknown, lane \
              FROM message_queue WHERE id = ?1",
             params![message_id],
             |row| Self::row_to_message(row),
         )
         .optional()
         .map_err(|e| format!("get_by_id: {e}"))
+    }
+
+    /// Boot-only: messages with this id prefix that a previous process
+    /// picked up but never settled go back to `pending`. Returns how many.
+    pub async fn requeue_unsettled_with_prefix(&self, prefix: &str) -> Result<usize, String> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE message_queue SET status = 'pending', acked_at = NULL
+             WHERE status IN ('acked', 'processing') AND id >= ?1 AND id < ?1 || char(1114111)",
+            params![prefix],
+        )
+        .map_err(|e| format!("requeue unsettled: {e}"))
+    }
+
+    /// Id and status of every message whose id starts with `prefix`
+    /// (exact leading-bytes compare, no pattern characters).
+    pub async fn statuses_with_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, MessageStatus)>, String> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, status FROM message_queue WHERE id >= ?1 AND id < ?1 || char(1114111)",
+            )
+            .map_err(|e| format!("prepare prefix: {e}"))?;
+        let rows = stmt
+            .query_map(params![prefix], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    MessageStatus::from_str(&row.get::<_, String>(1)?),
+                ))
+            })
+            .map_err(|e| format!("query prefix: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect prefix: {e}"))?;
+        Ok(rows)
     }
 
     /// Single place to decode a `message_queue` row into a `QueueMessage`.
@@ -360,9 +441,7 @@ impl MessageQueue {
             sender: row.get(1)?,
             target: row.get(2)?,
             payload: row.get(3)?,
-            status: MessageStatus::from_str(
-                &row.get::<_, String>(4).unwrap_or_default(),
-            ),
+            status: MessageStatus::from_str(&row.get::<_, String>(4).unwrap_or_default()),
             retry_count: row.get(5)?,
             delegation_depth: row.get(6)?,
             origin_agent: row.get(7)?,
@@ -375,7 +454,58 @@ impl MessageQueue {
             reply_channel: row.get(14)?,
             turn_id: row.get(15)?,
             session_id: row.get(16)?,
+            upstream_unknown: row.get::<_, Option<bool>>(17)?.unwrap_or(false),
+            lane: row.get::<_, Option<String>>(18).ok().flatten(),
         })
+    }
+
+    /// P2-A M-5: every still-open (pending / acked / processing) message of
+    /// the goal-loop driver and the heartbeat scheduler — one indexed query
+    /// for a stop reconciliation, instead of one scan per tree member.
+    pub async fn open_task_messages(&self) -> Result<Vec<QueueMessage>, String> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(OPEN_TASK_MESSAGES_SQL)
+            .map_err(|e| format!("prepare open task messages: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| Self::row_to_message(row))
+            .map_err(|e| format!("query open task messages: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect open task messages: {e}"))
+    }
+
+    /// P2-A: every goal-loop work message for one task — the fixed-id
+    /// durable form (`goal:<task>:<iter>`) and the marker form
+    /// (`[goal-loop task_id=<task> iter=…]` at the start of the payload).
+    /// Read-only; used by stop reconciliation.
+    /// Only rows the goal-loop driver enqueued count: a payload carrying a
+    /// forged `[goal-loop task_id=…` marker from any other sender is not a
+    /// round of that task (P2-A S-L13).
+    pub async fn goal_messages_for_task(&self, task_id: &str) -> Result<Vec<QueueMessage>, String> {
+        let escape = |s: &str| {
+            s.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        };
+        let id_pattern = format!("goal:{}:%", escape(task_id));
+        let marker_pattern = format!("[goal-loop task_id={} iter=%", escape(task_id));
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, sender, target, payload, status, retry_count, delegation_depth, \
+                 origin_agent, sender_agent, error, response, created_at, acked_at, completed_at, \
+                 reply_channel, turn_id, session_id, upstream_unknown, lane \
+                 FROM message_queue \
+                 WHERE sender = 'goal-loop-driver' \
+                   AND (id LIKE ?1 ESCAPE '\\' OR payload LIKE ?2 ESCAPE '\\') \
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| format!("prepare goal messages: {e}"))?;
+        let rows = stmt
+            .query_map(params![id_pattern, marker_pattern], |row| Self::row_to_message(row))
+            .map_err(|e| format!("query goal messages: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect goal messages: {e}"))
     }
 
     /// Count messages by status.
@@ -386,7 +516,9 @@ impl MessageQueue {
             .map_err(|e| format!("prepare count: {e}"))?;
 
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(|e| format!("query count: {e}"))?;
 
         let mut result = Vec::new();
@@ -422,7 +554,10 @@ impl MessageQueue {
 
     /// Atomically consume a delegation callback by message_id (DELETE RETURNING).
     /// Returns `None` if no callback was registered for this message.
-    pub async fn take_callback(&self, message_id: &str) -> Result<Option<DelegationCallback>, String> {
+    pub async fn take_callback(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<DelegationCallback>, String> {
         let conn = self.conn.lock().await;
         conn.query_row(
             "DELETE FROM delegation_callbacks WHERE message_id = ?1 \
@@ -479,6 +614,25 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Third review L3-9: the stop reconciliation's queue read uses the
+    /// `(sender, status)` index, not a table scan.
+    #[tokio::test]
+    async fn open_task_messages_uses_the_sender_status_index() {
+        let tmp = TempDir::new().unwrap();
+        let q = MessageQueue::open(tmp.path()).unwrap();
+        let conn = q.conn.lock().await;
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {OPEN_TASK_MESSAGES_SQL}"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let text = plan.join(" | ");
+        assert!(text.contains("idx_mq_sender_status"), "{text}");
+        assert!(!text.contains("SCAN message_queue"), "{text}");
+    }
+
     fn sample_msg(id: &str, reply_channel: Option<&str>) -> QueueMessage {
         QueueMessage {
             id: id.into(),
@@ -498,6 +652,8 @@ mod tests {
             reply_channel: reply_channel.map(str::to_string),
             turn_id: None,
             session_id: None,
+            upstream_unknown: false,
+            lane: None,
         }
     }
 

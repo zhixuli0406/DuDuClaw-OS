@@ -34,11 +34,11 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{
-    dataset_dir, datasets_root, io_err, new_id, require_data_leaves_device_ack, validate_id,
-    FinetuneError, Result,
+    FinetuneError, Result, dataset_dir, datasets_root, io_err, new_id,
+    require_data_leaves_device_ack, validate_id,
 };
 
 /// Hard cap on rows pulled from any one source, so a box with years of
@@ -93,7 +93,12 @@ pub enum DatasetFormat {
 
 impl DatasetFormat {
     pub fn from_str_loose(s: &str) -> Result<Self> {
-        match s.trim().to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+        match s
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', '_'], "")
+            .as_str()
+        {
             "sharegpt" => Ok(Self::ShareGpt),
             "alpaca" => Ok(Self::Alpaca),
             other => Err(FinetuneError::BadRequest(format!(
@@ -487,7 +492,9 @@ pub fn collect_conversations(
     let mut out = Vec::with_capacity(heads.len());
     for (id, agent_id, last_active, system) in heads {
         let turns: Vec<(String, String)> = msgs
-            .query_map([&id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .query_map([&id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
             .map_err(|e| io_err(sessions_db, e))?
             .filter_map(std::result::Result::ok)
             .collect();
@@ -496,7 +503,11 @@ pub fn collect_conversations(
             agent_id,
             last_active,
             turns,
-            system: if system.trim().is_empty() { None } else { Some(system) },
+            system: if system.trim().is_empty() {
+                None
+            } else {
+                Some(system)
+            },
         });
     }
     Ok(out)
@@ -575,7 +586,10 @@ pub fn collect_approvals(
 /// Mine `task_iterations` for the strongest preference signal available:
 /// one task where an early round was rejected and a later round accepted.
 /// Same prompt, two real answers, a human/judge verdict between them.
-pub fn collect_review_pairs(tasks_db: &Path, sources: &DatasetSources) -> Result<Vec<PreferencePair>> {
+pub fn collect_review_pairs(
+    tasks_db: &Path,
+    sources: &DatasetSources,
+) -> Result<Vec<PreferencePair>> {
     let Some(conn) = open_ro(tasks_db)? else {
         return Ok(Vec::new());
     };
@@ -587,15 +601,23 @@ pub fn collect_review_pairs(tasks_db: &Path, sources: &DatasetSources) -> Result
     if !has_excerpt {
         return Ok(Vec::new());
     }
+    // Older accepted rows carry no `worker_excerpt`; the accepted output
+    // survives in `tasks.result_summary`, so fall back to it for the chosen
+    // side. Both columns are selected and the choice is made in Rust so the
+    // fallback goes through the same excerpt bound as a stored excerpt — an
+    // untruncated chosen text against a bounded rejected excerpt would bias
+    // the pair toward "longer is better".
     let mut stmt = conn
         .prepare(
             "SELECT t.id, t.title, t.description, t.assigned_to,
                     COALESCE(t.completed_at, t.updated_at),
-                    acc.worker_excerpt, rej.worker_excerpt
+                    acc.worker_excerpt,
+                    t.result_summary,
+                    rej.worker_excerpt
              FROM tasks t
              JOIN task_iterations acc
                ON acc.task_id = t.id AND acc.verdict = 'accepted'
-              AND COALESCE(acc.worker_excerpt, '') <> ''
+              AND COALESCE(NULLIF(acc.worker_excerpt, ''), t.result_summary, '') <> ''
              JOIN task_iterations rej
                ON rej.task_id = t.id AND rej.verdict = 'rejected'
               AND COALESCE(rej.worker_excerpt, '') <> ''
@@ -612,14 +634,19 @@ pub fn collect_review_pairs(tasks_db: &Path, sources: &DatasetSources) -> Result
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, String>(6)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, String>(7)?,
             ))
         })
         .map_err(|e| io_err(tasks_db, e))?
         .filter_map(std::result::Result::ok)
-        .filter(|(_, _, _, agent, ts, _, _)| {
+        .filter(|(_, _, _, agent, ts, _, _, _)| {
             sources.matches_agent(agent) && sources.after_since(ts)
+        })
+        .filter_map(|(id, title, desc, agent, ts, acc_excerpt, summary, rejected)| {
+            let chosen = accepted_text(acc_excerpt.as_deref(), summary.as_deref())?;
+            Some((id, title, desc, agent, ts, chosen, rejected))
         })
         .map(|(_, title, desc, _, _, chosen, rejected)| PreferencePair {
             source: "task_review".to_string(),
@@ -633,6 +660,16 @@ pub fn collect_review_pairs(tasks_db: &Path, sources: &DatasetSources) -> Result
         })
         .collect();
     Ok(rows)
+}
+
+/// The chosen side of a review pair: the accepted round's stored excerpt when
+/// present, else the task's `result_summary` bounded by the same shared
+/// excerpt rule (`goal_loop::state::worker_excerpt`, char-boundary safe).
+fn accepted_text(acc_excerpt: Option<&str>, result_summary: Option<&str>) -> Option<String> {
+    // Re-applying the rule to a stored excerpt is idempotent; it also keeps a
+    // hand-edited or pre-bound row from escaping the bound.
+    use crate::goal_loop::state::worker_excerpt;
+    worker_excerpt(acc_excerpt).or_else(|| worker_excerpt(result_summary))
 }
 
 // ─────────────────────────── dataset CRUD ───────────────────────────
@@ -847,9 +884,11 @@ pub fn build(
     }
 
     let info_path = dir.join("dataset_info.json");
-    let info_body =
-        serde_json::to_string_pretty(&dataset_info_json(format, preference_pairs && !pref_lines.is_empty()))
-            .map_err(|e| io_err(&info_path, e))?;
+    let info_body = serde_json::to_string_pretty(&dataset_info_json(
+        format,
+        preference_pairs && !pref_lines.is_empty(),
+    ))
+    .map_err(|e| io_err(&info_path, e))?;
     std::fs::write(&info_path, &info_body).map_err(|e| io_err(&info_path, e))?;
     files.push(DatasetFile {
         name: "dataset_info.json".to_string(),
@@ -951,7 +990,10 @@ mod tests {
             session_id: "s1".into(),
             agent_id: "finance".into(),
             last_active: "2026-09-01T00:00:00Z".into(),
-            turns: turns.iter().map(|(r, c)| (r.to_string(), c.to_string())).collect(),
+            turns: turns
+                .iter()
+                .map(|(r, c)| (r.to_string(), c.to_string()))
+                .collect(),
             system: Some("你是財務助理".into()),
         }
     }
@@ -1006,7 +1048,9 @@ mod tests {
         assert!(sharegpt_row_from_conversation(&conv(&[("assistant", "在")])).is_none());
         assert!(sharegpt_row_from_conversation(&conv(&[])).is_none());
         // Tool-only turns are not supervision targets.
-        assert!(sharegpt_row_from_conversation(&conv(&[("tool", "{}"), ("system", "x")])).is_none());
+        assert!(
+            sharegpt_row_from_conversation(&conv(&[("tool", "{}"), ("system", "x")])).is_none()
+        );
     }
 
     #[test]
@@ -1029,7 +1073,10 @@ mod tests {
     #[test]
     fn task_rows_use_title_plus_description_as_the_prompt() {
         let sg = sharegpt_row_from_task(&task("t1", "已對完，3 筆待查")).unwrap();
-        assert_eq!(sg["conversations"][0]["value"], "對帳\n\n把八月發票對到銀行入帳");
+        assert_eq!(
+            sg["conversations"][0]["value"],
+            "對帳\n\n把八月發票對到銀行入帳"
+        );
         assert_eq!(sg["conversations"][1]["value"], "已對完，3 筆待查");
         let al = alpaca_row_from_task(&task("t1", "已對完")).unwrap();
         assert_eq!(al["instruction"], "對帳");
@@ -1073,10 +1120,17 @@ mod tests {
         assert_eq!(al["instruction"], "對帳");
         assert_eq!(al["chosen"], "好答案");
         // Identical chosen/rejected carries no signal.
-        let same = PreferencePair { chosen: "x".into(), rejected: "x".into(), ..p.clone() };
+        let same = PreferencePair {
+            chosen: "x".into(),
+            rejected: "x".into(),
+            ..p.clone()
+        };
         assert!(preference_row(&same, DatasetFormat::ShareGpt).is_none());
         // Empty side is not a pair.
-        let empty = PreferencePair { rejected: "  ".into(), ..p };
+        let empty = PreferencePair {
+            rejected: "  ".into(),
+            ..p
+        };
         assert!(preference_row(&empty, DatasetFormat::Alpaca).is_none());
     }
 
@@ -1092,8 +1146,20 @@ mod tests {
             decided_at: "2026-09-01T00:00:00Z".into(),
         };
         let pairs = approvals_to_pairs(&[
-            mk("1", "finance", "payment", "approved", "付給既有供應商 NT$3,000"),
-            mk("2", "finance", "payment", "denied", "付給未知帳號 NT$300,000"),
+            mk(
+                "1",
+                "finance",
+                "payment",
+                "approved",
+                "付給既有供應商 NT$3,000",
+            ),
+            mk(
+                "2",
+                "finance",
+                "payment",
+                "denied",
+                "付給未知帳號 NT$300,000",
+            ),
             // Different kind — no cross-kind pairing.
             mk("3", "finance", "email", "approved", "回信給客戶"),
             // Different agent — no cross-agent pairing.
@@ -1140,9 +1206,18 @@ mod tests {
 
     #[test]
     fn format_parsing_is_loose_but_closed() {
-        assert_eq!(DatasetFormat::from_str_loose(" ShareGPT ").unwrap(), DatasetFormat::ShareGpt);
-        assert_eq!(DatasetFormat::from_str_loose("share-gpt").unwrap(), DatasetFormat::ShareGpt);
-        assert_eq!(DatasetFormat::from_str_loose("ALPACA").unwrap(), DatasetFormat::Alpaca);
+        assert_eq!(
+            DatasetFormat::from_str_loose(" ShareGPT ").unwrap(),
+            DatasetFormat::ShareGpt
+        );
+        assert_eq!(
+            DatasetFormat::from_str_loose("share-gpt").unwrap(),
+            DatasetFormat::ShareGpt
+        );
+        assert_eq!(
+            DatasetFormat::from_str_loose("ALPACA").unwrap(),
+            DatasetFormat::Alpaca
+        );
         assert!(DatasetFormat::from_str_loose("openai").is_err());
     }
 
@@ -1194,7 +1269,10 @@ mod tests {
         seed_sessions(&db);
         let out = collect_conversations(
             &db,
-            &DatasetSources { agent_ids: vec!["finance".into()], ..Default::default() },
+            &DatasetSources {
+                agent_ids: vec!["finance".into()],
+                ..Default::default()
+            },
         )
         .unwrap();
         // s2 is another agent, s3 is archived.
@@ -1211,10 +1289,26 @@ mod tests {
     fn missing_store_builds_an_empty_dataset_instead_of_failing() {
         let dir = tempfile::tempdir().unwrap();
         let s = &DatasetSources::default();
-        assert!(collect_conversations(&dir.path().join("nope.db"), s).unwrap().is_empty());
-        assert!(collect_tasks(&dir.path().join("nope.db"), s).unwrap().is_empty());
-        assert!(collect_approvals(&dir.path().join("nope.db"), s).unwrap().is_empty());
-        assert!(collect_review_pairs(&dir.path().join("nope.db"), s).unwrap().is_empty());
+        assert!(
+            collect_conversations(&dir.path().join("nope.db"), s)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            collect_tasks(&dir.path().join("nope.db"), s)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            collect_approvals(&dir.path().join("nope.db"), s)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            collect_review_pairs(&dir.path().join("nope.db"), s)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     fn seed_tasks(path: &Path) {
@@ -1260,6 +1354,93 @@ mod tests {
         assert_eq!(pairs[0].chosen, "全部對上");
         assert_eq!(pairs[0].rejected, "漏了三筆");
         assert!(pairs[0].prompt.starts_with("對帳"));
+    }
+
+    fn review_db(
+        dir: &tempfile::TempDir,
+        summary: Option<&str>,
+        acc_excerpt: Option<&str>,
+    ) -> std::path::PathBuf {
+        let db = dir.path().join("tasks.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
+                 assigned_to TEXT, created_at TEXT, updated_at TEXT, completed_at TEXT,
+                 result_summary TEXT);
+             CREATE TABLE task_iterations (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
+                 round INTEGER, dispatched_at TEXT, verdict TEXT, worker_excerpt TEXT);",
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO tasks VALUES ('t1','對帳','八月發票','done','finance',
+                 '2026-09-01T00:00:00Z','2026-09-02T00:00:00Z','2026-09-02T00:00:00Z',?1)",
+            [summary],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO task_iterations (task_id,round,dispatched_at,verdict,worker_excerpt)
+             VALUES ('t1',1,'2026-09-01T00:00:00Z','rejected','漏了三筆')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO task_iterations (task_id,round,dispatched_at,verdict,worker_excerpt)
+             VALUES ('t1',2,'2026-09-01T01:00:00Z','accepted',?1)",
+            [acc_excerpt],
+        )
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn review_pairs_fall_back_to_result_summary_when_accepted_excerpt_empty() {
+        for excerpt in [None, Some("")] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = review_db(&dir, Some("最終對帳結果"), excerpt);
+            let pairs = collect_review_pairs(&db, &DatasetSources::default()).unwrap();
+            assert_eq!(pairs.len(), 1);
+            assert_eq!(pairs[0].chosen, "最終對帳結果");
+            assert_eq!(pairs[0].rejected, "漏了三筆");
+        }
+    }
+
+    #[test]
+    fn review_pairs_prefer_accepted_excerpt_over_result_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = review_db(&dir, Some("最終對帳結果"), Some("驗收輪節錄"));
+        let pairs = collect_review_pairs(&db, &DatasetSources::default()).unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].chosen, "驗收輪節錄");
+    }
+
+    #[test]
+    fn review_pairs_bound_result_summary_fallback_to_the_excerpt_rule() {
+        use crate::goal_loop::state::WORKER_EXCERPT_MAX_BYTES;
+        // 3-byte CJK chars; 500 is not a multiple of 3, so a raw byte cut
+        // would land mid-char.
+        let long = "對".repeat(400);
+        let dir = tempfile::tempdir().unwrap();
+        let db = review_db(&dir, Some(&long), None);
+        let pairs = collect_review_pairs(&db, &DatasetSources::default()).unwrap();
+        assert_eq!(pairs.len(), 1);
+        let chosen = &pairs[0].chosen;
+        assert!(chosen.len() <= WORKER_EXCERPT_MAX_BYTES);
+        assert_eq!(chosen.len(), (WORKER_EXCERPT_MAX_BYTES / 3) * 3);
+        assert!(chosen.chars().all(|c| c == '對'));
+        assert_eq!(
+            Some(chosen.clone()),
+            crate::goal_loop::state::worker_excerpt(Some(&long))
+        );
+    }
+
+    #[test]
+    fn review_pairs_skip_when_no_accepted_text_anywhere() {
+        for summary in [None, Some("")] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = review_db(&dir, summary, None);
+            let pairs = collect_review_pairs(&db, &DatasetSources::default()).unwrap();
+            assert!(pairs.is_empty());
+        }
     }
 
     fn seed_approvals(path: &Path) {
@@ -1347,7 +1528,12 @@ mod tests {
         let meta = create(home, "只做 SFT", "alpaca").unwrap();
         let built = build(home, &meta.id, DatasetSources::default(), "alpaca", false).unwrap();
         assert_eq!(built.counts.preference_rows, 0);
-        assert!(!dataset_dir(home, &meta.id).unwrap().join("preference.jsonl").exists());
+        assert!(
+            !dataset_dir(home, &meta.id)
+                .unwrap()
+                .join("preference.jsonl")
+                .exists()
+        );
         assert!(built.files.iter().all(|f| f.name != "preference.jsonl"));
     }
 
@@ -1370,7 +1556,13 @@ mod tests {
         build(home, &meta.id, DatasetSources::default(), "sharegpt", false).unwrap();
         let out = export(home, &meta.id, true).unwrap();
         assert!(out["path"].as_str().unwrap().ends_with("train.jsonl"));
-        assert!(out["files"].as_array().unwrap().iter().any(|f| f["name"] == "train.jsonl"));
+        assert!(
+            out["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["name"] == "train.jsonl")
+        );
     }
 
     #[test]
@@ -1382,7 +1574,10 @@ mod tests {
         let m = create(home, "ok", "sharegpt").unwrap();
         assert_eq!(list(home).unwrap().len(), 1);
         assert_eq!(delete(home, "no-such-id").unwrap_err().code(), "not_found");
-        assert_eq!(preview(home, "no-such-id", 5).unwrap_err().code(), "not_found");
+        assert_eq!(
+            preview(home, "no-such-id", 5).unwrap_err().code(),
+            "not_found"
+        );
         delete(home, &m.id).unwrap();
         assert!(list(home).unwrap().is_empty());
     }

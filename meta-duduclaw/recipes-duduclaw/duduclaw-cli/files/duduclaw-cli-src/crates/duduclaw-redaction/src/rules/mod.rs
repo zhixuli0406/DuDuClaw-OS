@@ -1,17 +1,26 @@
 //! Rule abstraction — what to match and how to label what was matched.
 //!
-//! Every concrete rule type (regex, identity, keyword, json_path, ner)
+//! Every concrete rule type (regex, identity, keyword, json_path, db_field)
 //! produces the same shape of [`Match`] and obeys the same
 //! [`RestoreScope`] contract. The [`crate::engine::RuleEngine`] applies
 //! a collection of rules and resolves overlaps.
 
+pub mod db_field;
+pub mod identity;
+pub mod json_path;
 pub mod keyword;
+#[cfg(feature = "ner")]
+pub mod ner;
 pub mod regex;
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::source::Caller;
 
+pub use self::identity::IdentityRule;
+pub use self::json_path::JsonPathRule;
 pub use self::keyword::KeywordRule;
 pub use self::regex::RegexRule;
 
@@ -78,9 +87,18 @@ pub enum RuleKind {
     /// Pure regex match. `pattern` is compiled at load time.
     Regex { pattern: String },
 
-    /// Match the canonical display name (and aliases) of a known person
-    /// resolved by `duduclaw-identity`. v1.14.x and later.
-    Identity { source: String },
+    /// Match the display name of every person the deployment knows about,
+    /// read from the shared wiki's identity directory by
+    /// [`identity::IdentityRule`]. `source` accepts `"wiki"` (or omitted /
+    /// empty, which means the same); any other value is a load-time error.
+    Identity {
+        /// Defaulted so the documented bare `type = "identity"` form parses —
+        /// without this a profile omitting `source` failed deserialisation,
+        /// and (before the fail-closed fix) that surfaced as "redaction not
+        /// enabled" rather than as an error.
+        #[serde(default)]
+        source: String,
+    },
 
     /// Literal keyword list. v1.14.x and later.
     Keyword {
@@ -89,11 +107,90 @@ pub enum RuleKind {
         case_sensitive: bool,
     },
 
-    /// JSON-path applied to structured tool results. v1.14.x and later.
+    /// JSON-path applied to structured tool results — the *structured field*
+    /// rule kind (2026-09). Unlike the text matchers above, a JsonPath rule
+    /// never inspects content: it selects nodes by position in the tool
+    /// result's JSON and tokenises the whole value.
+    ///
+    /// Wire-compatible with the pre-2026-09 `{ paths, match_tool }` form —
+    /// `match_args`, `match_result` and `exclude_keys` all default to empty.
     JsonPath {
+        /// Path expressions (see [`json_path`] for the supported grammar).
         paths: Vec<String>,
+        /// Exact tool name, or a trailing-`*` prefix glob (same semantics as
+        /// `[redaction.tool_egress]`). `None` ⇒ any tool.
         #[serde(default)]
         match_tool: Option<String>,
+        /// Top-level tool-argument equality gate: every `key = value` pair
+        /// must be present in the call's `arguments` object and compare
+        /// exactly equal (scalars stringified). Empty ⇒ no gate.
+        #[serde(default)]
+        match_args: HashMap<String, String>,
+        /// Tool-**result** equality gate: every `<json pointer> = value` pair
+        /// must resolve, inside the very JSON the paths are applied to, to a
+        /// scalar equal to the literal. Empty ⇒ no gate.
+        ///
+        /// For tools that name their table in the result rather than in the
+        /// arguments (`csv_read` / `xlsx_read` return
+        /// `{"table": "customers.csv", "rows": […]}`), this is what binds a
+        /// column rule to one table.
+        #[serde(default)]
+        match_result: HashMap<String, String>,
+        /// Object keys never tokenised under a matched node. Applied at
+        /// every level of the recursion, not just the top one.
+        #[serde(default)]
+        exclude_keys: Vec<String>,
+    },
+
+    /// Database `table.column` sugar (2026-09). Expanded at load time into
+    /// one [`RuleKind::JsonPath`] rule per bound tool — see
+    /// [`db_field::expand`].
+    ///
+    /// `source` names an entry of the data-source registry
+    /// ([`crate::data_source`]): a built-in (`odoo` / `duduclaw_db` /
+    /// `duduclaw_files`), or an
+    /// operator's `[redaction.data_sources.<name>]` block. An unknown source
+    /// is a load-time error (fail-closed, never skipped).
+    DbField {
+        /// Registry entry this rule's tables belong to. Omitted ⇒ `connector`
+        /// if given, else `"odoo"` (the only source that existed before the
+        /// registry, so old configs keep their meaning).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        /// Deprecated spelling of `source`, kept so pre-registry configs
+        /// (`connector = "odoo"`) keep parsing. Giving both with *different*
+        /// values is an error rather than a silent winner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connector: Option<String>,
+        /// `"table.column"` or `"table.*"` entries, e.g. `res.partner.name`
+        /// or `customers.email`.
+        fields: Vec<String>,
+    },
+
+    /// Model-backed detection of PII with no fixed shape — names, street
+    /// addresses, birthdays, account numbers (2026-09, "AI 智慧偵測").
+    ///
+    /// Runs the OpenAI Privacy Filter (Apache-2.0) locally through ONNX
+    /// Runtime; nothing is sent anywhere. One spec compiles into one rule per
+    /// label, each carrying the DuDuClaw category that label maps to
+    /// ([`crate::ner::labels`]) — so the spec's own `category` is unused.
+    ///
+    /// The variant exists in EVERY build, feature `ner` or not, so profiles
+    /// stay wire-compatible: a build without the feature parses the rule and
+    /// then refuses to compile it (fail-closed), rather than silently
+    /// dropping a rule the operator believes is protecting them.
+    Ner {
+        /// Model labels to surface. Empty ⇒ all eight.
+        #[serde(default)]
+        labels: Vec<String>,
+        /// Minimum input length (characters) before the model is consulted.
+        /// `None` ⇒ `[redaction.ner] min_chars`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_chars: Option<usize>,
+        /// Chunk size (characters) for longer inputs. `None` ⇒
+        /// `[redaction.ner] max_chars`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chars: Option<usize>,
     },
 }
 
@@ -134,6 +231,17 @@ pub struct RuleSpec {
     #[serde(default)]
     pub apply_to_system_prompt: bool,
 
+    /// Whether this rule is live. `false` ⇒ the engine skips it at compile
+    /// time (every kind), so a dashboard toggle can park a rule without
+    /// deleting it.
+    ///
+    /// Defaults to `true` so every pre-existing profile and inline rule keeps
+    /// firing, and is ALWAYS serialised (no `skip_serializing_if`) so a rule
+    /// written back by the dashboard states its state explicitly rather than
+    /// relying on a default that a future edit could change.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// The actual matcher.
     #[serde(flatten)]
     pub kind: RuleKind,
@@ -167,6 +275,20 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
     /// Find all matches in `text`. Implementors MAY return overlapping
     /// spans; the engine resolves overlaps globally.
     fn match_text(&self, text: &str) -> Vec<Match>;
+
+    /// Which detection engine produced this rule's matches, for the audit
+    /// trail: `"rule"` for every deterministic matcher, `"ner"` for the
+    /// model. Defaults to `"rule"` so adding a matcher never silently
+    /// mislabels itself as model output.
+    fn engine_kind(&self) -> &'static str {
+        "rule"
+    }
+
+    /// Model revision behind this rule, when `engine_kind()` is `"ner"`.
+    /// `None` for deterministic rules — there is no model to attribute.
+    fn model_revision(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +326,43 @@ mod tests {
         let with_one = Caller::agent("a", vec!["A".into()]);
         assert!(scope.allows(&with_both));
         assert!(!scope.allows(&with_one));
+    }
+
+    #[test]
+    fn identity_source_may_be_omitted_in_toml() {
+        // The documented bare form. Before `#[serde(default)]` this failed to
+        // deserialise, which the MCP layer then read as "redaction not
+        // enabled" — a silent unredacted path.
+        #[derive(serde::Deserialize)]
+        struct Wrap {
+            rules: std::collections::HashMap<String, RuleSpec>,
+        }
+        let toml_src = r#"
+[rules.known_people]
+type = "identity"
+category = "PERSON"
+"#;
+        let parsed: Wrap = toml::from_str(toml_src).expect("bare identity rule must parse");
+        let spec = &parsed.rules["known_people"];
+        assert_eq!(spec.category, "PERSON");
+        assert_eq!(spec.kind, RuleKind::Identity { source: String::new() });
+
+        // ...and an empty source compiles against a real people directory.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("people");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut spec = spec.clone();
+        spec.id = "known_people".into();
+        assert!(crate::rules::identity::IdentityRule::compile(spec, dir).is_ok());
+    }
+
+    #[test]
+    fn identity_source_still_round_trips_when_present() {
+        let spec: RuleSpec = toml::from_str(
+            "type = \"identity\"\ncategory = \"PERSON\"\nsource = \"wiki\"\n",
+        )
+        .unwrap();
+        assert_eq!(spec.kind, RuleKind::Identity { source: "wiki".into() });
     }
 
     #[test]

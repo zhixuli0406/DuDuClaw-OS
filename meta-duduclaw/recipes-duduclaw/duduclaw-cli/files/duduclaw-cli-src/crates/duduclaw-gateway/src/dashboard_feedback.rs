@@ -40,7 +40,7 @@
 
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::protocol::WsFrame;
@@ -56,14 +56,6 @@ pub const EV_MEMORY_CHANGED: &str = "memory.changed";
 /// A skill was synthesised, graduated, recorded or otherwise mutated.
 /// Payload: `{ action, agent_id?, skill? }`.
 pub const EV_SKILL_CHANGED: &str = "skill.changed";
-
-/// A one-time startup migration changed the user's runtime configuration
-/// without them asking. Payload: `{ migration, reset_agents, failed_agents }`.
-///
-/// WP10: silent config rewrites are exactly what caused the 2026-08-04 field
-/// incident, so the *corrective* rewrite is not allowed to be silent either —
-/// the user sees which agents changed and why.
-pub const EV_RUNTIME_MIGRATED: &str = "runtime.migrated";
 
 /// A channel's behavior settings (`channels.config_set` / `channel_config`
 /// MCP tool) or access-control list (`channels.access_set` / a pairing
@@ -89,7 +81,6 @@ pub const DASHBOARD_EVENTS: &[&str] = &[
     EV_CRON_CHANGED,
     EV_MEMORY_CHANGED,
     EV_SKILL_CHANGED,
-    EV_RUNTIME_MIGRATED,
     EV_CHANNEL_CONFIG_CHANGED,
 ];
 
@@ -186,15 +177,25 @@ pub fn tool_feedback_event(
 
     match tool_name {
         // ── Routines ────────────────────────────────────────────────────────
-        "schedule_task" => Some((
-            EV_CRON_CHANGED,
-            json!({
-                "action": "created",
-                "name": s("name"),
-                "cron": s("cron"),
-                "agent_id": agent(),
-            }),
-        )),
+        // `tasks_create` with a cron `schedule` writes a cron row (named by
+        // `title`, run as `assigned_to` or the caller). A board task, a goal
+        // and an RFC3339 instant (the reminder rail) change no routine.
+        "tasks_create" => {
+            let schedule = s("schedule")?;
+            let schedule = schedule.trim();
+            if schedule.is_empty() || chrono::DateTime::parse_from_rfc3339(schedule).is_ok() {
+                return None;
+            }
+            Some((
+                EV_CRON_CHANGED,
+                json!({
+                    "action": "created",
+                    "name": s("title"),
+                    "cron": schedule,
+                    "agent_id": s("assigned_to").or_else(|| agent()),
+                }),
+            ))
+        }
         "update_cron_task" => Some((
             EV_CRON_CHANGED,
             json!({ "action": "updated", "id": s("id"), "name": s("name") }),
@@ -284,9 +285,7 @@ pub fn tool_feedback_event(
         // Only `approve`/`revoke` mutate the approved-subject list that
         // `channels.pairing_list` surfaces; `generate` only creates an
         // ephemeral pending code and `list` is read-only.
-        "pairing_manage"
-            if matches!(s("action").as_deref(), Some("approve") | Some("revoke")) =>
-        {
+        "pairing_manage" if matches!(s("action").as_deref(), Some("approve") | Some("revoke")) => {
             Some((
                 EV_CHANNEL_CONFIG_CHANGED,
                 json!({
@@ -329,7 +328,6 @@ mod tests {
         assert!(dashboard_push_frame(EV_CRON_CHANGED, "{}").is_some());
         assert!(dashboard_push_frame(EV_MEMORY_CHANGED, "{}").is_some());
         assert!(dashboard_push_frame(EV_SKILL_CHANGED, "{}").is_some());
-        assert!(dashboard_push_frame(EV_RUNTIME_MIGRATED, "{}").is_some());
         assert!(dashboard_push_frame(EV_CHANNEL_CONFIG_CHANGED, "{}").is_some());
 
         assert!(dashboard_push_frame("os_file", r#"{"path":"/secret"}"#).is_none());
@@ -350,22 +348,6 @@ mod tests {
         assert_eq!(parsed["payload"]["name"], "晨報");
     }
 
-    /// WP10 M5 — the one-time runtime migration must reach the dashboard with
-    /// the agent list intact, so a config rewrite the user never asked for is
-    /// visible rather than log-only.
-    #[test]
-    fn runtime_migration_event_carries_the_reset_list() {
-        let json = dashboard_push_frame(
-            EV_RUNTIME_MIGRATED,
-            r#"{"migration":"wp10-pty-default-reset","reset_agents":["agnes","bob"],"failed_agents":[]}"#,
-        )
-        .expect("whitelisted");
-        let parsed: Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["type"], "event");
-        assert_eq!(parsed["event"], "runtime.migrated");
-        assert_eq!(parsed["payload"]["reset_agents"][0], "agnes");
-        assert_eq!(parsed["payload"]["reset_agents"][1], "bob");
-    }
 
     /// A malformed payload must not swallow the refresh signal.
     #[test]
@@ -380,13 +362,28 @@ mod tests {
     /// enough context for a toast, and every cron mutation tool is covered.
     #[test]
     fn cron_tools_map_to_cron_changed() {
-        let args = json!({ "name": "晨報", "cron": "0 9 * * *", "agent_id": "sam" });
-        let (ev, payload) = tool_feedback_event("schedule_task", &args, &json!({}), "").unwrap();
+        let args = json!({ "title": "晨報", "schedule": "0 9 * * *", "assigned_to": "sam" });
+        let (ev, payload) = tool_feedback_event("tasks_create", &args, &json!({}), "").unwrap();
         assert_eq!(ev, EV_CRON_CHANGED);
         assert_eq!(payload["action"], "created");
         assert_eq!(payload["name"], "晨報");
         assert_eq!(payload["cron"], "0 9 * * *");
         assert_eq!(payload["agent_id"], "sam");
+
+        // A board task, a goal, and a one-shot instant (the reminder rail)
+        // change nothing on the routines page.
+        assert!(tool_feedback_event("tasks_create", &json!({ "title": "x" }), &json!({}), "a").is_none());
+        assert!(
+            tool_feedback_event(
+                "tasks_create",
+                &json!({ "title": "x", "schedule": "2026-10-01T09:00:00+08:00" }),
+                &json!({}),
+                "a"
+            )
+            .is_none()
+        );
+        // The removed name raises nothing: a call to it creates nothing.
+        assert!(tool_feedback_event("schedule_task", &json!({ "name": "x", "cron": "0 9 * * *" }), &json!({}), "a").is_none());
 
         for tool in [
             "update_cron_task",
@@ -461,13 +458,22 @@ mod tests {
         // An explicit argument wins: a supervisor scheduling work for a report
         // must attribute to the report, not to itself.
         let (_, payload) = tool_feedback_event(
-            "schedule_task",
-            &json!({ "name": "晨報", "cron": "0 9 * * *", "agent_id": "sam" }),
+            "tasks_create",
+            &json!({ "title": "晨報", "schedule": "0 9 * * *", "assigned_to": "sam" }),
             &json!({}),
             "supervisor",
         )
         .unwrap();
         assert_eq!(payload["agent_id"], "sam");
+        // No assignee ⇒ the cron row runs as the caller.
+        let (_, payload) = tool_feedback_event(
+            "tasks_create",
+            &json!({ "title": "晨報", "schedule": "0 9 * * *" }),
+            &json!({}),
+            "supervisor",
+        )
+        .unwrap();
+        assert_eq!(payload["agent_id"], "supervisor");
 
         // Unknown caller ⇒ null, not a guess. The dashboard treats a missing
         // agent_id as "might be mine" and refetches, which is the safe default.
@@ -492,13 +498,15 @@ mod tests {
         assert_eq!(payload["channel"], "discord");
         assert_eq!(payload["key"], "mention_only");
 
-        assert!(tool_feedback_event(
-            "channel_config",
-            &json!({ "channel": "discord", "scope_id": "global", "key": "mention_only" }),
-            &json!({}),
-            "",
-        )
-        .is_none());
+        assert!(
+            tool_feedback_event(
+                "channel_config",
+                &json!({ "channel": "discord", "scope_id": "global", "key": "mention_only" }),
+                &json!({}),
+                "",
+            )
+            .is_none()
+        );
     }
 
     /// `pairing_manage` only feeds back on `approve`/`revoke` (the
@@ -528,13 +536,15 @@ mod tests {
         assert_eq!(payload["action"], "pairing_approve");
 
         for action in ["generate", "list"] {
-            assert!(tool_feedback_event(
-                "pairing_manage",
-                &json!({ "action": action, "subject": "u3" }),
-                &json!({}),
-                "",
-            )
-            .is_none());
+            assert!(
+                tool_feedback_event(
+                    "pairing_manage",
+                    &json!({ "action": action, "subject": "u3" }),
+                    &json!({}),
+                    "",
+                )
+                .is_none()
+            );
         }
     }
 
@@ -544,7 +554,10 @@ mod tests {
     #[test]
     fn failed_tool_call_raises_nothing() {
         let err = json!({ "isError": true, "content": [] });
-        assert!(tool_feedback_event("schedule_task", &json!({ "name": "x" }), &err, "").is_none());
+        assert!(
+            tool_feedback_event("tasks_create", &json!({ "title": "x", "schedule": "0 9 * * *" }), &err, "")
+                .is_none()
+        );
         assert!(tool_feedback_event("memory_store", &json!({}), &err, "").is_none());
         assert!(tool_feedback_event("skill_graduate", &json!({}), &err, "").is_none());
     }
@@ -552,7 +565,12 @@ mod tests {
     /// Read-only / unrelated tools stay silent — no refetch storms.
     #[test]
     fn unrelated_tools_raise_nothing() {
-        for tool in ["memory_search", "list_cron_tasks", "web_search", "skill_list"] {
+        for tool in [
+            "memory_search",
+            "list_cron_tasks",
+            "web_search",
+            "skill_list",
+        ] {
             assert!(
                 tool_feedback_event(tool, &json!({}), &json!({}), "").is_none(),
                 "{tool} must not feed back"

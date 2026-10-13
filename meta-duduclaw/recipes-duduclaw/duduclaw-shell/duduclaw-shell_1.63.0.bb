@@ -229,7 +229,7 @@ python do_patch:append() {
 # that was NOT ruled out ahead of time -- left for the real bitbake build to
 # either confirm clean or reveal, rather than pre-emptively applying
 # duduclaw-cli's CFLAGS/CXXFLAGS fix on a guess. If do_package_qa's
-# `buildpaths` check fires here, mirror duduclaw-cli_1.63.0.bb's
+# `buildpaths` check fires here, mirror duduclaw-cli_1.73.1.bb's
 # `CFLAGS:append`/`CXXFLAGS:append` fix verbatim -- same root cause, same
 # remedy, see that recipe's own comment for the full mechanism.
 

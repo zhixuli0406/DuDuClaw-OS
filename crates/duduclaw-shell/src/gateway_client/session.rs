@@ -105,7 +105,7 @@ pub(crate) fn bootstrap_local_session_at(base_url: &str) -> Result<String, Sessi
 /// local-session response (`user.email`). The gateway issues that session for
 /// its bootstrap owner, found by flag rather than by address, so this follows
 /// the owner after they replace the placeholder `admin@local` with a real
-/// email (platform v1.72.3). The lockscreen uses it to know which account to
+/// email (platform v1.73.0). The lockscreen uses it to know which account to
 /// verify a password against.
 pub(crate) fn local_owner_email() -> Result<String, SessionError> {
     local_owner_email_at(&gateway_base_url())

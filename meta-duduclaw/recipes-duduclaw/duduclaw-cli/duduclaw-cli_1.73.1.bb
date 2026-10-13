@@ -35,6 +35,23 @@ S = "${UNPACKDIR}/duduclaw-cli-src"
 
 require duduclaw-cli-crates.inc
 
+# The one git (non-crates.io) dependency in the v1.73.1 snapshot's lock:
+# duduclaw-inference depends on `ucci` (MIT) by git rev, unconditionally.
+# `bitbake -c update_crates` only emits crates.io entries, so it lives here
+# (update_crates rewrites the .inc). cargo_common.bbclass's
+# do_patch_paths turns every named git SRC_URI with a destsuffix into a
+# `[patch."https://github.com/varunkotte6/ucci"]` path override and strips
+# the `source = "git+…"` lines from the lock so `--frozen` still holds. The
+# crate is in the repo's rust/ subdirectory, hence subpath=rust (its tree
+# lands directly in ${UNPACKDIR}/ucci). Keep the rev in step with
+# crates/duduclaw-inference/Cargo.toml on every platform sync.
+SRC_URI += "git://github.com/varunkotte6/ucci;protocol=https;nobranch=1;name=ucci;subpath=rust;destsuffix=ucci"
+SRCREV_ucci = "80cd2319cc2b41e3a5c35a64acd6b5dcbf5c217b"
+# do_patch_paths edits the lock at CARGO_LOCK_PATH, which defaults to the
+# directory of CARGO_SRC_DIR's manifest (crates/duduclaw-cli/, no lock
+# there). The workspace lock is at the snapshot root.
+CARGO_LOCK_PATH = "${S}/Cargo.lock"
+
 # Build only the duduclaw-cli package (bin "duduclaw") out of the mini
 # workspace, not every member's own [[bin]] (duduclaw-sysd is also a
 # workspace member here because duduclaw-cli reaches it by path, but this

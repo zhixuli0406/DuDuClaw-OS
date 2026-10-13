@@ -4,11 +4,12 @@
 //! directly from the web browser, without requiring any external messaging app.
 
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{ConnectInfo, State},
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{ConnectInfo, State},
     http::HeaderMap,
     response::IntoResponse,
 };
@@ -148,7 +149,7 @@ pub enum ChatMessage {
         /// replies (anything that never went through O-4's pending-op path).
         /// The raw marker tag is ALWAYS stripped from `content` before this
         /// frame is built, regardless of whether this field is populated —
-        /// see `channel_reply::build_reply_with_session_with_artifact`.
+        /// see `channel_reply::build_guarded_reply_with_session`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<serde_json::Value>,
     },
@@ -190,14 +191,20 @@ impl ChatMessage {
     /// error predating C-ACL used, so existing string-matching clients (e.g.
     /// the dashboard's `isResumeNotFound`) keep working unchanged.
     fn error(message: impl Into<String>) -> Self {
-        ChatMessage::Error { message: message.into(), code: None }
+        ChatMessage::Error {
+            message: message.into(),
+            code: None,
+        }
     }
 
     /// Build an error frame carrying a machine-readable `code` (ASCII
     /// snake_case) so a client can branch on error class without parsing
     /// zh-TW prose.
     fn error_coded(message: impl Into<String>, code: &'static str) -> Self {
-        ChatMessage::Error { message: message.into(), code: Some(code.to_string()) }
+        ChatMessage::Error {
+            message: message.into(),
+            code: Some(code.to_string()),
+        }
     }
 }
 
@@ -276,6 +283,22 @@ fn resume_needs_acl_check(stored_agent: &str, default_agent: &str) -> bool {
     stored_agent != default_agent
 }
 
+/// Whether a WebChat caller may run admin-gated chat commands. Mirrors the
+/// other channels' `admin_users` gate (an explicit admin list, no manager
+/// tier): only an **active dashboard account with the Admin role**. A
+/// public-widget visitor (`widget-visitor:…`) is never an admin, and any
+/// lookup failure denies (fail closed).
+fn webchat_command_admin(user_db: &UserDb, auth_user: &str) -> bool {
+    if auth_user.starts_with("widget-visitor:") {
+        return false;
+    }
+    matches!(
+        user_db.get_user(auth_user),
+        Ok(Some(u)) if u.status == duduclaw_auth::UserStatus::Active
+            && u.role == duduclaw_auth::UserRole::Admin
+    )
+}
+
 /// Load `user_id`'s role + full agent-binding set from the auth DB — the one
 /// DB round-trip `WebChatState::agent_access_allowed` performs on a cache
 /// miss.
@@ -302,7 +325,8 @@ pub struct WebChatState {
     /// C-ACL (P0-S1): per-user role+bindings snapshot cache, keyed by
     /// authenticated user id. Populated lazily on the first explicit-agent
     /// selection and refreshed after `ACL_CACHE_TTL`.
-    acl_cache: tokio::sync::Mutex<std::collections::HashMap<String, (AclSnapshot, std::time::Instant)>>,
+    acl_cache:
+        tokio::sync::Mutex<std::collections::HashMap<String, (AclSnapshot, std::time::Instant)>>,
 }
 
 impl WebChatState {
@@ -503,7 +527,10 @@ pub async fn ws_chat_handler(
     // C5 fix: reject cross-site WebSocket hijacking (CSWSH). Previously this
     // endpoint had no Origin check at all.
     if !crate::server::origin_is_allowed(&headers) {
-        let origin = headers.get("origin").and_then(|v| v.to_str().ok()).unwrap_or("");
+        let origin = headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
         warn!(origin, "WebChat connection rejected: invalid origin");
         return axum::http::StatusCode::FORBIDDEN.into_response();
     }
@@ -513,8 +540,21 @@ pub async fn ws_chat_handler(
 
 /// Public entry point for WebChat socket handling (used by server.rs).
 /// Caller must supply the peer IP so the per-user limit is correctly enforced.
-pub async fn handle_chat_socket_public(socket: WebSocket, state: Arc<WebChatState>, peer_ip: IpAddr) {
+pub async fn handle_chat_socket_public(
+    socket: WebSocket,
+    state: Arc<WebChatState>,
+    peer_ip: IpAddr,
+) {
     handle_chat_socket(socket, state, peer_ip).await;
+}
+
+/// These paths come only from `StagedDeliverable::owned_archive_path`, which
+/// names fresh guarded copies. Never remove an attachment that existed before
+/// this reply.
+async fn rollback_owned_webchat_archives(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = tokio::fs::remove_file(path).await;
+    }
 }
 
 /// Process a WebChat WebSocket connection.
@@ -553,12 +593,10 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
     let (auth_user, must_change_password) = {
         let auth_timeout = std::time::Duration::from_secs(10);
         let authed = match tokio::time::timeout(auth_timeout, stream.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                match serde_json::from_str::<ChatMessage>(&text) {
-                    Ok(ChatMessage::Auth { token }) => state.authenticate(&token),
-                    _ => Err("first frame must be an auth message".to_string()),
-                }
-            }
+            Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<ChatMessage>(&text) {
+                Ok(ChatMessage::Auth { token }) => state.authenticate(&token),
+                _ => Err("first frame must be an auth message".to_string()),
+            },
             _ => Err("authentication handshake timed out or closed".to_string()),
         };
         match authed {
@@ -976,8 +1014,13 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                         // a verified Admin/Manager here — `handle_rules_off`
                                         // correctly refuses with "use the dashboard" rather
                                         // than guessing at an identity.
+                                        // v1.68.0: admin-gated commands (`!STOP ALL`,
+                                        // `!RESUME`, `/model <x>`) need an active
+                                        // dashboard Admin account — never a
+                                        // public-widget visitor (was hardcoded `true`).
+                                        let is_admin = webchat_command_admin(&state.user_db, &auth_user);
                                         let reply = crate::chat_commands::handle_command(
-                                            &cmd, &state.ctx, sid, effective_agent_id, true, "",
+                                            &cmd, &state.ctx, sid, effective_agent_id, is_admin, "",
                                         ).await;
                                         let done = ChatMessage::AssistantDone {
                                             content: reply,
@@ -1013,28 +1056,29 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                 // resolved, else the default-agent path. Both
                                 // branches consume `on_progress`; they are
                                 // mutually exclusive so the single move is valid.
-                                // O-4→O-3: the `_with_artifact` siblings return the
-                                // same stripped text as `build_reply_for_agent` /
-                                // `build_reply_with_session`, plus any O-4 pending-op
+                                // O-4→O-3: the guarded builders return the
+                                // stripped reply text plus any O-4 pending-op
                                 // marker mapped to an O-3 chat-artifact. WebChat is
                                 // the only caller that reads the second half — see
-                                // `channel_reply::build_reply_with_session_with_artifact`.
-                                let work = async {
-                                    match &effective_agent {
-                                        Some(a) => {
-                                            crate::channel_reply::build_reply_for_agent_with_artifact(
-                                                &full_content, &state.ctx, a, sid, &user_id, Some(on_progress),
-                                            )
-                                            .await
+                                // `channel_reply::build_guarded_reply_with_session`
+                                // (these replaced the former `_with_artifact` siblings).
+                                let work = crate::ccr_runtime::AUTHENTICATED_WEBCHAT_PRINCIPAL
+                                    .scope(auth_user.clone(), async {
+                                        match &effective_agent {
+                                            Some(a) => {
+                                                crate::channel_reply::build_guarded_reply_for_agent(
+                                                    &full_content, &state.ctx, a, sid, &user_id, Some(on_progress),
+                                                )
+                                                .await
+                                            }
+                                            None => {
+                                                crate::channel_reply::build_guarded_reply_with_session(
+                                                    &full_content, &state.ctx, sid, &user_id, Some(on_progress),
+                                                )
+                                                .await
+                                            }
                                         }
-                                        None => {
-                                            crate::channel_reply::build_reply_with_session_with_artifact(
-                                                &full_content, &state.ctx, sid, &user_id, Some(on_progress),
-                                            )
-                                            .await
-                                        }
-                                    }
-                                };
+                                    });
                                 tokio::pin!(work);
                                 // The model the backend ACTUALLY answered with
                                 // (ProgressEvent::ModelInfo) — stamped onto the
@@ -1063,6 +1107,10 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                                     content, kind: Some("keepalive".into()), tool: None, detail: None,
                                                     conv: conv_nonce.clone(),
                                                 },
+                                                ProgressEvent::Interim { .. } => ChatMessage::Progress {
+                                                    content, kind: Some("status".into()), tool: None, detail: None,
+                                                    conv: conv_nonce.clone(),
+                                                },
                                                 // C-P1: structured step boundary → dedicated `step` frame.
                                                 ProgressEvent::Step(step) => ChatMessage::Step {
                                                     phase: step.phase.as_str().to_string(),
@@ -1083,7 +1131,9 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                 // transformation below (📎DELIVER parsing, cli-noise,
                                 // branding, etc.) only ever operates on the text; the
                                 // artifact rides along untouched to the final frame.
-                                let (reply, operator_artifact) = reply;
+                                let guarded = reply;
+                                let reply = guarded.text.clone();
+                                let operator_artifact = guarded.artifact.clone();
 
                                 // WP1.3 + live-verification fix (2026-08-15):
                                 // 📎DELIVER: handling. WebChat has no in-band
@@ -1099,6 +1149,7 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                 // Gate rejections surface as actionable text;
                                 // the download note is only made when a copy
                                 // really landed in attachments/.
+                                let mut owned_archives: Vec<PathBuf> = Vec::new();
                                 let reply = {
                                     let (cleaned, paths) =
                                         crate::office_docs::parse_deliverables(&reply);
@@ -1112,17 +1163,30 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                             .join(effective_agent_id);
                                         let mut delivered: Vec<String> = Vec::new();
                                         let mut failed: Vec<String> = Vec::new();
+                                        // `office_docs::DeliveryCheck` is a sync
+                                        // `dyn Fn() -> bool`; the awaited rechecks
+                                        // around this loop carry the rollback.
+                                        let delivery_valid = || guarded.still_valid_blocking();
                                         for p in &paths {
-                                            match crate::office_docs::stage_deliverable(
+                                            if !guarded.still_valid().await { break; }
+                                            match crate::office_docs::stage_deliverable_checked(
                                                 p,
                                                 &agent_dir,
                                                 &state.ctx.home_dir,
                                                 crate::artifacts::ArtifactOrigin::Declared,
                                                 Some("webchat"),
+                                                Some(&delivery_valid),
                                             )
                                             .await
                                             {
+                                                Ok(staged) if !guarded.still_valid().await => {
+                                                    staged.rollback_new_archive().await;
+                                                    break;
+                                                }
                                                 Ok(staged) if staged.archived => {
+                                                    if let Some(path) = staged.owned_archive_path() {
+                                                        owned_archives.push(path.to_path_buf());
+                                                    }
                                                     delivered.push(staged.filename)
                                                 }
                                                 Ok(staged) => failed.push(format!(
@@ -1141,6 +1205,11 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                                 }
                                             }
                                         }
+                                        if !guarded.still_valid().await {
+                                            rollback_owned_webchat_archives(&owned_archives).await;
+                                            owned_archives.clear();
+                                            String::new()
+                                        } else {
                                         let mut notes: Vec<String> = Vec::new();
                                         if !delivered.is_empty() {
                                             notes.push(format!(
@@ -1158,10 +1227,16 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                         } else {
                                             format!("{cleaned}\n\n{}", notes.join("\n"))
                                         }
+                                        }
                                     }
                                 };
 
                                 // Guard: don't send empty replies
+                                if !guarded.still_valid().await {
+                                    rollback_owned_webchat_archives(&owned_archives).await;
+                                    warn!("WebChat: source changed before reply delivery — skipping send");
+                                    continue;
+                                }
                                 if reply.trim().is_empty() {
                                     warn!("WebChat: reply is empty — skipping send");
                                     continue;
@@ -1176,7 +1251,16 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
                                     artifact: operator_artifact,
                                 };
                                 if let Ok(json) = serde_json::to_string(&done) {
-                                    if sink.send(Message::Text(json.into())).await.is_err() {
+                                    if !guarded.still_valid().await {
+                                        rollback_owned_webchat_archives(&owned_archives).await;
+                                        continue;
+                                    }
+                                    let send_result = sink.send(Message::Text(json.into())).await;
+                                    if !guarded.still_valid().await {
+                                        rollback_owned_webchat_archives(&owned_archives).await;
+                                        warn!("WebChat: source changed during reply delivery");
+                                    }
+                                    if send_result.is_err() {
                                         break;
                                     }
                                 }
@@ -1215,7 +1299,7 @@ async fn handle_chat_socket(socket: WebSocket, state: Arc<WebChatState>, peer_ip
 /// Build a `session_info` frame for `session_id` describing the agent that will
 /// answer (`agent = None` → the main/default agent). WP3 uses this to echo the
 /// effective session on resume so the client can confirm the switch and refresh
-/// its header. Falls back to the white-label product name when no agent is
+/// its header. Falls back to the fixed product name when no agent is
 /// loaded — mirrors the connect-time computation.
 async fn build_session_info_frame(
     state: &Arc<WebChatState>,
@@ -1236,7 +1320,7 @@ async fn build_session_info_frame(
                 a.config.model.preferred.clone(),
             ),
             None => (
-                crate::branding::effective_product_name(&duduclaw_core::platform::duduclaw_home()),
+                "DuDuClaw".to_string(),
                 "🐾".to_string(),
                 String::new(),
                 // No agent ⇒ the reply path falls back to this same default
@@ -1326,13 +1410,14 @@ async fn save_webchat_attachments(
 
     let mut refs = Vec::new();
     for att in attachments {
-        let data = match base64::engine::general_purpose::STANDARD.decode(att.data_base64.as_bytes()) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(file = %att.filename, "WebChat attachment base64 decode failed: {e}");
-                continue;
-            }
-        };
+        let data =
+            match base64::engine::general_purpose::STANDARD.decode(att.data_base64.as_bytes()) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(file = %att.filename, "WebChat attachment base64 decode failed: {e}");
+                    continue;
+                }
+            };
         if data.len() as u64 > crate::media::MAX_FILE_SIZE {
             warn!(
                 file = %att.filename,
@@ -1393,16 +1478,25 @@ mod resume_ownership_tests {
         assert!(owns_webchat_session(&base, &tag));
         // A different connection's suffix is still the same user — this is the
         // page-reload case that used to fail.
-        assert!(owns_webchat_session(&format!("webchat:webchat:{tag}:conn2"), &tag));
+        assert!(owns_webchat_session(
+            &format!("webchat:webchat:{tag}:conn2"),
+            &tag
+        ));
         // Per-agent / per-conversation derived ids.
-        assert!(owns_webchat_session(&format!("{base}#agent:sales#conv:x1"), &tag));
+        assert!(owns_webchat_session(
+            &format!("{base}#agent:sales#conv:x1"),
+            &tag
+        ));
     }
 
     #[test]
     fn another_users_session_is_refused() {
         let mine = webchat_owner_tag("user-abc");
         let theirs = webchat_owner_tag("user-xyz");
-        assert!(!owns_webchat_session(&format!("webchat:webchat:{theirs}:conn1"), &mine));
+        assert!(!owns_webchat_session(
+            &format!("webchat:webchat:{theirs}:conn1"),
+            &mine
+        ));
     }
 
     #[test]
@@ -1424,7 +1518,10 @@ mod resume_ownership_tests {
         // The trailing separator is what stops `…{tag}evil:` from matching —
         // an unanchored prefix check would let a crafted id through.
         let tag = webchat_owner_tag("user-abc");
-        assert!(!owns_webchat_session(&format!("webchat:webchat:{tag}evil:conn1"), &tag));
+        assert!(!owns_webchat_session(
+            &format!("webchat:webchat:{tag}evil:conn1"),
+            &tag
+        ));
     }
 
     #[test]
@@ -1508,7 +1605,12 @@ mod tests {
     fn authenticate_accepts_valid_active_user() {
         let (jwt, db, _dir) = fixtures();
         let user = db
-            .create_user("alice@example.com", "Alice", "pw-strong-123", UserRole::Employee)
+            .create_user(
+                "alice@example.com",
+                "Alice",
+                "pw-strong-123",
+                UserRole::Employee,
+            )
             .expect("create user");
         let token = token_for(&jwt, &user);
 
@@ -1560,7 +1662,12 @@ mod tests {
     /// variant so a regression in the tag mapping is loud.
     fn parse_user_message(json: &str) -> (String, Option<String>, Option<String>) {
         match serde_json::from_str::<ChatMessage>(json).expect("parse user_message") {
-            ChatMessage::UserMessage { content, session_id, agent, .. } => (content, session_id, agent),
+            ChatMessage::UserMessage {
+                content,
+                session_id,
+                agent,
+                ..
+            } => (content, session_id, agent),
             other => panic!("expected UserMessage, got {other:?}"),
         }
     }
@@ -1568,8 +1675,9 @@ mod tests {
     #[test]
     fn user_message_without_agent_parses_to_none() {
         // Byte-compatible legacy frame: no `agent` key at all.
-        let (content, sid, agent) =
-            parse_user_message(r#"{"type":"user_message","content":"hi","session_id":"webchat:x"}"#);
+        let (content, sid, agent) = parse_user_message(
+            r#"{"type":"user_message","content":"hi","session_id":"webchat:x"}"#,
+        );
         assert_eq!(content, "hi");
         assert_eq!(sid.as_deref(), Some("webchat:x"));
         assert_eq!(agent, None, "absent agent must deserialize to None");
@@ -1610,9 +1718,10 @@ mod tests {
     #[test]
     fn user_message_without_conv_is_none() {
         // Legacy frame (no `conv`) → None → single-bucket byte-compatible path.
-        let msg: ChatMessage =
-            serde_json::from_str(r#"{"type":"user_message","content":"hi","session_id":"webchat:x"}"#)
-                .expect("parse");
+        let msg: ChatMessage = serde_json::from_str(
+            r#"{"type":"user_message","content":"hi","session_id":"webchat:x"}"#,
+        )
+        .expect("parse");
         match msg {
             ChatMessage::UserMessage { conv, .. } => assert_eq!(conv, None),
             other => panic!("expected UserMessage, got {other:?}"),
@@ -1631,7 +1740,10 @@ mod tests {
             artifact: None,
         };
         let json = serde_json::to_string(&with).expect("serialize");
-        assert!(json.contains(r#""conv":"c-42""#), "conv must be on the wire: {json}");
+        assert!(
+            json.contains(r#""conv":"c-42""#),
+            "conv must be on the wire: {json}"
+        );
         assert!(
             json.contains(r#""model":"claude-sonnet-4-6""#),
             "actual model must be on the wire: {json}"
@@ -1646,9 +1758,18 @@ mod tests {
             artifact: None,
         };
         let json = serde_json::to_string(&without).expect("serialize");
-        assert!(!json.contains("conv"), "absent conv must not serialize: {json}");
-        assert!(!json.contains("model"), "absent model must not serialize: {json}");
-        assert!(!json.contains("artifact"), "absent artifact must not serialize: {json}");
+        assert!(
+            !json.contains("conv"),
+            "absent conv must not serialize: {json}"
+        );
+        assert!(
+            !json.contains("model"),
+            "absent model must not serialize: {json}"
+        );
+        assert!(
+            !json.contains("artifact"),
+            "absent artifact must not serialize: {json}"
+        );
     }
 
     #[test]
@@ -1661,7 +1782,8 @@ mod tests {
             "payload": { "action": "restart" },
         });
         let done = ChatMessage::AssistantDone {
-            content: "「電源操作（重開機／關機）」會變更這台機器的狀態，請先確認：要執行嗎？".into(),
+            content: "「電源操作（重開機／關機）」會變更這台機器的狀態，請先確認：要執行嗎？"
+                .into(),
             tokens_used: 12,
             conv: None,
             model: None,
@@ -1670,7 +1792,9 @@ mod tests {
         let json = serde_json::to_string(&done).expect("serialize");
         assert!(
             json.contains(r#""artifact":{"payload":{"action":"restart"},"type":"confirm_action"}"#)
-                || json.contains(r#""artifact":{"type":"confirm_action","payload":{"action":"restart"}}"#),
+                || json.contains(
+                    r#""artifact":{"type":"confirm_action","payload":{"action":"restart"}}"#
+                ),
             "artifact must serialize as a plain JSON value on the wire: {json}"
         );
         // The tag itself must never appear on the wire — only WebChat's own
@@ -1682,14 +1806,20 @@ mod tests {
 
     #[test]
     fn sanitize_conv_nonce_keeps_safe_chars() {
-        assert_eq!(sanitize_conv_nonce(Some("c-42_AbZ")).as_deref(), Some("c-42_AbZ"));
+        assert_eq!(
+            sanitize_conv_nonce(Some("c-42_AbZ")).as_deref(),
+            Some("c-42_AbZ")
+        );
     }
 
     #[test]
     fn sanitize_conv_nonce_strips_separators_and_garbage() {
         // `:` / `#` (session-id separators) and other punctuation are removed so
         // a client can never inject extra bucket structure or break the id.
-        assert_eq!(sanitize_conv_nonce(Some("a:b#c/d e")).as_deref(), Some("abcde"));
+        assert_eq!(
+            sanitize_conv_nonce(Some("a:b#c/d e")).as_deref(),
+            Some("abcde")
+        );
     }
 
     #[test]
@@ -1712,12 +1842,22 @@ mod tests {
         // still owned by (prefixed with) the connection's session id — so the
         // resume-ownership guard (`starts_with("{session_id}#")`) accepts them.
         let connection = "webchat:webchat:127.0.0.1:00c7766f";
-        let a = format!("{connection}#conv:{}", sanitize_conv_nonce(Some("A1")).unwrap());
-        let b = format!("{connection}#conv:{}", sanitize_conv_nonce(Some("B2")).unwrap());
+        let a = format!(
+            "{connection}#conv:{}",
+            sanitize_conv_nonce(Some("A1")).unwrap()
+        );
+        let b = format!(
+            "{connection}#conv:{}",
+            sanitize_conv_nonce(Some("B2")).unwrap()
+        );
         assert_ne!(a, b, "distinct conversations → distinct session buckets");
         assert!(a.starts_with(&format!("{connection}#")));
         assert!(b.starts_with(&format!("{connection}#")));
-        assert_eq!(a.split(':').next(), Some("webchat"), "channel prefix preserved");
+        assert_eq!(
+            a.split(':').next(),
+            Some("webchat"),
+            "channel prefix preserved"
+        );
     }
 
     #[test]
@@ -1739,7 +1879,10 @@ mod tests {
         let a = compose_session_id(base, Some("sales-bot"), Some("A1"));
         let b = compose_session_id(base, Some("sales-bot"), Some("B2"));
         assert_ne!(a, b, "distinct conv nonce → distinct session bucket");
-        assert_eq!(a, "webchat:webchat:127.0.0.1:00c7766f#agent:sales-bot#conv:A1");
+        assert_eq!(
+            a,
+            "webchat:webchat:127.0.0.1:00c7766f#agent:sales-bot#conv:A1"
+        );
     }
 
     #[test]
@@ -1758,7 +1901,10 @@ mod tests {
         // segment appended.
         let base = "webchat:x";
         assert_eq!(compose_session_id(base, None, None), "webchat:x");
-        assert_eq!(compose_session_id(base, Some("bot"), None), "webchat:x#agent:bot");
+        assert_eq!(
+            compose_session_id(base, Some("bot"), None),
+            "webchat:x#agent:bot"
+        );
         assert!(!compose_session_id(base, Some("bot"), None).contains("#conv:"));
     }
 
@@ -1774,7 +1920,12 @@ mod tests {
     fn authenticate_rejects_suspended_user() {
         let (jwt, db, _dir) = fixtures();
         let user = db
-            .create_user("bob@example.com", "Bob", "pw-strong-123", UserRole::Employee)
+            .create_user(
+                "bob@example.com",
+                "Bob",
+                "pw-strong-123",
+                UserRole::Employee,
+            )
             .expect("create user");
         // Token is issued while active, then the account is suspended — mirrors
         // an operator disabling a user whose JWT is still unexpired.
@@ -1893,7 +2044,8 @@ mod tests {
         // !agent_access_allowed(..)` short-circuit at the real call site).
         let snap = snapshot(UserRole::Employee, &[]);
         assert!(
-            !resume_needs_acl_check(default_agent, default_agent) || acl_allows_agent(&snap, default_agent),
+            !resume_needs_acl_check(default_agent, default_agent)
+                || acl_allows_agent(&snap, default_agent),
             "default agent session must resume regardless of ACL state"
         );
     }
@@ -1936,7 +2088,12 @@ mod tests {
     fn load_acl_snapshot_reflects_role_and_bindings() {
         let (_jwt, db, _dir) = fixtures();
         let user = db
-            .create_user("carol@example.com", "Carol", "pw-strong-123", UserRole::Employee)
+            .create_user(
+                "carol@example.com",
+                "Carol",
+                "pw-strong-123",
+                UserRole::Employee,
+            )
             .expect("create user");
         db.bind_agent(&user.id, "sales-bot", AccessLevel::Viewer)
             .expect("bind agent");
@@ -1945,6 +2102,42 @@ mod tests {
         assert_eq!(snap.role, UserRole::Employee);
         assert!(snap.bound_agents.contains("sales-bot"));
         assert!(!snap.bound_agents.contains("other-bot"));
+    }
+
+    /// v1.68.0: WebChat admin-gated commands — Admin accounts only; managers,
+    /// employees, unknown ids and public-widget visitors are refused.
+    #[test]
+    fn webchat_command_admin_only_for_active_admin_accounts() {
+        let (_jwt, db, _dir) = fixtures();
+        let admin = db
+            .create_user("ad@example.com", "Ad", "pw-strong-123", UserRole::Admin)
+            .unwrap();
+        let manager = db
+            .create_user("mg@example.com", "Mg", "pw-strong-123", UserRole::Manager)
+            .unwrap();
+        let employee = db
+            .create_user("em@example.com", "Em", "pw-strong-123", UserRole::Employee)
+            .unwrap();
+        assert!(webchat_command_admin(&db, &admin.id));
+        assert!(!webchat_command_admin(&db, &manager.id));
+        assert!(!webchat_command_admin(&db, &employee.id));
+        assert!(!webchat_command_admin(&db, "no-such-user"));
+        assert!(!webchat_command_admin(&db, "widget-visitor:1234"));
+    }
+
+    /// A real widget-authenticated identity is never an admin, even when its
+    /// id would otherwise be looked up.
+    #[test]
+    fn webchat_widget_visitor_is_never_admin() {
+        let (_jwt, db, _dir) = fixtures();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[webchat]\npublic_widget = true\nwidget_key = \"0123456789abcdef\"\n",
+        )
+        .unwrap();
+        let visitor = widget_authenticate(dir.path(), "0123456789abcdef").unwrap();
+        assert!(!webchat_command_admin(&db, &visitor));
     }
 
     #[test]
@@ -1967,12 +2160,18 @@ mod tests {
         let msg = ChatMessage::error("plain error");
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains(r#""message":"plain error""#));
-        assert!(!json.contains("\"code\""), "absent code must not serialize: {json}");
+        assert!(
+            !json.contains("\"code\""),
+            "absent code must not serialize: {json}"
+        );
     }
 
     #[test]
     fn error_coded_helper_carries_code_on_the_wire() {
-        let msg = ChatMessage::error_coded("你沒有與此 AI 員工對話的權限，請聯絡管理員", "agent_forbidden");
+        let msg = ChatMessage::error_coded(
+            "你沒有與此 AI 員工對話的權限，請聯絡管理員",
+            "agent_forbidden",
+        );
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains(r#""code":"agent_forbidden""#), "{json}");
     }

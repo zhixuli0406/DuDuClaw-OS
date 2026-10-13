@@ -156,10 +156,10 @@ pub fn boot_theme(persisted: &OobeState) -> ThemeChoice {
 /// file") rather than rendering an empty pill.
 ///
 /// This is the SAME local-display-only field `OobeSelections::operator_name`
-/// documents: the gateway's `admin@local` account has no profile name of its
+/// documents: the gateway's owner account has no profile name of its
 /// own to ask for, so what OOBE typed is the only name that exists. It is
 /// never used for authentication — `gateway_client::verify_password` sends
-/// only the password.
+/// only the owner's email (asked from the gateway) and the password.
 pub fn boot_operator_name(persisted: &OobeState) -> Option<String> {
     persisted.selections.operator_name.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string)
 }

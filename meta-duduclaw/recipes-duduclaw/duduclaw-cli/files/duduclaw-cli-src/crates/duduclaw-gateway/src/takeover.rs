@@ -91,6 +91,8 @@ pub fn manager_display_name(
         _ => return None,
     }
     let display = crate::decision_notify::open_user_db(home_dir)
+        .ok()
+        .flatten()
         .and_then(|db| {
             db.find_verified_user_id_by_channel(channel, channel_user_id)
                 .ok()
@@ -467,7 +469,7 @@ async fn announce_resume_to_channel(home_dir: &Path, http: &reqwest::Client, rec
         debug!(channel = %rec.channel, "takeover: no bot token; resume notice skipped");
         return;
     };
-    let _ = crate::goal_notify::send_plain_text(
+    let _ = crate::channel_sender::send_plain_text(
         home_dir,
         http,
         &rec.channel,
@@ -554,7 +556,10 @@ mod tests {
 
     fn cfg() -> TakeoverConfig {
         // Behaviour tests opt in explicitly (default is now off).
-        TakeoverConfig { enabled: true, ..TakeoverConfig::default() }
+        TakeoverConfig {
+            enabled: true,
+            ..TakeoverConfig::default()
+        }
     }
 
     /// D5 inventory, kept next to the predicate it documents. Every entry is
@@ -658,20 +663,24 @@ mod tests {
 
         let got = store.get_task(&live.id).await.unwrap().unwrap();
         assert_eq!(got.claimed_by.as_deref(), Some("channel:telegram:555"));
-        assert!(store
-            .get_task(&other_conv.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .claimed_by
-            .is_none());
-        assert!(store
-            .get_task(&finished.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .claimed_by
-            .is_none());
+        assert!(
+            store
+                .get_task(&other_conv.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .claimed_by
+                .is_none()
+        );
+        assert!(
+            store
+                .get_task(&finished.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .claimed_by
+                .is_none()
+        );
         assert!(
             store
                 .get_task(&ordinary.id)

@@ -18,6 +18,8 @@ duduclaw-fork = { workspace = true }
 duduclaw-container = { workspace = true }
 duduclaw-security = { workspace = true }
 duduclaw-odoo = { workspace = true }
+# §13.7 WP-D: read-only SQL data sources (db_sources / db_tables / db_select / db_query).
+duduclaw-db = { workspace = true }
 duduclaw-inference = { workspace = true }
 # G2 Part B: local reverse-proxy reuses the unified provider layer to forward
 # rotator-selected accounts to their real upstream (OpenAI-compat endpoint out).
@@ -46,11 +48,15 @@ iana-time-zone = "0.1"
 cron = { workspace = true }
 uuid = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 # migrate-from: OpenClaw `openclaw.json` is JSON5 (comments + trailing commas);
 # serde_json rejects those, so we parse via json5. Hermes/paperclip use YAML.
 json5 = "0.4"
 serde_yaml = "0.9"
 urlencoding = "2"
+# `ccr-compare-run --base-url`: host/userinfo checks must parse the URL, never
+# prefix-match it. Already in the tree via duduclaw-gateway, so no new crate.
+url = "2"
 dialoguer = { version = "0.11", features = ["password"] }
 console = "0.15"
 dirs = "6"
@@ -64,6 +70,7 @@ minisign-verify = "0.2"
 rand = "0.8"
 rustls = { workspace = true }
 rusqlite = { workspace = true }
+libc = "0.2"
 argon2 = { version = "0.5", features = ["std"] }
 regex = "1"
 subtle = "2"
@@ -75,10 +82,23 @@ async-trait = { workspace = true }
 # WP2.1/WP2.2: expert-pack install/pack (zip read + write). deflate only —
 # matches the gateway's updater dependency; no zip-bomb-prone extra codecs.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# RFC-23 §14.2 (WP-F2): local data-file MCP tools (`csv_read` / `xlsx_read`).
+# `csv` is already a workspace-wide dependency (duduclaw-memory); `calamine`
+# is new — pure Rust, MIT, no C toolchain, reads xlsx/xlsm/xls/ods. Pinned
+# exact: a spreadsheet parser is an attack surface reached by customer files,
+# so the version that was reviewed is the version that ships.
+csv = "1"
+calamine = { version = "=0.36.1", default-features = false, features = ["dates"] }
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
+duduclaw-core = { workspace = true, features = ["installation-policy-test-hooks"] }
+# P2-B: `Provenance::test_only` exists only with this feature (never in a
+# production build).
+duduclaw-memory = { workspace = true, features = ["test-hooks"] }
 tokio = { workspace = true }
+# v1.67.2 namespace tests drive the gateway `memory.forget` RPC as an admin.
+duduclaw-auth = { workspace = true }
 # W20-P1: HTTP integration test support
 tower = { version = "0.5", features = ["util"] }
 http = "1"
@@ -86,6 +106,8 @@ http-body-util = "0.1"
 axum = { workspace = true }
 
 [features]
+# Explicit non-shipping subprocess fault-injection build; never enabled by default.
+workflow-test-checkpoints = []
 # Aligned with `duduclaw-gateway/default = ["dashboard", "desktop"]` so that
 # `cargo build -p duduclaw-cli --release` produces a binary whose web UI
 # routes are mounted (RFC-22 Phase 3 dashboard 404 caveat — without this,
@@ -96,3 +118,11 @@ dashboard = ["duduclaw-gateway/dashboard"]
 # feature (see duduclaw-gateway/src/otel.rs). Default OFF: without it the
 # gateway's `otel::try_init_layer` is a no-op stub and no otel deps compile.
 otel = ["duduclaw-gateway/otel"]
+# `duduclaw compat` — the OS-only app-compatibility subcommand family
+# (`compat list`, `compat windows-vm …`). DuDuClaw OS's shell spawns
+# `duduclaw compat windows-vm app` to launch a Windows RemoteApp, so the code
+# must stay; the platform binary does not compile it. The OS recipe
+# (`meta-duduclaw/recipes-duduclaw/duduclaw-cli/*.bb`) enables it with
+# `--features app-compat`; main-repo CI keeps one `cargo check` on it so the
+# OS-only surface cannot bit-rot.
+app-compat = ["duduclaw-core/app-compat"]

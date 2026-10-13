@@ -1,0 +1,1 @@
+import{r as e}from"./utils-BhomWwm6.js";var t=e(e=>({open:!1,prefill:null,openAssign:t=>e({open:!0,prefill:t??null}),closeAssign:()=>e({open:!1,prefill:null})}));export{t};

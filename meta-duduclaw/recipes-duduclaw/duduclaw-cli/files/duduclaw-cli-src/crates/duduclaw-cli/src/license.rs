@@ -17,18 +17,19 @@
 //! - `activate` accepts the license either as a base64-encoded blob, a
 //!   raw JSON string, or a path to a JSON file. We auto-detect.
 //! - Phone-home is intentionally a stub until the control-plane crate
-//!   lands (see commercial/docs/spec-license-module.md §6).
+//!   lands (see commercial/docs/specs/spec-license-module.md §6).
 
 use std::fs;
 use std::path::PathBuf;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use clap::Subcommand;
 
 use duduclaw_core::error::{DuDuClawError, Result};
 use duduclaw_license::{
-    generate_fingerprint, load_default, save_default, storage, FeatureGate, License,
-    LicenseError, LicenseTier, EMBEDDED_FEATURES_TOML,
+    EMBEDDED_FEATURES_TOML, FeatureGate, License, LicenseError, LicenseTier,
+    fingerprint_candidates, fingerprint_is_hostname_only, generate_fingerprint, load_default,
+    save_default, storage,
 };
 
 #[derive(Subcommand)]
@@ -55,7 +56,7 @@ pub enum LicenseCommands {
     /// and reset the grace-period timer.
     ///
     /// Currently a stub — control-plane lands in Phase 2 of the M1 plan
-    /// (see commercial/docs/spec-license-module.md §6).
+    /// (see commercial/docs/specs/spec-license-module.md §6).
     Refresh,
 
     /// Print the current license to stdout for transfer to another machine.
@@ -76,19 +77,6 @@ pub enum LicenseCommands {
     /// Does not delete any other DuDuClaw data.
     Deactivate,
 
-    /// Redeem a partner (NFR) code for a FREE license and activate it on
-    /// this machine. The free partner path — no payment.
-    Redeem {
-        /// Partner redemption code (e.g. `PARTNER-XXXXXXXX`).
-        code: String,
-        /// Optional partner / customer identifier recorded with the license.
-        #[arg(long)]
-        customer_id: Option<String>,
-        /// Optional email to ALSO receive the License Key by mail.
-        #[arg(long)]
-        email: Option<String>,
-    },
-
     /// Move the installed license to THIS machine (re-sign for the current
     /// fingerprint). Run after copying `license.json` from the old machine.
     Rebind,
@@ -98,7 +86,13 @@ pub enum LicenseCommands {
     Subscriptions,
 
     /// Print this machine's fingerprint, for issuing a new license.
-    Fingerprint,
+    Fingerprint {
+        /// Also list the backward-compatible fingerprints this machine still
+        /// accepts (pre-1.66.1 bindings). The first line is always the strong
+        /// fingerprint, so scripts can keep reading line 1.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 // ── Public entry point ────────────────────────────────────────
@@ -111,19 +105,14 @@ pub async fn run(cmd: LicenseCommands) -> Result<()> {
         LicenseCommands::Export { base64 } => cmd_export(base64).await,
         LicenseCommands::Import { path } => cmd_import(&path).await,
         LicenseCommands::Deactivate => cmd_deactivate().await,
-        LicenseCommands::Redeem {
-            code,
-            customer_id,
-            email,
-        } => cmd_redeem(&code, customer_id, email).await,
         LicenseCommands::Rebind => cmd_rebind().await,
         LicenseCommands::Subscriptions => cmd_subscriptions().await,
-        LicenseCommands::Fingerprint => cmd_fingerprint().await,
+        LicenseCommands::Fingerprint { all } => cmd_fingerprint(all).await,
     }
 }
 
 /// Resolve the control-plane base URL (override with `DUDUCLAW_CONTROL_URL`).
-/// Used by flows without an installed license in scope (e.g. `redeem`).
+/// Used by machine rebinding and subscription status requests.
 fn control_url() -> String {
     resolve_control_url(None)
 }
@@ -156,7 +145,7 @@ fn http_client() -> Result<reqwest::Client> {
 }
 
 /// Extract a signed `License` from a `{ "license": {...} }` control-plane
-/// response and install it locally (shared by redeem + rebind).
+/// response and install it locally after an authorized machine rebind.
 fn install_license_from_envelope(envelope: &serde_json::Value) -> Result<License> {
     let value = envelope
         .get("license")
@@ -167,60 +156,70 @@ fn install_license_from_envelope(envelope: &serde_json::Value) -> Result<License
     Ok(license)
 }
 
+/// How the installed license binds to this machine (v1.66.1).
+///
+/// `Strong` — bound to the current fingerprint. `Legacy` — bound to a value an
+/// older DuDuClaw build computed here (macOS 26 collapsed the MAC component to
+/// a shared placeholder); still accepted, but the next issuance should use the
+/// strong value. `None` — matches nothing on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Binding {
+    Strong,
+    Legacy(String),
+    None,
+}
+
+/// Classify a license against this machine's fingerprint candidates.
+///
+/// Pure over the candidate list so it is unit-testable without touching the
+/// host's network interfaces.
+fn classify_binding(license_fp: &str, candidates: &[String]) -> Binding {
+    match candidates.iter().position(|c| c == license_fp) {
+        Some(0) => Binding::Strong,
+        Some(_) => Binding::Legacy(license_fp.to_string()),
+        None => Binding::None,
+    }
+}
+
+/// Warn (on stderr, so stdout stays machine-readable) when this host could not
+/// produce a hardware-bound fingerprint at all.
+///
+/// Saying so out loud beats letting a weak binding pass for a strong one.
+fn warn_if_hostname_only() {
+    if fingerprint_is_hostname_only() {
+        eprintln!(
+            "⚠️  No hardware identity is readable on this host (no platform UUID, \
+             no usable MAC address),"
+        );
+        eprintln!(
+            "    so this fingerprint binds to the hostname only — it provides no \
+             hardware binding."
+        );
+    }
+}
+
+/// One-line human label for `duduclaw license status`.
+fn binding_label(binding: &Binding) -> &'static str {
+    match binding {
+        Binding::Strong => "strong",
+        Binding::Legacy(_) => "legacy (re-issue recommended)",
+        Binding::None => "none (does not match this machine)",
+    }
+}
+
 /// Read a control-plane error body into a friendly message.
 async fn control_error(resp: reqwest::Response) -> DuDuClawError {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let msg = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
-        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| body.chars().take(200).collect());
     DuDuClawError::License(format!("control-plane returned HTTP {status}: {msg}"))
-}
-
-// ── redeem (partner / free) ───────────────────────────────────
-
-async fn cmd_redeem(
-    code: &str,
-    customer_id: Option<String>,
-    email: Option<String>,
-) -> Result<()> {
-    let fingerprint = generate_fingerprint();
-    let endpoint = format!("{}/v1/partner/redeem", control_url().trim_end_matches('/'));
-    let body = serde_json::json!({
-        "code": code,
-        "machine_fingerprint": fingerprint,
-        "customer_id": customer_id,
-        "email": email,
-    });
-
-    println!("→ Redeeming partner code at {endpoint} ...");
-    let resp = http_client()?
-        .post(&endpoint)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| DuDuClawError::License(format!("control-plane unreachable: {e}")))?;
-
-    if !resp.status().is_success() {
-        return Err(control_error(resp).await);
-    }
-
-    let envelope: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| DuDuClawError::License(format!("parse redeem response: {e}")))?;
-    let license = install_license_from_envelope(&envelope)?;
-
-    println!("✓ Partner license activated (free)");
-    println!("  Tier:     {}", license.tier);
-    println!(
-        "  Expires:  {} ({} days)",
-        license.expires_at,
-        license.days_until_expiry()
-    );
-    println!("  Run `duduclaw license status` to see unlocked modules.");
-    Ok(())
 }
 
 // ── rebind (move to this machine) ─────────────────────────────
@@ -243,6 +242,9 @@ async fn cmd_rebind() -> Result<()> {
         println!("License is already bound to this machine — nothing to rebind.");
         return Ok(());
     }
+    // A legacy-bound license IS still valid here, but rebinding upgrades it to
+    // the strong fingerprint — exactly what we want the operator to do, so we
+    // let it proceed rather than short-circuiting.
 
     let endpoint = format!("{}/v1/license/rebind", control_url().trim_end_matches('/'));
     let body = serde_json::json!({
@@ -333,17 +335,34 @@ async fn cmd_activate(key_input: &str) -> Result<()> {
     // signature here — that happens at gateway startup against the
     // embedded PublicKeyRegistry. A wrong fingerprint here is almost
     // always a user error (issued to a different machine).
-    let current_fp = generate_fingerprint();
-    if !license.is_valid_for_machine(&current_fp) {
-        eprintln!("⚠️  License fingerprint mismatch.");
-        eprintln!("   License is bound to: {}", license.machine_fingerprint);
-        eprintln!("   Current machine:     {current_fp}");
-        eprintln!();
-        eprintln!("   If you intended this license for a different machine, do not activate here.");
-        eprintln!("   If you are migrating, use `duduclaw license export` on the old machine first.");
-        return Err(DuDuClawError::License(
-            "license fingerprint mismatch — refusing to install".into(),
-        ));
+    let candidates = fingerprint_candidates();
+    match classify_binding(&license.machine_fingerprint, &candidates) {
+        Binding::Strong => {}
+        Binding::Legacy(_) => {
+            // v1.66.1: keys issued before the MAC-selection fix still install —
+            // refusing them would brick every license issued on macOS 26.
+            eprintln!(
+                "ℹ️  This license is bound to a legacy fingerprint for this machine \
+                 (pre-1.66.1). It stays valid; re-issue against \
+                 `duduclaw license fingerprint` when convenient."
+            );
+        }
+        Binding::None => {
+            let current_fp = &candidates[0];
+            eprintln!("⚠️  License fingerprint mismatch.");
+            eprintln!("   License is bound to: {}", license.machine_fingerprint);
+            eprintln!("   Current machine:     {current_fp}");
+            eprintln!();
+            eprintln!(
+                "   If you intended this license for a different machine, do not activate here."
+            );
+            eprintln!(
+                "   If you are migrating, use `duduclaw license export` on the old machine first."
+            );
+            return Err(DuDuClawError::License(
+                "license fingerprint mismatch — refusing to install".into(),
+            ));
+        }
     }
 
     if license.is_expired() {
@@ -351,14 +370,17 @@ async fn cmd_activate(key_input: &str) -> Result<()> {
         return Err(DuDuClawError::License("license is expired".into()));
     }
 
-    let path = save_default(&license).map_err(|e| {
-        DuDuClawError::License(format!("failed to save license: {e}"))
-    })?;
+    let path = save_default(&license)
+        .map_err(|e| DuDuClawError::License(format!("failed to save license: {e}")))?;
 
     println!("✓ License activated");
     println!("  Tier:           {}", license.tier);
     println!("  Customer ID:    {}", license.customer_id);
-    println!("  Expires:        {} ({} days)", license.expires_at, license.days_until_expiry());
+    println!(
+        "  Expires:        {} ({} days)",
+        license.expires_at,
+        license.days_until_expiry()
+    );
     println!("  Saved to:       {}", path.display());
 
     Ok(())
@@ -370,19 +392,16 @@ fn parse_license_input(input: &str) -> Result<License> {
     // 1. Path
     let as_path = PathBuf::from(trimmed);
     if as_path.exists() {
-        let json = fs::read_to_string(&as_path).map_err(|e| {
-            DuDuClawError::License(format!("read {}: {e}", as_path.display()))
-        })?;
-        return serde_json::from_str(&json).map_err(|e| {
-            DuDuClawError::License(format!("parse license file: {e}"))
-        });
+        let json = fs::read_to_string(&as_path)
+            .map_err(|e| DuDuClawError::License(format!("read {}: {e}", as_path.display())))?;
+        return serde_json::from_str(&json)
+            .map_err(|e| DuDuClawError::License(format!("parse license file: {e}")));
     }
 
     // 2. Raw JSON
     if trimmed.starts_with('{') {
-        return serde_json::from_str(trimmed).map_err(|e| {
-            DuDuClawError::License(format!("parse license JSON: {e}"))
-        });
+        return serde_json::from_str(trimmed)
+            .map_err(|e| DuDuClawError::License(format!("parse license JSON: {e}")));
     }
 
     // 3. Base64
@@ -421,17 +440,18 @@ fn print_opensource_status() {
     println!("To install a commercial license:");
     println!("  duduclaw license activate <key>");
     println!();
-    println!("To get a license:");
-    println!("  https://duduclaw.dudustudio.monster#pricing");
+    println!("For license inquiries, contact the exclusive distributor:");
+    println!("  https://futurecorp.tw");
 }
 
 fn print_status(license: &License) -> Result<()> {
-    let gate = FeatureGate::from_str(EMBEDDED_FEATURES_TOML).map_err(|e| {
-        DuDuClawError::License(format!("embedded features.toml is broken: {e}"))
-    })?;
+    let gate = FeatureGate::from_str(EMBEDDED_FEATURES_TOML)
+        .map_err(|e| DuDuClawError::License(format!("embedded features.toml is broken: {e}")))?;
 
-    let current_fp = generate_fingerprint();
-    let fp_matches = license.is_valid_for_machine(&current_fp);
+    let candidates = fingerprint_candidates();
+    let current_fp = candidates[0].clone();
+    let binding = classify_binding(&license.machine_fingerprint, &candidates);
+    let fp_matches = binding != Binding::None;
     let expired = license.is_expired();
     let days_until = license.days_until_expiry();
     let phone_home_interval = gate.phone_home_interval_days(license.tier);
@@ -447,7 +467,10 @@ fn print_status(license: &License) -> Result<()> {
     println!("Issued at:        {}", license.issued_at);
     println!("Expires:          {}", license.expires_at);
     if expired {
-        println!("Status:           ⚠️  EXPIRED ({} days overdue)", -days_until);
+        println!(
+            "Status:           ⚠️  EXPIRED ({} days overdue)",
+            -days_until
+        );
     } else if days_until < 14 {
         println!("Status:           ⚠️  Expires in {days_until} days");
     } else {
@@ -457,10 +480,23 @@ fn print_status(license: &License) -> Result<()> {
 
     // Machine binding
     if fp_matches {
-        println!("Machine:          ✓ {current_fp}");
+        println!("Machine:          ✓ {}", license.machine_fingerprint);
+        println!("Fingerprint binding: {}", binding_label(&binding));
+        if let Binding::Legacy(_) = binding {
+            println!(
+                "                  This machine's strong fingerprint is {current_fp} — \
+                 re-issue when convenient."
+            );
+        }
     } else {
-        println!("Machine:          ✗ mismatch (license: {}, current: {current_fp})", license.machine_fingerprint);
+        println!(
+            "Machine:          ✗ mismatch (license: {}, current: {current_fp})",
+            license.machine_fingerprint
+        );
+        println!("Fingerprint binding: {}", binding_label(&binding));
     }
+
+    warn_if_hostname_only();
 
     // Phone-home freshness
     let days_since_ph = license.days_since_phone_home();
@@ -473,7 +509,9 @@ fn print_status(license: &License) -> Result<()> {
             println!(
                 "Phone-home:       ⏳ overdue ({days_since_ph} days; refresh interval = {phone_home_interval}d)"
             );
-            println!("                  Run `duduclaw license refresh` when the control-plane is reachable.");
+            println!(
+                "                  Run `duduclaw license refresh` when the control-plane is reachable."
+            );
         } else {
             println!("Phone-home:       ✓ {days_since_ph} days ago");
         }
@@ -481,19 +519,41 @@ fn print_status(license: &License) -> Result<()> {
         println!("Phone-home:       not required");
     }
 
+    // Two separate lists on purpose (D17, 2026-09): the first two are real
+    // capability gates a code path consults; the rest are things a human
+    // promises to do and nothing in the binary enforces. Printing them in one
+    // undifferentiated block made eight service promises look like feature
+    // switches.
     println!();
     println!("Unlocked commercial modules:");
-    let feature_flags = [
+    let capability_gates = [
         ("premium_templates", "Premium industry SOUL.md templates"),
-        ("industry_evolution_params", "Tuned Evolution / GVU parameters"),
+        (
+            "industry_evolution_params",
+            "Tuned Evolution / GVU parameters",
+        ),
+    ];
+    for (flag, label) in capability_gates {
+        let mark = if gate.check(license.tier, flag) {
+            "✓"
+        } else {
+            "—"
+        };
+        println!("  {mark} {label}");
+    }
+
+    println!();
+    println!("Service commitments (not enforced by the software):");
+    let commitments = [
         ("dashboard_enterprise", "Audit log export + ROI report"),
         ("priority_security_patch", "Immediate security patches"),
         ("private_discord_support", "Private Discord support channel"),
         ("odoo_integration_supported", "Odoo ERP integration (Cloud)"),
-        ("white_label", "White-label / OEM redistribution"),
+        ("redistribution", "Distributor delivery authorization"),
+        ("dedicated_engineer", "Dedicated engineer"),
     ];
-    for (flag, label) in feature_flags {
-        let mark = if gate.check(license.tier, flag) {
+    for (flag, label) in commitments {
+        let mark = if gate.service_commitment(license.tier, flag) {
             "✓"
         } else {
             "—"
@@ -556,10 +616,7 @@ async fn cmd_refresh() -> Result<()> {
 
     let status = response.status();
     if !status.is_success() {
-        let body_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no body>".into());
+        let body_text = response.text().await.unwrap_or_else(|_| "<no body>".into());
         return Err(DuDuClawError::License(format!(
             "control-plane returned HTTP {status}: {body_text}"
         )));
@@ -576,20 +633,14 @@ async fn cmd_refresh() -> Result<()> {
                 DuDuClawError::License("missing 'license' in active response".into())
             })?;
             let new_license: License = serde_json::from_value(new_license_value.clone())
-                .map_err(|e| {
-                    DuDuClawError::License(format!("parse new license: {e}"))
-                })?;
+                .map_err(|e| DuDuClawError::License(format!("parse new license: {e}")))?;
 
-            let saved_to = save_default(&new_license).map_err(|e| {
-                DuDuClawError::License(format!("save new license: {e}"))
-            })?;
+            let saved_to = save_default(&new_license)
+                .map_err(|e| DuDuClawError::License(format!("save new license: {e}")))?;
 
             println!("✓ License refreshed");
             println!("  Tier:           {}", new_license.tier);
-            println!(
-                "  Days remaining: {}",
-                new_license.days_until_expiry()
-            );
+            println!("  Days remaining: {}", new_license.days_until_expiry());
             println!("  Saved to:       {}", saved_to.display());
 
             if let Some(warnings) = envelope.get("warnings").and_then(|v| v.as_array()) {
@@ -661,26 +712,24 @@ async fn cmd_export(as_base64: bool) -> Result<()> {
 // ── import ────────────────────────────────────────────────────
 
 async fn cmd_import(path: &PathBuf) -> Result<()> {
-    let json = fs::read_to_string(path).map_err(|e| {
-        DuDuClawError::License(format!("read {}: {e}", path.display()))
-    })?;
-    let license: License = serde_json::from_str(&json).map_err(|e| {
-        DuDuClawError::License(format!("parse {}: {e}", path.display()))
-    })?;
+    let json = fs::read_to_string(path)
+        .map_err(|e| DuDuClawError::License(format!("read {}: {e}", path.display())))?;
+    let license: License = serde_json::from_str(&json)
+        .map_err(|e| DuDuClawError::License(format!("parse {}: {e}", path.display())))?;
 
-    // Same fingerprint check as activate
-    let current_fp = generate_fingerprint();
-    if !license.is_valid_for_machine(&current_fp) {
+    // Same fingerprint check as activate (legacy bindings included).
+    let candidates = fingerprint_candidates();
+    if classify_binding(&license.machine_fingerprint, &candidates) == Binding::None {
         eprintln!("⚠️  License fingerprint mismatch.");
         eprintln!("   License is bound to: {}", license.machine_fingerprint);
-        eprintln!("   Current machine:     {current_fp}");
+        eprintln!("   Current machine:     {}", candidates[0]);
         return Err(DuDuClawError::License(
             "license fingerprint mismatch".into(),
         ));
     }
 
-    let saved_to = save_default(&license)
-        .map_err(|e| DuDuClawError::License(format!("save: {e}")))?;
+    let saved_to =
+        save_default(&license).map_err(|e| DuDuClawError::License(format!("save: {e}")))?;
 
     println!("✓ License imported");
     println!("  Tier:    {}", license.tier);
@@ -711,7 +760,85 @@ async fn cmd_deactivate() -> Result<()> {
 
 // ── fingerprint ───────────────────────────────────────────────
 
-async fn cmd_fingerprint() -> Result<()> {
-    println!("{}", generate_fingerprint());
+async fn cmd_fingerprint(all: bool) -> Result<()> {
+    // Line 1 is ALWAYS the strong fingerprint — this is the value a customer
+    // reports and a new license is issued against. `--all` appends the
+    // pre-1.66.1 values this machine still accepts, for diagnosing an existing
+    // binding.
+    let candidates = if all {
+        fingerprint_candidates()
+    } else {
+        vec![generate_fingerprint()]
+    };
+    for fp in &candidates {
+        println!("{fp}");
+    }
+    if all && candidates.len() == 1 {
+        eprintln!("(no legacy fingerprints — this machine accepts only the value above)");
+    }
+    warn_if_hostname_only();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidates() -> Vec<String> {
+        vec![
+            "1837a5d96419f6a9d7396c3902882fe8".to_string(), // strong
+            "1743ebb5466bcad6c206e7e42371f45d".to_string(), // legacy placeholder-MAC
+        ]
+    }
+
+    #[test]
+    fn classify_binding_detects_a_strong_binding() {
+        assert_eq!(
+            classify_binding("1837a5d96419f6a9d7396c3902882fe8", &candidates()),
+            Binding::Strong
+        );
+    }
+
+    #[test]
+    fn classify_binding_detects_a_legacy_binding() {
+        // The macOS 26 regression: the installed license is bound to the
+        // placeholder-MAC fingerprint. Still valid — just not strong.
+        let binding = classify_binding("1743ebb5466bcad6c206e7e42371f45d", &candidates());
+        assert_eq!(
+            binding,
+            Binding::Legacy("1743ebb5466bcad6c206e7e42371f45d".to_string())
+        );
+        assert_eq!(binding_label(&binding), "legacy (re-issue recommended)");
+    }
+
+    #[test]
+    fn classify_binding_rejects_another_machine() {
+        let binding = classify_binding("deadbeefdeadbeefdeadbeefdeadbeef", &candidates());
+        assert_eq!(binding, Binding::None);
+        assert_eq!(binding_label(&binding), "none (does not match this machine)");
+    }
+
+    #[test]
+    fn classify_binding_labels_strong_as_strong() {
+        assert_eq!(binding_label(&Binding::Strong), "strong");
+    }
+
+    #[test]
+    fn retired_partner_redemption_command_is_unavailable() {
+        let command = <LicenseCommands as clap::Subcommand>::augment_subcommands(
+            clap::Command::new("license"),
+        );
+        let error = command.try_get_matches_from(["license", "redeem", "PARTNER-TEST"])
+            .expect_err("self-service partner redemption is retired");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn fingerprint_candidates_lead_with_the_strong_value() {
+        // `duduclaw license fingerprint` (no --all) must print exactly
+        // candidates[0]; `--all` prints the same value on line 1.
+        let all = fingerprint_candidates();
+        assert!(!all.is_empty());
+        assert_eq!(all[0], generate_fingerprint());
+    }
 }

@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendType {
-    /// llama.cpp via llama-cpp-2 crate (Metal/CUDA/Vulkan/CPU)
+    /// llama.cpp, formerly in-process via `llama-cpp-2`.
+    ///
+    /// The in-process backend was removed on 2026-09-29
+    /// (`wiki/reports/feature-audit-2026-09-29.md` T1-D3): it was a stub and
+    /// the shipped binary never compiled it. The variant stays so an existing
+    /// `inference.toml` carrying `backend = "llama_cpp"` still deserializes;
+    /// selecting it now yields an explicit `BackendUnavailable` naming
+    /// `openai_compat` as the replacement.
     LlamaCpp,
     /// OpenAI-compatible HTTP server (Exo, llamafile, vLLM, the DuDuClaw OS
     /// llama-server, etc.).
@@ -23,7 +30,11 @@ pub enum BackendType {
     /// serde name.
     #[serde(rename = "openai_compat", alias = "open_ai_compat")]
     OpenAiCompat,
-    /// mistral.rs native Rust engine (future)
+    /// mistral.rs native Rust engine, formerly behind the `mistralrs` feature.
+    ///
+    /// Removed on 2026-09-29 for the same reason as [`Self::LlamaCpp`]
+    /// (`wiki/reports/feature-audit-2026-09-29.md` T3-S5: the feature was
+    /// default-off and no release ever built it); kept as a parseable value.
     MistralRs,
 }
 
@@ -135,24 +146,21 @@ pub struct GenerationParams {
     /// Stop sequences
     #[serde(default)]
     pub stop: Vec<String>,
-    /// Number of GPU layers to offload (-1 = all)
-    #[serde(default = "default_gpu_layers")]
-    pub gpu_layers: i32,
-    /// Context window size
-    #[serde(default = "default_context_size")]
-    pub context_size: u32,
+    // v1.68: `gpu_layers` / `context_size` were removed — only the deleted
+    // in-process llama.cpp backend read them (llamafile has its own copies in
+    // `[llamafile]`). Not `deny_unknown_fields`, so old files still load.
     /// Request per-token logprobs from the backend (OpenAI-compat `logprobs: true`).
     /// Used by the calibrated cascade router for post-hoc confidence. Backends
     /// that cannot return logprobs simply leave `InferenceResponse::mean_logprob`
     /// as `None` (fail-safe).
     #[serde(default)]
     pub capture_logprobs: bool,
-    /// Per-request token logit biases (token id → additive bias), injected by
-    /// the JitRL engine (see [`crate::jitrl`], arXiv:2601.18510). `None`
-    /// (default) leaves request bodies byte-identical to pre-JitRL behavior.
-    /// Backends without a bias surface ignore this field entirely.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logit_bias: Option<std::collections::HashMap<u32, f32>>,
+    /// Request the top two token candidates for UCCI margin uncertainty.
+    #[serde(default)]
+    pub capture_top_logprobs: bool,
+    /// Exclude a reported terminating stop token from UCCI's content-token signal.
+    #[serde(default)]
+    pub ucci_drop_stop_token: bool,
 }
 
 fn default_max_tokens() -> u32 {
@@ -164,12 +172,6 @@ fn default_temperature() -> f32 {
 fn default_top_p() -> f32 {
     0.9
 }
-fn default_gpu_layers() -> i32 {
-    -1
-}
-fn default_context_size() -> u32 {
-    4096
-}
 
 impl Default for GenerationParams {
     fn default() -> Self {
@@ -178,10 +180,9 @@ impl Default for GenerationParams {
             temperature: default_temperature(),
             top_p: default_top_p(),
             stop: Vec::new(),
-            gpu_layers: default_gpu_layers(),
-            context_size: default_context_size(),
             capture_logprobs: false,
-            logit_bias: None,
+            capture_top_logprobs: false,
+            ucci_drop_stop_token: false,
         }
     }
 }
@@ -221,6 +222,10 @@ pub struct InferenceResponse {
     /// server did not return logprobs — post-hoc confidence is then skipped.
     #[serde(default)]
     pub mean_logprob: Option<f32>,
+    /// UCCI token-margin uncertainty from top-2 content-token logprobs.
+    /// None when the backend did not provide a complete top-2 signal.
+    #[serde(default)]
+    pub margin_uncertainty: Option<f64>,
 }
 
 /// Hardware information detected on the system.

@@ -44,7 +44,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -79,9 +79,12 @@ pub fn tool_token_matches(a: &str, b: &str) -> bool {
     tool_base(a).eq_ignore_ascii_case(tool_base(b))
 }
 
-/// True when `tool` is present in `set` under token-anchored matching.
+/// True when `tool` is present in `set`: the shared anchored matcher
+/// (`tool_catalog::tool_entry_matches` — wildcard rules, server-aware), or
+/// the historical case-insensitive base-name match.
 pub fn set_contains_tool(set: &HashSet<String>, tool: &str) -> bool {
-    set.iter().any(|e| tool_token_matches(e, tool))
+    set.iter()
+        .any(|e| duduclaw_core::tool_catalog::tool_entry_matches(e, tool) || tool_token_matches(e, tool))
 }
 
 // ── Grant row ───────────────────────────────────────────────
@@ -777,7 +780,10 @@ mod tests {
             "[capabilities]\nscoped_tools = \"send_message\"\n",
         )
         .unwrap();
-        assert!(scoped_tools(&dir).is_empty(), "non-array ⇒ empty, not error");
+        assert!(
+            scoped_tools(&dir).is_empty(),
+            "non-array ⇒ empty, not error"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
 
         let dir2 = tmp_agent_dir();
@@ -796,8 +802,14 @@ mod tests {
     fn default_direction_grant_ttl_zero_means_default_not_immediate() {
         for (body, why) in [
             ("[capabilities]\ngrant_ttl_secs = 0\n", "0 ⇒ default"),
-            ("[capabilities]\ngrant_ttl_secs = -5\n", "negative ⇒ default"),
-            ("[capabilities]\ngrant_ttl_secs = \"600\"\n", "wrong type ⇒ default"),
+            (
+                "[capabilities]\ngrant_ttl_secs = -5\n",
+                "negative ⇒ default",
+            ),
+            (
+                "[capabilities]\ngrant_ttl_secs = \"600\"\n",
+                "wrong type ⇒ default",
+            ),
             ("", "absent ⇒ default"),
         ] {
             let dir = tmp_agent_dir();

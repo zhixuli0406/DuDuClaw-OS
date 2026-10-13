@@ -3,7 +3,7 @@
 //! (comp/display, gateway system, gateway network) DuDuClaw already exposes
 //! through the dashboard WS RPC and the `mcp_os_ops.rs` MCP tool bridge.
 //! Full design + rejected alternatives:
-//! `commercial/docs/DESIGN-os-self-drive-2026-08.md`.
+//! `commercial/docs/specs/DESIGN-os-self-drive-2026-08.md`.
 //!
 //! This module owns every real implementation; `lib.rs`'s `OsCommands`/
 //! `OsDisplayCommands`/`OsSystemCommands`/`OsNetworkCommands` enums and the
@@ -194,7 +194,10 @@ pub async fn system_ntp_get() -> Result<()> {
 pub async fn system_ntp_set(home_dir: &Path, enabled: bool) -> Result<()> {
     if let Err(msg) = approval::gate(
         home_dir,
-        &format!("agent 要求{} NTP 時間同步", if enabled { "啟用" } else { "停用" }),
+        &format!(
+            "agent 要求{} NTP 時間同步",
+            if enabled { "啟用" } else { "停用" }
+        ),
         "os_system_ntp_set",
     )
     .await

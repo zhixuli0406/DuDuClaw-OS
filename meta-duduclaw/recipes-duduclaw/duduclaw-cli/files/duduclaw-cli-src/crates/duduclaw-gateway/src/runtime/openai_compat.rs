@@ -8,8 +8,8 @@
 
 use async_trait::async_trait;
 use duduclaw_core::truncate_bytes;
-use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -117,6 +117,7 @@ impl AgentRuntime for OpenAiCompatRuntime {
         context: &RuntimeContext,
     ) -> Result<RuntimeResponse, String> {
         // Look up provider config from config.toml accounts, honouring agent's preferred_provider
+        crate::product_policy::require_model(crate::product_policy::load(&context.home_dir)?, &context.model)?;
         let (api_key, base_url, provider_name) = resolve_provider_config(
             &context.home_dir,
             &context.agent_id,
@@ -387,7 +388,7 @@ impl OpenAiCompatRuntime {
             "OpenAiCompatRuntime: MCP tool loop"
         );
 
-        // WP-A5 (design commercial/docs/design-task-forward-model-2026-08-06.md
+        // WP-A5 (design commercial/docs/specs/design-task-forward-model-2026-08-06.md
         // §5.3/§9): use the provenance-tracking variant (policy `Off` by
         // default here, so behavior is otherwise byte-identical to
         // `run_tool_loop`) purely to get `ToolLoopOutcome.tool_calls` — the
@@ -396,29 +397,39 @@ impl OpenAiCompatRuntime {
         // task-local that claude_runner.rs (WP-A4) and codex/gemini (T10)
         // use, so `dispatcher.rs`'s bridging logic doesn't need a
         // runtime-specific branch.
-        // WP-6E: Code Mode Phase 0 measurement gate
-        // (`commercial/docs/DESIGN-code-mode-2026-08.md` §8.1). A pure
-        // observation decorator layered OVER the billing tap — it forwards
-        // every request/response verbatim and only counts rounds, tool-schema
-        // tokens and provider-reported cache reads. This path is beneficiary
-        // #1 of the design's §2 list, so it is the primary measurement site.
-        let probe = crate::tool_loop_probe::ToolLoopProbe::new(&provider);
-        let loop_result = duduclaw_llm::run_tool_loop_with_provenance(
-            &probe,
+        // RFC-23 §13.6: this loop dispatches MCP tools IN PROCESS, so no
+        // `mcp-server` / `mcp-proxy` choke point sees their results. The
+        // interceptor is that choke point for this path. `None` ⇒ redaction
+        // inactive (byte-identical to before). Enabled-but-unbuildable ⇒
+        // drop the tool surface for this turn (§10.2 fail-closed) and degrade
+        // to the plain-messages path — the same fail-safe shape this function
+        // already uses for an unreachable MCP registry, never a leak.
+        let interceptor = match crate::redaction_proxy::try_build_interceptor(
+            &context.home_dir,
+            &context.agent_id,
+            &crate::redaction_proxy::current_session_id(),
+        ) {
+            Ok(i) => i.map(|i| i as std::sync::Arc<dyn duduclaw_llm::ToolInterceptor>),
+            Err(e) => {
+                warn!(
+                    agent = %context.agent_id, error = %e,
+                    "OpenAiCompatRuntime: MCP tool loop disabled — redaction is enabled but \
+                     failed to initialise; degrading to plain messages"
+                );
+                return Ok(None);
+            }
+        };
+
+        let loop_result = duduclaw_llm::run_tool_loop_with_provenance_and_ccr(
+            &provider,
             req,
             &guarded,
             duduclaw_llm::DEFAULT_MAX_TOOL_ITERS,
             duduclaw_llm::ProvenanceConfig::default(),
+            interceptor,
+            crate::ccr_runtime::for_agent(&context.home_dir, &context.agent_id),
         )
         .await;
-        // Recorded BEFORE the `?`: a turn that died mid-loop still measured
-        // real provider rounds, and dropping it would bias the gate toward
-        // short, cheap turns.
-        probe.finish_and_record(
-            &context.agent_id,
-            crate::tool_loop_probe::ProbePath::OpenAiCompat,
-            &context.model,
-        );
         let loop_outcome =
             loop_result.map_err(|e| format!("openai-compat tool loop error: {e}"))?;
         // R1: `LoopToolCall` already carries masked+capped result/input text
@@ -437,11 +448,21 @@ impl OpenAiCompatRuntime {
                 })
                 .collect(),
         );
+        let retained =
+            crate::ccr_runtime::capture_delivery_guards(loop_outcome.ccr_delivery_guards).await;
         let resp = loop_outcome.response;
 
         // A tool-only round is NOT an empty reply — the loop keeps going. Only a
         // loop that terminates with no answer text is an EmptyResponse.
-        let content = classify_final_text(&resp, &context.model)?;
+        let content = if retained {
+            classify_final_text(&resp, &context.model)?
+        } else {
+            tracing::warn!(agent = %context.agent_id, "CCR delivery guard could not be retained");
+            crate::channel_reply::CCR_DELIVERY_REFUSED_TEXT.to_string()
+        };
+        if retained {
+            crate::ccr_runtime::capture_saved_results(loop_outcome.ccr_saved_results);
+        }
         let usage = provider.total();
 
         Ok(Some(RuntimeResponse {
@@ -505,6 +526,15 @@ fn build_tool_chat_request(
     req.messages
         .push(duduclaw_llm::ChatMessage::user(prompt.to_string()));
     req.max_tokens = context.max_tokens;
+    // P1/WP-3: per-call reasoning effort → `reasoning_effort` on the compat
+    // chat/completions body. Clamped against the OpenAI-compat ceiling (the
+    // presets don't agree past low|medium|high). `None` ⇒ the key is absent and
+    // the request is byte-identical to before.
+    req.reasoning_effort = context.effort.map(|e| {
+        e.clamp_for(duduclaw_core::types::RuntimeType::OpenAiCompat)
+            .as_str()
+            .to_string()
+    });
     req
 }
 
@@ -630,6 +660,8 @@ async fn resolve_provider_config(
     _agent_id: &str,
     preferred_provider: Option<&str>,
 ) -> Result<(String, String, String), String> {
+    let policy = crate::product_policy::load(home_dir)?;
+    if let Some(id) = preferred_provider { policy.require_provider(id)?; }
     // 1. If agent specifies a provider, try that first
     if let Some(provider_name) = preferred_provider {
         if let Some(provider) = PROVIDERS.iter().find(|p| p.name == provider_name) {
@@ -649,6 +681,7 @@ async fn resolve_provider_config(
     // preset list today, but now shared with the rest of the workspace
     // instead of independently derived here).
     for provider in PROVIDERS {
+        if policy.require_provider(provider.name).is_err() { continue; }
         if let Some(key) = duduclaw_core::provider_env::resolve_env_key(provider.name) {
             return Ok((
                 key,
@@ -694,7 +727,7 @@ async fn resolve_provider_config(
                     let provider = acc.get("provider").and_then(|p| p.as_str()).unwrap_or("");
                     let base_url = acc.get("base_url").and_then(|u| u.as_str());
 
-                    if !provider.is_empty() {
+                    if !provider.is_empty() && policy.require_provider(provider).is_ok() {
                         let secret_ref = duduclaw_security::secret_ref::SecretRef::from_typed(
                             acc.get("api_key_enc").and_then(|v| v.as_str()),
                             acc.get("api_key").and_then(|v| v.as_str()).unwrap_or(""),
@@ -703,7 +736,9 @@ async fn resolve_provider_config(
                         // (a bare plaintext key, not `_enc` and not a
                         // `secret://` reference) instead of firing on every
                         // encrypted-field-decrypt-failure fallback.
-                        if secret_ref.describe().source == duduclaw_security::secret_ref::SourceKind::Legacy {
+                        if secret_ref.describe().source
+                            == duduclaw_security::secret_ref::SourceKind::Legacy
+                        {
                             tracing::warn!(
                                 provider,
                                 "OpenAI-compat account uses plaintext api_key; \
@@ -750,6 +785,7 @@ impl OpenAiCompatRuntime {
         prompt: &str,
         context: &super::RuntimeContext,
     ) -> Result<super::RuntimeResponse, String> {
+        crate::product_policy::require_model(crate::product_policy::load(&context.home_dir)?, &context.model)?;
         let (api_key, base_url, _provider_name) = resolve_provider_config(
             &context.home_dir,
             &context.agent_id,
@@ -935,7 +971,7 @@ mod tests {
     // ── MCP tool-loop wiring (API-mode tool surface) ────────────────────────
 
     use duduclaw_llm::{
-        run_tool_loop, StopReason, ToolDef, ToolExecutor, ToolOutcome, DEFAULT_MAX_TOOL_ITERS,
+        DEFAULT_MAX_TOOL_ITERS, StopReason, ToolDef, ToolExecutor, ToolOutcome, run_tool_loop,
     };
     use std::sync::Mutex;
 
@@ -951,6 +987,8 @@ mod tests {
             conversation_history: vec![],
             capabilities: None,
             account_pool: vec![],
+            effort: None,
+            allow_cross_family_failover: true,
         }
     }
 
@@ -1418,5 +1456,18 @@ mod tests {
         let total = provider.total();
         assert_eq!(total.input_tokens, 230);
         assert_eq!(total.output_tokens, 28);
+    }
+}
+
+#[cfg(test)]
+mod product_policy_tests {
+    #[tokio::test]
+    async fn explicit_disallowed_provider_refuses_before_credentials_are_resolved() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("config.toml"), "[product]\nprofile='restricted'").unwrap();
+        for id in ["openai"] {
+            let error = super::resolve_provider_config(home.path(), "test", Some(id)).await.unwrap_err();
+            assert!(error.contains("Product profile"), "{error}");
+        }
     }
 }

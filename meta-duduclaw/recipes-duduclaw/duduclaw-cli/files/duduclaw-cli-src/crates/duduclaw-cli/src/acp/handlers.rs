@@ -136,10 +136,30 @@ pub async fn handle_prompt_with_agent(
         None => {
             return vec![SessionUpdate::Error {
                 session_id: session_id.to_string(),
-                message: format!("ACP: unknown target agent '{agent_id}' (no such agent, and no Main-role agent for 'default')"),
+                message: format!(
+                    "ACP: unknown target agent '{agent_id}' (no such agent, and no Main-role agent for 'default')"
+                ),
             }];
         }
     };
+
+    // This path calls the agent directly, not through the task sandbox: say
+    // so (once per agent per process) for a sandbox-enabled employee.
+    let sandboxed =
+        duduclaw_gateway::task_sandbox::sandbox_enabled_in_registry(&registry, &target_agent).await;
+    duduclaw_gateway::task_sandbox::note_not_applied(
+        home_dir,
+        &target_agent,
+        sandboxed,
+        duduclaw_gateway::task_sandbox::HostPath::Acp,
+        duduclaw_gateway::task_sandbox::HostAction::RanOnHost,
+    );
+
+    // The Claude path below runs the `.mcp.json` spawn gate; this process is
+    // not the gateway, so give it the internal MCP key from `config.toml`
+    // when it has none (read-only), or the gate refuses every employee whose
+    // entry carries the key (N6).
+    duduclaw_gateway::mcp_internal_key::adopt_internal_key_for_process(home_dir);
 
     // Execute through the gateway delegation path. The target agent's runtime
     // provider is honoured inside call_claude_for_agent_with_type.

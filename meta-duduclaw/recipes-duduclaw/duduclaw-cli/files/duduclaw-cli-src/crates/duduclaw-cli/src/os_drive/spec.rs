@@ -1,5 +1,5 @@
 //! A7a — machine-readable metadata table backing `duduclaw os commands
-//! --json`. See `commercial/docs/DESIGN-os-self-drive-2026-08.md` §4 for the
+//! --json`. See `commercial/docs/specs/DESIGN-os-self-drive-2026-08.md` §4 for the
 //! schema rationale (why a plain `const` array, not an inventory/macro
 //! registry — 15 commands is small enough that a hand-written table is
 //! easier to review than macro infrastructure, and the lint tests below give
@@ -17,7 +17,7 @@
 //! see the design doc §10 for why a macro/derive approach was rejected for
 //! this small a surface.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// One `duduclaw os <group> <verb>` command's full metadata.
 #[derive(Debug, Clone)]
@@ -282,8 +282,15 @@ pub fn render_commands_table() -> String {
             out.push_str(&format!("[{}]\n", cmd.group));
             last_group = cmd.group;
         }
-        let approval = if cmd.requires_approval { " (requires-approval)" } else { "" };
-        out.push_str(&format!("  {}{}\n    {}\n", cmd.route, approval, cmd.summary));
+        let approval = if cmd.requires_approval {
+            " (requires-approval)"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "  {}{}\n    {}\n",
+            cmd.route, approval, cmd.summary
+        ));
     }
     out
 }
@@ -303,7 +310,11 @@ mod tests {
     // independent tripwire for the metadata side.
     #[test]
     fn command_count_matches_the_designed_surface() {
-        assert_eq!(ALL_COMMANDS.len(), 19, "did you add/remove a verb without updating this table?");
+        assert_eq!(
+            ALL_COMMANDS.len(),
+            19,
+            "did you add/remove a verb without updating this table?"
+        );
     }
 
     #[test]
@@ -337,8 +348,11 @@ mod tests {
             // its route is deliberately just "os <verb>". Every real
             // group/verb command still gets the full "os <group> <verb>"
             // check.
-            let expected =
-                if cmd.group == "meta" { format!("os {}", cmd.verb) } else { format!("os {} {}", cmd.group, cmd.verb) };
+            let expected = if cmd.group == "meta" {
+                format!("os {}", cmd.verb)
+            } else {
+                format!("os {} {}", cmd.group, cmd.verb)
+            };
             assert_eq!(
                 cmd.route, expected,
                 "route must be exactly \"os <group> <verb>\" (or \"os <verb>\" for the meta \
@@ -367,12 +381,26 @@ mod tests {
     #[test]
     fn commands_json_round_trips_through_serde_json() {
         let v = commands_json();
-        let arr = v["commands"].as_array().expect("commands must be a JSON array");
+        let arr = v["commands"]
+            .as_array()
+            .expect("commands must be a JSON array");
         assert_eq!(arr.len(), ALL_COMMANDS.len());
         // Spot-check one entry has every documented field.
         let first = &arr[0];
-        for key in ["route", "group", "verb", "summary", "args", "examples", "hidden", "requires_approval"] {
-            assert!(first.get(key).is_some(), "commands_json entry missing key {key:?}: {first}");
+        for key in [
+            "route",
+            "group",
+            "verb",
+            "summary",
+            "args",
+            "examples",
+            "hidden",
+            "requires_approval",
+        ] {
+            assert!(
+                first.get(key).is_some(),
+                "commands_json entry missing key {key:?}: {first}"
+            );
         }
     }
 
@@ -380,7 +408,11 @@ mod tests {
     fn render_commands_table_never_panics_and_lists_every_visible_route() {
         let text = render_commands_table();
         for cmd in ALL_COMMANDS.iter().filter(|c| !c.hidden) {
-            assert!(text.contains(cmd.route), "table text missing route {}", cmd.route);
+            assert!(
+                text.contains(cmd.route),
+                "table text missing route {}",
+                cmd.route
+            );
         }
     }
 }

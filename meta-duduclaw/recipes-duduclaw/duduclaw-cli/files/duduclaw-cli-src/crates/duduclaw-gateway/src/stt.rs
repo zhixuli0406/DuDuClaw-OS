@@ -175,7 +175,9 @@ pub async fn build_provider_from_config(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(DEFAULT_STT_MODEL)
                 .to_string();
-            Ok(Some(Box::new(OpenAiCompatStt::new(base_url, api_key, model))))
+            Ok(Some(Box::new(OpenAiCompatStt::new(
+                base_url, api_key, model,
+            ))))
         }
         SttProviderKind::Command => {
             let command = voice
@@ -362,7 +364,9 @@ impl SttProvider for CommandStt {
         let ext = filename
             .rsplit('.')
             .next()
-            .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+            .filter(|e| {
+                !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric())
+            })
             .unwrap_or("webm");
         let tmp = std::env::temp_dir().join(format!(
             "duduclaw-stt-{}.{}",
@@ -390,16 +394,16 @@ impl CommandStt {
 
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            tokio::process::Command::new(&prog)
-                .args(&args)
-                .output(),
+            tokio::process::Command::new(&prog).args(&args).output(),
         )
         .await
         .map_err(|_| "STT command timeout (120s)".to_string())?;
 
         let output = output.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                format!("STT command not found: '{prog}'. Check [voice] stt_command in config.toml.")
+                format!(
+                    "STT command not found: '{prog}'. Check [voice] stt_command in config.toml."
+                )
             } else {
                 format!("STT command spawn failed: {e}")
             }
@@ -417,6 +421,56 @@ impl CommandStt {
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
         info!(chars = text.chars().count(), "STT (command): done");
         Ok(text)
+    }
+}
+
+// ── Channel voice messages ──────────────────────────────────────
+
+/// A filename whose extension matches the audio's container (magic bytes),
+/// for providers that infer the format from the name.
+pub fn channel_audio_filename(audio: &[u8]) -> &'static str {
+    if audio.starts_with(b"OggS") {
+        "voice.ogg"
+    } else if audio.starts_with(b"\xff\xfb") || audio.starts_with(b"\xff\xf3") || audio.starts_with(b"ID3") {
+        "voice.mp3"
+    } else if audio.starts_with(b"RIFF") {
+        "voice.wav"
+    } else if audio.starts_with(b"fLaC") {
+        "voice.flac"
+    } else if audio.len() > 8 && &audio[4..8] == b"ftyp" {
+        "voice.m4a"
+    } else {
+        // Telegram voice notes are Opus-in-Ogg; LINE audio is m4a (caught above).
+        "voice.ogg"
+    }
+}
+
+/// Transcribe a voice message received on a channel (Telegram, LINE).
+///
+/// Uses the dashboard's 語音轉文字 settings (`[voice] stt_*`, the same
+/// provider `/api/stt` uses). Only when no STT provider is configured does
+/// it fall back to the legacy path: OpenAI Whisper with env
+/// `OPENAI_API_KEY`. A configured-but-invalid provider is an error, not a
+/// silent fallback. Before v1.68.0 channels always used the env path.
+pub async fn transcribe_channel_audio(
+    home_dir: &Path,
+    audio: &[u8],
+    language: Option<&str>,
+) -> Result<String, String> {
+    match build_provider_from_config(home_dir).await? {
+        Some(provider) => {
+            provider
+                .transcribe(audio, channel_audio_filename(audio), language)
+                .await
+        }
+        None => {
+            duduclaw_inference::whisper::transcribe(
+                audio,
+                language,
+                &duduclaw_inference::whisper::WhisperMode::Api,
+            )
+            .await
+        }
     }
 }
 
@@ -467,13 +521,9 @@ mod tests {
     #[test]
     fn build_command_args_substitutes_placeholder() {
         let (prog, args) =
-            build_command_args("whisper-cli -m model.bin -f {audio} --txt", "/tmp/x.webm")
-                .unwrap();
+            build_command_args("whisper-cli -m model.bin -f {audio} --txt", "/tmp/x.webm").unwrap();
         assert_eq!(prog, "whisper-cli");
-        assert_eq!(
-            args,
-            vec!["-m", "model.bin", "-f", "/tmp/x.webm", "--txt"]
-        );
+        assert_eq!(args, vec!["-m", "model.bin", "-f", "/tmp/x.webm", "--txt"]);
     }
 
     #[test]
@@ -544,7 +594,10 @@ mod tests {
         )
         .unwrap();
         let got = build_provider_from_config(&home).await.unwrap();
-        assert_eq!(got.map(|p| p.name().to_string()), Some("openai_compat".to_string()));
+        assert_eq!(
+            got.map(|p| p.name().to_string()),
+            Some("openai_compat".to_string())
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -568,15 +621,16 @@ mod tests {
         )
         .unwrap();
         let got = build_provider_from_config(&home).await.unwrap();
-        assert_eq!(got.map(|p| p.name().to_string()), Some("command".to_string()));
+        assert_eq!(
+            got.map(|p| p.name().to_string()),
+            Some("command".to_string())
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]
     async fn command_stt_missing_binary_is_clear_error() {
-        let provider = CommandStt::new(
-            "duduclaw-nonexistent-stt-binary-xyz {audio}".to_string(),
-        );
+        let provider = CommandStt::new("duduclaw-nonexistent-stt-binary-xyz {audio}".to_string());
         let err = provider
             .transcribe(b"fake audio bytes", "voice.webm", None)
             .await
@@ -585,5 +639,44 @@ mod tests {
             err.contains("not found"),
             "expected a not-found error, got: {err}"
         );
+    }
+
+    #[test]
+    fn channel_audio_filename_follows_magic_bytes() {
+        assert_eq!(channel_audio_filename(b"OggS...."), "voice.ogg");
+        assert_eq!(channel_audio_filename(b"ID3....."), "voice.mp3");
+        assert_eq!(channel_audio_filename(b"RIFF...."), "voice.wav");
+        assert_eq!(channel_audio_filename(b"fLaC...."), "voice.flac");
+        assert_eq!(channel_audio_filename(b"\0\0\0\x20ftypM4A "), "voice.m4a");
+        assert_eq!(channel_audio_filename(b"??"), "voice.ogg");
+    }
+
+    /// Channel voice uses the dashboard STT provider when one is configured.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn channel_audio_uses_dashboard_stt_provider() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[voice]\nstt_provider = \"command\"\nstt_command = \"cat {audio}\"\n",
+        )
+        .unwrap();
+        let text = transcribe_channel_audio(tmp.path(), b"hello transcript", Some("zh"))
+            .await
+            .unwrap();
+        assert_eq!(text, "hello transcript");
+    }
+
+    /// A configured but broken provider fails instead of falling back.
+    #[tokio::test]
+    async fn channel_audio_misconfigured_provider_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[voice]\nstt_provider = \"command\"\n",
+        )
+        .unwrap();
+        let err = transcribe_channel_audio(tmp.path(), b"x", None).await.unwrap_err();
+        assert!(err.contains("stt_command"), "{err}");
     }
 }

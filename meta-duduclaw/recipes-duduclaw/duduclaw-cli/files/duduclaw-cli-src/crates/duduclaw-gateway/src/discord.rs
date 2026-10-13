@@ -16,12 +16,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use duduclaw_core::truncate_bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
 use crate::channel_format::{self, split_text};
-use crate::channel_reply::{ReplyContext, build_reply_for_agent, build_reply_with_session, set_channel_connected};
+use crate::channel_reply::{
+    ReplyContext, build_guarded_reply_for_agent, build_guarded_reply_with_session,
+    set_channel_connected,
+};
 use crate::channel_settings::keys;
 
 const DISCORD_API: &str = "https://discord.com/api/v10";
@@ -111,8 +114,9 @@ const BOT_INTENTS: u64 = INTENT_GUILDS
 // ── Slash command definitions ───────────────────────────────
 
 fn slash_command_definitions() -> Vec<Value> {
-    // §10.6: user-visible product name honours white-label branding.
-    let product = crate::branding::effective_product_name(&duduclaw_core::platform::duduclaw_home());
+    // Product attribution is fixed across messaging channels.
+    let product =
+        "DuDuClaw".to_string();
     vec![
         json!({
             "name": "ask",
@@ -238,12 +242,26 @@ pub async fn start_discord_bot(
         Ok(resp) => {
             let msg = format!("token invalid (HTTP {})", resp.status());
             warn!("Discord bot {msg}");
-            set_channel_connected(&channel_status, "discord", false, Some(msg), Some(&event_tx)).await;
+            set_channel_connected(
+                &channel_status,
+                "discord",
+                false,
+                Some(msg),
+                Some(&event_tx),
+            )
+            .await;
             return None;
         }
         Err(e) => {
             warn!("Discord connection failed: {e}");
-            set_channel_connected(&channel_status, "discord", false, Some(e.to_string()), Some(&event_tx)).await;
+            set_channel_connected(
+                &channel_status,
+                "discord",
+                false,
+                Some(e.to_string()),
+                Some(&event_tx),
+            )
+            .await;
             return None;
         }
     };
@@ -280,7 +298,8 @@ pub async fn start_discord_bot(
     {
         Ok(resp) => {
             if let Ok(info) = resp.json::<GatewayInfo>().await {
-                info.url.unwrap_or_else(|| "wss://gateway.discord.gg".to_string())
+                info.url
+                    .unwrap_or_else(|| "wss://gateway.discord.gg".to_string())
             } else {
                 "wss://gateway.discord.gg".to_string()
             }
@@ -293,7 +312,17 @@ pub async fn start_discord_bot(
     info!("   ⚠ 請確認 Discord Developer Portal 已啟用 MESSAGE CONTENT Intent");
 
     let handle = tokio::spawn(async move {
-        gateway_loop(token, bot_id, app_id, gateway_url, http, ctx, "discord".to_string(), None).await;
+        gateway_loop(
+            token,
+            bot_id,
+            app_id,
+            gateway_url,
+            http,
+            ctx,
+            "discord".to_string(),
+            None,
+        )
+        .await;
     });
 
     Some(handle)
@@ -314,7 +343,8 @@ pub async fn start_discord_bots(
 
     // Loaded once for the whole bot-start pass (WP-6C) — every per-agent
     // resolve below shares it rather than re-reading config.toml per agent.
-    let sm_cfg = duduclaw_security::secret_manager::SecretManagerConfig::load_from_home(home_dir).await;
+    let sm_cfg =
+        duduclaw_security::secret_manager::SecretManagerConfig::load_from_home(home_dir).await;
 
     // Collect per-agent tokens first so we know whether the global token is
     // the only path or a legacy fallback — this lets us demote a 401 on the
@@ -334,7 +364,9 @@ pub async fn start_discord_bots(
                         &discord.bot_token,
                         home_dir,
                         &sm_cfg,
-                    ).await {
+                    )
+                    .await
+                    {
                         tokens.push((agent.config.agent.name.clone(), token.expose_owned()));
                     }
                 }
@@ -382,7 +414,9 @@ pub async fn start_discord_bots(
     // 2. Per-agent bots from agent configs
     for (agent_name, token) in agent_tokens {
         if seen_tokens.contains(&token) {
-            info!("Discord bot for agent '{agent_name}' shares an already-claimed token — skipping duplicate");
+            info!(
+                "Discord bot for agent '{agent_name}' shares an already-claimed token — skipping duplicate"
+            );
             continue;
         }
         seen_tokens.insert(token.clone());
@@ -455,12 +489,26 @@ async fn spawn_discord_bot(
             } else {
                 warn!("Discord bot [{label}] token invalid (HTTP {status})");
             }
-            set_channel_connected(&channel_status, &label, false, Some("token invalid".into()), Some(&event_tx)).await;
+            set_channel_connected(
+                &channel_status,
+                &label,
+                false,
+                Some("token invalid".into()),
+                Some(&event_tx),
+            )
+            .await;
             return None;
         }
         Err(e) => {
             warn!("Discord [{label}] connection failed: {e}");
-            set_channel_connected(&channel_status, &label, false, Some(e.to_string()), Some(&event_tx)).await;
+            set_channel_connected(
+                &channel_status,
+                &label,
+                false,
+                Some(e.to_string()),
+                Some(&event_tx),
+            )
+            .await;
             return None;
         }
     };
@@ -495,7 +543,8 @@ async fn spawn_discord_bot(
     {
         Ok(resp) => {
             if let Ok(info) = resp.json::<GatewayInfo>().await {
-                info.url.unwrap_or_else(|| "wss://gateway.discord.gg".to_string())
+                info.url
+                    .unwrap_or_else(|| "wss://gateway.discord.gg".to_string())
             } else {
                 "wss://gateway.discord.gg".to_string()
             }
@@ -507,7 +556,17 @@ async fn spawn_discord_bot(
     info!("   Discord [{label}] Gateway: {gateway_url}");
 
     let handle = tokio::spawn(async move {
-        gateway_loop(token, bot_id, app_id, gateway_url, http, ctx, label, agent_name).await;
+        gateway_loop(
+            token,
+            bot_id,
+            app_id,
+            gateway_url,
+            http,
+            ctx,
+            label,
+            agent_name,
+        )
+        .await;
     });
 
     Some(handle)
@@ -536,7 +595,10 @@ async fn register_slash_commands(http: &reqwest::Client, token: &str, app_id: &s
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            warn!("Discord: slash command registration failed ({status}): {}", truncate_bytes(&body, 200));
+            warn!(
+                "Discord: slash command registration failed ({status}): {}",
+                truncate_bytes(&body, 200)
+            );
         }
         Err(e) => {
             warn!("Discord: slash command registration error: {e}");
@@ -546,9 +608,10 @@ async fn register_slash_commands(http: &reqwest::Client, token: &str, app_id: &s
 
 // ── Gateway loop ────────────────────────────────────────────
 
-/// Concurrency limit for message/interaction handlers.
-static HANDLER_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(10));
+// Handler concurrency: `channel_decision_route::DISCORD_PERMITS` — 10 permits
+// for ordinary work as before, plus a separate small pool for decision
+// messages and decision buttons so busy replies cannot starve a confirmation
+// (F4, review M3).
 
 /// Compute the wait time for a token-check 429 fallback (when Discord doesn't
 /// send a `Retry-After` header). Streak `0` is treated as `1` so the first
@@ -632,19 +695,30 @@ async fn gateway_loop(
         // by waiting longer.
         if consecutive_failures > 0 {
             let backoff = std::cmp::min(5u64 << consecutive_failures.min(4), 60);
-            warn!("Discord [{label}] reconnecting in {backoff}s (attempt {consecutive_failures}/{MAX_FAILURES})");
+            warn!(
+                "Discord [{label}] reconnecting in {backoff}s (attempt {consecutive_failures}/{MAX_FAILURES})"
+            );
             tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
         }
 
         // Re-verify token before reconnecting to avoid hammering Discord
         if consecutive_failures >= 2 {
-            match http.get(format!("{DISCORD_API}/users/@me"))
+            match http
+                .get(format!("{DISCORD_API}/users/@me"))
                 .header("Authorization", format!("Bot {token}"))
-                .send().await
+                .send()
+                .await
             {
                 Ok(resp) if resp.status() == reqwest::StatusCode::UNAUTHORIZED => {
                     error!("Discord [{label}] token is invalid (401), stopping bot");
-                    set_channel_connected(&channel_status, &label, false, Some("token invalid — update via Dashboard".into()), Some(&event_tx)).await;
+                    set_channel_connected(
+                        &channel_status,
+                        &label,
+                        false,
+                        Some("token invalid — update via Dashboard".into()),
+                        Some(&event_tx),
+                    )
+                    .await;
                     return;
                 }
                 Ok(resp) if resp.status().as_u16() == 429 => {
@@ -675,8 +749,9 @@ async fn gateway_loop(
                         return;
                     }
 
-                    let backoff = header_secs
-                        .unwrap_or_else(|| token_check_backoff_secs(token_check_rate_limited_streak));
+                    let backoff = header_secs.unwrap_or_else(|| {
+                        token_check_backoff_secs(token_check_rate_limited_streak)
+                    });
                     warn!(
                         "Discord [{label}] rate limited during token check (streak \
                          {token_check_rate_limited_streak}/{MAX_TOKEN_CHECK_RETRIES}), \
@@ -698,7 +773,16 @@ async fn gateway_loop(
 
         if consecutive_failures >= MAX_FAILURES {
             error!("Discord [{label}] {MAX_FAILURES} consecutive failures, stopping bot");
-            set_channel_connected(&channel_status, &label, false, Some(format!("stopped after {MAX_FAILURES} failures — check token")), Some(&event_tx)).await;
+            set_channel_connected(
+                &channel_status,
+                &label,
+                false,
+                Some(format!(
+                    "stopped after {MAX_FAILURES} failures — check token"
+                )),
+                Some(&event_tx),
+            )
+            .await;
             return;
         }
 
@@ -711,27 +795,57 @@ async fn gateway_loop(
         let attempting_resume = session_id.is_some();
         info!(
             "Discord [{label}] Gateway connecting (mode={})...",
-            if attempting_resume { "RESUME" } else { "IDENTIFY" }
+            if attempting_resume {
+                "RESUME"
+            } else {
+                "IDENTIFY"
+            }
         );
-        set_channel_connected(&channel_status, &label, false, Some("connecting".into()), Some(&event_tx)).await;
+        set_channel_connected(
+            &channel_status,
+            &label,
+            false,
+            Some("connecting".into()),
+            Some(&event_tx),
+        )
+        .await;
 
         let ws = match tokio::time::timeout(
             std::time::Duration::from_secs(15),
             tokio_tungstenite::connect_async(&connect_url),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok((ws, resp))) => {
-                info!("Discord Gateway WebSocket connected (HTTP {})", resp.status());
+                info!(
+                    "Discord Gateway WebSocket connected (HTTP {})",
+                    resp.status()
+                );
                 ws
             }
             Ok(Err(e)) => {
                 warn!("Discord [{label}] Gateway connection failed: {e}");
-                set_channel_connected(&channel_status, &label, false, Some(e.to_string()), Some(&event_tx)).await;
+                set_channel_connected(
+                    &channel_status,
+                    &label,
+                    false,
+                    Some(e.to_string()),
+                    Some(&event_tx),
+                )
+                .await;
                 consecutive_failures += 1;
                 continue;
             }
             Err(_) => {
                 warn!("Discord [{label}] Gateway connection timeout (15s)");
-                set_channel_connected(&channel_status, &label, false, Some("Connection timeout".into()), Some(&event_tx)).await;
+                set_channel_connected(
+                    &channel_status,
+                    &label,
+                    false,
+                    Some("Connection timeout".into()),
+                    Some(&event_tx),
+                )
+                .await;
                 consecutive_failures += 1;
                 continue;
             }
@@ -917,11 +1031,18 @@ async fn gateway_loop(
                                             let http = http.clone();
                                             let token = token.clone();
                                             let bot_id = bot_id.clone();
+                                            let message_app_id=app_id.clone();
                                             let ctx = ctx.clone();
                                             let agent = agent_name.clone();
+                                            // The handler takes its own permit: a
+                                            // decision-shaped message only after the
+                                            // sender passed the access check (F5-C).
                                             tokio::spawn(async move {
-                                                let _permit = HANDLER_SEMAPHORE.acquire().await;
-                                                handle_message_create(&d, &bot_id, &http, &token, &ctx, agent.as_deref()).await;
+                                                handle_message_create(
+                                                    &d, &bot_id, &http, &token, &ctx,
+                                                    agent.as_deref(), &message_app_id
+                                                )
+                                                .await;
                                             });
                                         }
                                     }
@@ -933,7 +1054,13 @@ async fn gateway_loop(
                                             let app_id = app_id.clone();
                                             let ctx = ctx.clone();
                                             tokio::spawn(async move {
-                                                let _permit = HANDLER_SEMAPHORE.acquire().await;
+                                                // Decision lane only for a decision
+                                                // button whose presser passed the access
+                                                // check (F5-C, review F4-M1).
+                                                let lane = discord_interaction_lane(&ctx, &app_id, &d).await;
+                                                let _permit = crate::channel_decision_route::current_discord_permits()
+                                                    .acquire(lane)
+                                                    .await;
                                                 handle_interaction(&d, &bot_id, &app_id, &http, &token, &ctx).await;
                                             });
                                         }
@@ -1167,7 +1294,14 @@ async fn gateway_loop(
         } else {
             consecutive_failures += 1;
         }
-        set_channel_connected(&channel_status, &label, false, Some("reconnecting".to_string()), Some(&event_tx)).await;
+        set_channel_connected(
+            &channel_status,
+            &label,
+            false,
+            Some("reconnecting".to_string()),
+            Some(&event_tx),
+        )
+        .await;
     }
 }
 
@@ -1194,9 +1328,15 @@ fn discord_reply_context(data: &Value, bot_id: &str) -> Option<String> {
     let ref_content = referenced["content"].as_str().unwrap_or("").trim();
     let excerpt = if !ref_content.is_empty() {
         ref_content.to_string()
-    } else if referenced["attachments"].as_array().is_some_and(|a| !a.is_empty()) {
+    } else if referenced["attachments"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty())
+    {
         "（附件訊息，無文字）".to_string()
-    } else if referenced["embeds"].as_array().is_some_and(|a| !a.is_empty()) {
+    } else if referenced["embeds"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty())
+    {
         "（嵌入內容訊息，無文字）".to_string()
     } else {
         return None;
@@ -1211,6 +1351,7 @@ async fn handle_message_create(
     token: &str,
     ctx: &Arc<ReplyContext>,
     agent_name: Option<&str>,
+    app_id: &str,
 ) {
     // Ignore messages from the bot itself or other bots
     let author = data.get("author");
@@ -1221,7 +1362,112 @@ async fn handle_message_create(
         return;
     }
 
+    // F5-C (review F4-M1): a decision-shaped message (verb + full request id
+    // after removing this bot's mention) takes no permit until its sender has
+    // passed the channel lookup and access check below, then takes one from
+    // the decision pool and is answered before any attachment is touched.
+    // Everything else takes an ordinary permit first, as before.
     let content = data["content"].as_str().unwrap_or("");
+    let decision_text = strip_bot_mention(content, bot_id);
+    let decision_shaped = crate::channel_decision_route::DiscordLane::for_message(&decision_text)
+        == crate::channel_decision_route::DiscordLane::Decision;
+    let permits = crate::channel_decision_route::current_discord_permits();
+    let mut _permit = if decision_shaped {
+        None
+    } else {
+        permits
+            .acquire(crate::channel_decision_route::DiscordLane::General)
+            .await
+    };
+
+    let channel_id = data["channel_id"].as_str().unwrap_or("");
+    let guild_id = match data.get("guild_id") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(guild)) if !guild.is_empty() => guild.as_str(),
+        _ => return,
+    };
+    let Some(current_channel) =
+        discord_verified_message_identity(http, token, channel_id, guild_id).await
+    else {
+        return;
+    };
+    let current_session_id = &current_channel.session_id;
+    let is_thread = current_channel.is_thread;
+    let decision_context = crate::approval::DecisionContext {
+        channel: "discord".into(),
+        account_id: app_id.into(),
+        conversation_id: channel_id.into(),
+        principal_id: author_id.into(),
+    };
+    // The authoritative lookup precedes the fresh SQL read and all session,
+    // command, attachment and auto-thread mutations for this inbound turn.
+    let Ok(user_access_policy) = crate::decision_notify::read_trusted_channel_access(
+        ctx,
+        &decision_context,
+        crate::decision_notify::DecisionAccessScope {
+            channel_id: (!guild_id.is_empty()).then_some(channel_id),
+            guild_id: (!guild_id.is_empty()).then_some(guild_id),
+            session_id: Some(current_session_id),
+        },
+    )
+    .await
+    else {
+        return;
+    };
+    if user_access_policy
+        .blocked
+        .iter()
+        .any(|id| id == author_id || id == current_session_id)
+    {
+        return;
+    }
+
+    if decision_shaped {
+        let scope = crate::decision_notify::DecisionAccessScope {
+            channel_id: (!guild_id.is_empty()).then_some(channel_id),
+            guild_id: (!guild_id.is_empty()).then_some(guild_id),
+            session_id: Some(current_session_id),
+        };
+        // Full access check (allowlist, pairing, …) before a decision permit:
+        // a refused sender gets the uniform refusal without ever holding one.
+        let outcome = if crate::decision_notify::check_trusted_decision_access(
+            ctx,
+            &decision_context,
+            scope,
+            &decision_text,
+        )
+        .await
+        .is_err()
+        {
+            Err(crate::channel_decision_route::DECISION_REFUSED.to_string())
+        } else {
+            _permit = permits
+                .acquire(crate::channel_decision_route::DiscordLane::Decision)
+                .await;
+            crate::decision_notify::route_trusted_decision_fastlane_with_scope(
+                ctx,
+                &decision_context,
+                &decision_text,
+                scope,
+            )
+            .await
+            .unwrap_or_else(|| Err(crate::channel_decision_route::DECISION_REFUSED.into()))
+        };
+        if let Ok(target) = crate::approval::TrustedReplyTarget::new(
+            decision_context,
+            token.into(),
+            channel_id.into(),
+            None,
+        ) {
+            let ack = outcome.unwrap_or_else(|error| format!("⚠️ {error}"));
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                target.sender(http.clone()).send_text(&ack),
+            )
+            .await;
+        }
+        return;
+    }
 
     // WP1.3: download attachments to disk (agent-Readable absolute paths) so
     // office documents can be parsed by skills, not just linked. Files land in
@@ -1232,19 +1478,38 @@ async fn handle_message_create(
         let attach_base =
             crate::channel_reply::resolve_attachment_base(ctx.as_ref(), agent_name).await;
         for att in arr {
-            let Some(url) = att["url"].as_str() else { continue };
-            let content_type = att["content_type"].as_str().unwrap_or("application/octet-stream");
+            let Some(url) = att["url"].as_str() else {
+                continue;
+            };
+            let content_type = att["content_type"]
+                .as_str()
+                .unwrap_or("application/octet-stream");
             let filename = att["filename"].as_str().unwrap_or("file");
             let mt = crate::media::media_type_from_mime(content_type);
-            match crate::media::download_url(
-                &ctx.http, url, None, crate::media::MAX_FILE_SIZE as usize,
+            #[cfg(test)]
+            attachment_download_probe::record(token);
+            // F5-C (review F4-M1): bounded, so one slow attachment cannot
+            // hold an ordinary permit indefinitely.
+            let download = tokio::time::timeout(
+                DISCORD_ATTACHMENT_TIMEOUT,
+                crate::media::download_url(
+                    &ctx.http,
+                    url,
+                    None,
+                    crate::media::MAX_FILE_SIZE as usize,
+                ),
             )
             .await
+            .unwrap_or_else(|_| Err("attachment download timed out".into()));
+            match download
             {
                 Ok(bytes) => {
-                    match crate::media::save_attachment_in_base(&attach_base, &bytes, filename).await {
+                    match crate::media::save_attachment_in_base(&attach_base, &bytes, filename)
+                        .await
+                    {
                         Ok(path) => {
-                            attachment_lines.push(crate::media::format_attachment_ref(&mt, filename, &path));
+                            attachment_lines
+                                .push(crate::media::format_attachment_ref(&mt, filename, &path));
                         }
                         Err(e) => {
                             warn!("Discord: failed to save attachment {filename}: {e}");
@@ -1264,15 +1529,15 @@ async fn handle_message_create(
         return;
     }
 
-    let channel_id = data["channel_id"].as_str().unwrap_or("");
-    let guild_id = data["guild_id"].as_str().unwrap_or(""); // empty for DMs
     let message_id = data["id"].as_str().unwrap_or("");
 
     // W2-7: cache channel->guild before any filtering below returns early —
     // maximizes the chance the mapping is already known by the time a
     // same-channel `/goal` command or approval fan-out needs it.
     record_channel_guild(&ctx.home_dir, channel_id, guild_id);
-    let author_name = author.and_then(|a| a["username"].as_str()).unwrap_or("someone");
+    let author_name = author
+        .and_then(|a| a["username"].as_str())
+        .unwrap_or("someone");
     let user_id = author_id;
 
     // Check if bot is mentioned
@@ -1292,23 +1557,46 @@ async fn handle_message_create(
 
     let settings = &ctx.channel_settings;
     let scope_id = if guild_id.is_empty() { "dm" } else { guild_id };
+    if settings
+        .refresh_channel_snapshot("discord", scope_id)
+        .await
+        .is_err()
+    {
+        return;
+    }
 
     // ── Mention-only filter ──
     // Per-agent bots default to mention-only in guilds to prevent all bots
     // in the same server from responding to every message.
     let default_mention_only = agent_name.is_some();
-    let mention_only = settings.get_bool("discord", scope_id, keys::MENTION_ONLY, default_mention_only).await;
+    let mention_only = settings
+        .get_bool(
+            "discord",
+            scope_id,
+            keys::MENTION_ONLY,
+            default_mention_only,
+        )
+        .await;
     if mention_only && !guild_id.is_empty() && !bot_mentioned && !replied_to_bot {
         return; // In guild, mention_only enabled, but bot not mentioned → skip
     }
 
-    // ── Guild whitelist (global-scope allowed_guilds) ──
-    if !guild_id.is_empty() && !settings.is_guild_allowed("discord", guild_id).await {
-        return;
-    }
-
-    // ── Channel whitelist ──
-    if !guild_id.is_empty() && !settings.is_channel_allowed("discord", scope_id, channel_id).await {
+    // Normal interaction keeps `/pair` verification and hints. The strict
+    // bound routers above/below remain must-authorized and reread SQL policy.
+    let gate_text = strip_bot_mention(content, bot_id);
+    if let Some(reply) = crate::channel_reply::check_user_access_gate_with_policy(
+        ctx,
+        current_session_id,
+        user_id,
+        &gate_text,
+        &user_access_policy,
+    )
+    .await
+    {
+        if !reply.is_empty() {
+            let _ =
+                send_discord_message(http, token, channel_id, json!({ "content": reply })).await;
+        }
         return;
     }
 
@@ -1337,8 +1625,8 @@ async fn handle_message_create(
                     Ok(m) => m,
                     Err(e) => format!("⚠ {e}"),
                 };
-                let _ = send_discord_message(http, token, channel_id, json!({ "content": ack }))
-                    .await;
+                let _ =
+                    send_discord_message(http, token, channel_id, json!({ "content": ack })).await;
                 return;
             }
         }
@@ -1369,52 +1657,54 @@ async fn handle_message_create(
         return;
     }
 
-    info!("📩 Discord [{author_name}] (guild:{guild_id}): {}", truncate_bytes(&clean_content, 80));
+    info!(
+        "📩 Discord [{author_name}] (guild:{guild_id}): {}",
+        truncate_bytes(&clean_content, 80)
+    );
 
     // ── Auto-thread ──
     // Default to true in guilds so conversations are organized into threads
     let auto_thread_default = !guild_id.is_empty();
-    let auto_thread = settings.get_bool("discord", scope_id, keys::AUTO_THREAD, auto_thread_default).await;
-    // Detect if message is in a thread: Discord threads have channel_type 11 (PUBLIC_THREAD) or 12 (PRIVATE_THREAD)
-    // Note: channel_type is not always present in MESSAGE_CREATE, but the gateway sends it for threads.
-    // Fallback: check if thread metadata exists in the payload, or if the message
-    // carries a `thread_id` / `position` field (present for messages inside threads).
-    let channel_type = data["channel_type"].as_u64().unwrap_or(0);
-    let is_thread = channel_type == 11 || channel_type == 12
-        || data.get("thread").is_some()
-        || data.get("position").is_some();
+    let auto_thread = settings
+        .get_bool("discord", scope_id, keys::AUTO_THREAD, auto_thread_default)
+        .await;
+    if discord_bound_text(clean_content) {
+        if let Some(outcome) = crate::decision_notify::route_trusted_decision_fastlane_with_scope(
+            ctx,
+            &decision_context,
+            clean_content,
+            crate::decision_notify::DecisionAccessScope {
+                channel_id: (!guild_id.is_empty()).then_some(channel_id),
+                guild_id: (!guild_id.is_empty()).then_some(guild_id),
+                session_id: Some(current_session_id),
+            },
+        )
+        .await
+        {
+            if let Ok(target) = crate::approval::TrustedReplyTarget::new(
+                decision_context,
+                token.into(),
+                channel_id.into(),
+                None,
+            ) {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    target
+                        .sender(http.clone())
+                        .send_text(&outcome.unwrap_or_else(|e| format!("⚠️ {e}"))),
+                )
+                .await;
+            }
+            return;
+        }
+    }
 
     // ── Chat commands (/status, /new, /handoff, /undo, /rollback, …) ──
     // Intercepted before the AI pipeline and before auto-thread creation
     // (a command should never spawn a new thread). Mirrors slack.rs.
     if crate::chat_commands::is_command(clean_content) {
         if let Some(cmd) = crate::chat_commands::parse_command(clean_content, None) {
-            let session_id = if is_thread {
-                format!("discord:thread:{channel_id}")
-            } else {
-                format!("discord:{channel_id}")
-            };
-            // Central access gate (pairing / allowlist / blocklist) — same
-            // enforcement the AI path applies; commands must not bypass it.
-            if let Some(gate_reply) = crate::channel_reply::check_user_access_gate(
-                ctx,
-                &session_id,
-                user_id,
-                clean_content,
-            )
-            .await
-            {
-                if !gate_reply.is_empty() {
-                    let _ = send_discord_message(
-                        http,
-                        token,
-                        channel_id,
-                        json!({ "content": gate_reply }),
-                    )
-                    .await;
-                }
-                return; // blocked users are silently ignored (empty reply)
-            }
+            let session_id = current_session_id;
             // Auto-thread mode: session-scoped commands issued in a MAIN
             // channel target `discord:{channel_id}` while the conversations
             // live in `discord:thread:{tid}` — an empty result there is just
@@ -1457,18 +1747,20 @@ async fn handle_message_create(
                 }
             };
             // Real per-channel admin status (fail-closed) — never hardcoded.
-            let is_admin = crate::channel_reply::is_channel_admin(
-                ctx,
-                "discord",
-                &[user_id, &session_id],
-            )
-            .await;
+            let is_admin =
+                crate::channel_reply::is_channel_admin(ctx, "discord", &[user_id, &session_id])
+                    .await;
             let reply = crate::chat_commands::handle_command(
-                &cmd, ctx, &session_id, &agent_id, is_admin, user_id,
+                &cmd,
+                ctx,
+                &session_id,
+                &agent_id,
+                is_admin,
+                user_id,
             )
             .await;
-            let _ = send_discord_message(http, token, channel_id, json!({ "content": reply }))
-                .await;
+            let _ =
+                send_discord_message(http, token, channel_id, json!({ "content": reply })).await;
             return;
         }
     }
@@ -1477,7 +1769,22 @@ async fn handle_message_create(
     let mut created_thread = false;
     let reply_channel_id = if auto_thread && !is_thread && !guild_id.is_empty() {
         // Create a thread from this message
-        match create_thread(http, token, channel_id, message_id, clean_content).await {
+        // 通道→行為「討論串自動封存時間」 (per guild, else global; v1.68.0).
+        let archive_minutes = thread_archive_minutes(
+            &settings
+                .get_with_fallback("discord", scope_id, keys::THREAD_ARCHIVE_MINUTES, "1440")
+                .await,
+        );
+        match create_thread(
+            http,
+            token,
+            channel_id,
+            message_id,
+            clean_content,
+            archive_minutes,
+        )
+        .await
+        {
             Some(thread_id) => {
                 created_thread = true;
                 thread_id
@@ -1487,6 +1794,19 @@ async fn handle_message_create(
     } else {
         channel_id.to_string()
     };
+
+    // A successful server-created thread has a new identity; otherwise the
+    // inbound identity is reused byte-for-byte by the normal dispatch.
+    let session_id = if created_thread {
+        format!("discord:thread:{reply_channel_id}")
+    } else {
+        current_session_id.clone()
+    };
+
+    #[cfg(test)]
+    if ordinary_dispatch_probe::record_if_installed(token, &session_id) {
+        return;
+    }
 
     // ── Typing indicator (RAII guard ensures cleanup on panic/early return) ──
     let typing_guard = {
@@ -1515,29 +1835,14 @@ async fn handle_message_create(
                             break; // Stop after 3 consecutive failures
                         }
                     }
-                    _ => { consecutive_failures = 0; }
+                    _ => {
+                        consecutive_failures = 0;
+                    }
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(8)).await;
             }
         });
         TypingGuard { flag, handle }
-    };
-
-    // ── Build session ID ──
-    // Use `discord:thread:...` whenever the conversation lives inside a thread,
-    // either because the incoming message was already in one (`is_thread`) or
-    // because we just created one (`created_thread`). The previous condition
-    // `auto_thread && !is_thread` only returned `thread:` on the first turn
-    // (when we were *about* to create a thread) — on every follow-up turn the
-    // user typed inside the thread, `is_thread` flipped to true so the session
-    // id silently switched from `discord:thread:{id}` to `discord:{id}` and
-    // context was lost. Also handles the edge case where auto_thread=true but
-    // create_thread() failed (then we want `discord:{channel_id}`, not a
-    // misleading `discord:thread:{channel_id}`).
-    let session_id = if is_thread || created_thread {
-        format!("discord:thread:{reply_channel_id}")
-    } else {
-        format!("discord:{reply_channel_id}")
     };
 
     // ── Progress callback (edit-in-place to avoid flooding) ──
@@ -1550,7 +1855,8 @@ async fn handle_message_create(
             .unwrap_or_else(std::time::Instant::now),
     ));
     // Shared message ID so we can EDIT the same progress message instead of creating new ones
-    let progress_msg_id: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let progress_msg_id: Arc<std::sync::Mutex<Option<String>>> =
+        Arc::new(std::sync::Mutex::new(None));
     let progress_msg_id_cb = progress_msg_id.clone();
     let on_progress: crate::channel_reply::ProgressCallback = Box::new(move |event| {
         let mut last = match last_progress.lock() {
@@ -1610,14 +1916,21 @@ async fn handle_message_create(
     // ── Resolve effective agent ──
     // Per-agent bot binding wins; otherwise a guild-level `/agent` override
     // (AGENT_OVERRIDE, written by the slash command / select menu) applies.
-    let guild_agent_override = if agent_name.is_none() && !guild_id.is_empty() {
-        match settings.get("discord", scope_id, keys::AGENT_OVERRIDE).await {
+    // v1.68.0: the dashboard's 「指定 AI 員工」 writes the `global` scope; it
+    // now applies (to guilds and DMs) wherever no per-guild value is set.
+    let guild_agent_override = if agent_name.is_none() {
+        match settings
+            .get_scoped_or_global("discord", scope_id, keys::AGENT_OVERRIDE)
+            .await
+        {
             Some(name) if !name.is_empty() => {
                 let reg = ctx.registry.read().await;
                 if reg.get(&name).is_some() {
                     Some(name)
                 } else {
-                    warn!("Discord guild {guild_id}: agent_override '{name}' is not a loaded agent — ignoring");
+                    warn!(
+                        "Discord guild {guild_id}: agent_override '{name}' is not a loaded agent — ignoring"
+                    );
                     None
                 }
             }
@@ -1634,15 +1947,56 @@ async fn handle_message_create(
         let reg = ctx.registry.read().await;
         match &effective_agent {
             Some(name) => reg.get(name).map(|a| a.config.agent.display_name.clone()),
-            None => reg.main_agent().map(|a| a.config.agent.display_name.clone()),
+            None => reg
+                .main_agent()
+                .map(|a| a.config.agent.display_name.clone()),
         }
     };
 
-    let reply = if let Some(agent) = &effective_agent {
-        build_reply_for_agent(clean_content, ctx, agent, &session_id, user_id, Some(on_progress)).await
-    } else {
-        build_reply_with_session(clean_content, ctx, &session_id, user_id, Some(on_progress)).await
+    let context = crate::approval::DecisionContext {
+        channel: "discord".into(),
+        account_id: app_id.into(),
+        conversation_id: reply_channel_id.clone(),
+        principal_id: user_id.into(),
     };
+    let target = crate::approval::TrustedReplyTarget::new(
+        context,
+        token.to_string(),
+        reply_channel_id.clone(),
+        None,
+    )
+    .map(|target| {
+        target
+            .with_user_access_policy(user_access_policy)
+            .with_decision_access_scope(crate::decision_notify::DecisionAccessScope {
+                channel_id: (!guild_id.is_empty()).then_some(channel_id),
+                guild_id: (!guild_id.is_empty()).then_some(guild_id),
+                session_id: Some(&session_id),
+            })
+    });
+    let guarded = crate::approval::scope_trusted_reply(target, async {
+        if let Some(agent) = &effective_agent {
+            build_guarded_reply_for_agent(
+                clean_content,
+                ctx,
+                agent,
+                &session_id,
+                user_id,
+                Some(on_progress),
+            )
+            .await
+        } else {
+            build_guarded_reply_with_session(
+                clean_content,
+                ctx,
+                &session_id,
+                user_id,
+                Some(on_progress),
+            )
+            .await
+        }
+    })
+    .await;
 
     // Stop typing (explicit drop; also runs automatically on panic via Drop)
     drop(typing_guard);
@@ -1656,9 +2010,17 @@ async fn handle_message_create(
             user_id: user_id.to_string(),
             http: http.clone(),
         };
-        crate::channel_reply::deliver_documents_for_reply(
-            ctx.as_ref(), effective_agent.as_deref(), reply, &sender,
-        ).await
+        if !guarded.still_valid().await {
+            return;
+        }
+        crate::channel_reply::deliver_documents_for_reply_guarded(
+            ctx.as_ref(),
+            effective_agent.as_deref(),
+            guarded.text.clone(),
+            &sender,
+            Some(&guarded),
+        )
+        .await
     };
 
     // ── Guard: don't send empty replies (Discord rejects empty content) ──
@@ -1669,7 +2031,9 @@ async fn handle_message_create(
 
     // ── Send reply with embed + buttons (respecting per-guild response_mode) ──
     let response_mode = channel_format::ResponseMode::parse(
-        &settings.get_with_fallback("discord", scope_id, keys::RESPONSE_MODE, "auto").await,
+        &settings
+            .get_with_fallback("discord", scope_id, keys::RESPONSE_MODE, "auto")
+            .await,
     );
     let mut payloads = channel_format::to_discord_messages_mode(
         &reply,
@@ -1685,11 +2049,14 @@ async fn handle_message_create(
     //    (can happen when thread detection missed or gateway state is stale)
     if !created_thread && reply_channel_id == channel_id {
         if let Some(obj) = payloads.first_mut().and_then(|p| p.as_object_mut()) {
-            obj.insert("message_reference".to_string(), json!({
-                "message_id": message_id,
-                "channel_id": channel_id,
-                "fail_if_not_exists": false,
-            }));
+            obj.insert(
+                "message_reference".to_string(),
+                json!({
+                    "message_id": message_id,
+                    "channel_id": channel_id,
+                    "fail_if_not_exists": false,
+                }),
+            );
         }
     }
 
@@ -1730,6 +2097,9 @@ async fn handle_message_create(
 
     // ── Send every message (long replies span several; nothing is dropped) ──
     for payload in payloads {
+        if !guarded.still_valid().await {
+            return;
+        }
         if let Err(e) = send_discord_message(http, token, &reply_channel_id, payload).await {
             warn!(
                 channel_id = %e.channel_id,
@@ -1783,7 +2153,9 @@ async fn handle_message_create(
                         let mid = mid.to_string();
                         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                         let _ = guide_http
-                            .delete(format!("{DISCORD_API}/channels/{guide_channel}/messages/{mid}"))
+                            .delete(format!(
+                                "{DISCORD_API}/channels/{guide_channel}/messages/{mid}"
+                            ))
                             .header("Authorization", format!("Bot {guide_token}"))
                             .send()
                             .await;
@@ -1803,15 +2175,26 @@ fn strip_bot_mention(text: &str, bot_id: &str) -> String {
 }
 
 /// Create a thread from a message. Returns the thread channel_id.
+/// Discord's allowed `auto_archive_duration` values (minutes). Anything
+/// else (unset, malformed) is the 24 h default.
+fn thread_archive_minutes(raw: &str) -> u32 {
+    match raw.trim().parse::<u32>() {
+        Ok(m @ (60 | 1440 | 4320 | 10080)) => m,
+        _ => 1440,
+    }
+}
+
 async fn create_thread(
     http: &reqwest::Client,
     token: &str,
     channel_id: &str,
     message_id: &str,
     content: &str,
+    archive_minutes: u32,
 ) -> Option<String> {
     // Thread name: first 97 chars, filter control characters (safe for CJK multi-byte)
-    let name: String = content.chars()
+    let name: String = content
+        .chars()
         .filter(|c| !c.is_control())
         .take(97)
         .collect();
@@ -1821,12 +2204,15 @@ async fn create_thread(
         name
     };
 
+    let url = format!("{DISCORD_API}/channels/{channel_id}/messages/{message_id}/threads");
+    #[cfg(test)]
+    let url = crate::test_channel_provider::url(token, &url);
     let resp = http
-        .post(format!("{DISCORD_API}/channels/{channel_id}/messages/{message_id}/threads"))
+        .post(url)
         .header("Authorization", format!("Bot {token}"))
         .json(&json!({
             "name": name,
-            "auto_archive_duration": 1440 // 24 hours
+            "auto_archive_duration": archive_minutes
         }))
         .send()
         .await
@@ -1835,7 +2221,10 @@ async fn create_thread(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        warn!("Discord: failed to create thread ({status}): {}", truncate_bytes(&body, 200));
+        warn!(
+            "Discord: failed to create thread ({status}): {}",
+            truncate_bytes(&body, 200)
+        );
         return None;
     }
 
@@ -1866,7 +2255,12 @@ impl std::fmt::Display for DiscordSendError {
 
 /// Send a message to a Discord channel, handling 2000 char limit.
 /// Returns `Ok(())` on success, or `Err(DiscordSendError)` on the first failure.
-async fn send_discord_message(http: &reqwest::Client, token: &str, channel_id: &str, payload: Value) -> Result<(), DiscordSendError> {
+async fn send_discord_message(
+    http: &reqwest::Client,
+    token: &str,
+    channel_id: &str,
+    payload: Value,
+) -> Result<(), DiscordSendError> {
     // Check if the payload has plain content that needs splitting
     if let Some(content) = payload["content"].as_str() {
         if content.len() > channel_format::limits::DISCORD_MESSAGE {
@@ -1882,13 +2276,21 @@ async fn send_discord_message(http: &reqwest::Client, token: &str, channel_id: &
     send_raw(http, token, channel_id, &payload).await
 }
 
-async fn send_raw(http: &reqwest::Client, token: &str, channel_id: &str, payload: &Value) -> Result<(), DiscordSendError> {
+async fn send_raw(
+    http: &reqwest::Client,
+    token: &str,
+    channel_id: &str,
+    payload: &Value,
+) -> Result<(), DiscordSendError> {
     // Components (buttons/selects) are sent as-is — `handle_component_interaction`
     // handles the resulting INTERACTION_CREATE (type 3) callbacks.
     let cleaned = payload.clone();
 
+    let url = format!("{DISCORD_API}/channels/{channel_id}/messages");
+    #[cfg(test)]
+    let url = crate::test_channel_provider::url(token, &url);
     match http
-        .post(format!("{DISCORD_API}/channels/{channel_id}/messages"))
+        .post(url)
         .header("Authorization", format!("Bot {token}"))
         .json(&cleaned)
         .send()
@@ -1904,7 +2306,9 @@ async fn send_raw(http: &reqwest::Client, token: &str, channel_id: &str, payload
             // stale (e.g. thread detection missed), or during the first message
             // after a reconnect when channel state hasn't fully propagated.
             if status.as_u16() == 400 && detail.contains("REPLIES_CANNOT_REFERENCE_OTHER_CHANNEL") {
-                warn!("Discord: cross-channel message_reference detected — retrying without reference");
+                warn!(
+                    "Discord: cross-channel message_reference detected — retrying without reference"
+                );
                 let mut fallback = cleaned.clone();
                 if let Some(obj) = fallback.as_object_mut() {
                     obj.remove("message_reference");
@@ -1978,15 +2382,174 @@ async fn handle_interaction(
     match interaction_type {
         // Application Command (slash command)
         2 => {
-            handle_slash_command(data, interaction_id, interaction_token, bot_id, app_id, http, token, ctx).await;
+            handle_slash_command(
+                data,
+                interaction_id,
+                interaction_token,
+                bot_id,
+                app_id,
+                http,
+                token,
+                ctx,
+            )
+            .await;
         }
         // Message Component (button = component type 2, select menu = type 3)
         3 => {
-            handle_component_interaction(data, interaction_id, interaction_token, app_id, http, ctx).await;
+            handle_component_interaction(
+                data,
+                interaction_id,
+                interaction_token,
+                app_id,
+                http,
+                ctx,
+            )
+            .await;
         }
         _ => {
             debug!("Discord: unhandled interaction type {interaction_type}");
         }
+    }
+}
+
+/// The official channel types share one classification across decision lanes.
+fn discord_thread_kind(channel_type: u64) -> Option<bool> {
+    match channel_type {
+        10 | 11 | 12 => Some(true),
+        0 | 1 | 2 | 3 | 4 | 5 | 13 | 14 | 15 | 16 => Some(false),
+        _ => None,
+    }
+}
+/// Upper bound on one attachment download for an ordinary message (F5-C).
+const DISCORD_ATTACHMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Lane for an INTERACTION_CREATE: the decision pool only for a decision
+/// button whose presser passes the channel access check, with the same
+/// identity and scope the decision router uses (F5-C, review F4-M1). Any
+/// other interaction, or a refused presser, waits for an ordinary permit and
+/// is then refused by the router itself.
+async fn discord_interaction_lane(
+    ctx: &Arc<ReplyContext>,
+    app_id: &str,
+    data: &Value,
+) -> crate::channel_decision_route::DiscordLane {
+    use crate::channel_decision_route::DiscordLane;
+    if DiscordLane::for_interaction(data) != DiscordLane::Decision {
+        return DiscordLane::General;
+    }
+    let presser = data["user"]["id"]
+        .as_str()
+        .or_else(|| data["member"]["user"]["id"].as_str())
+        .unwrap_or("");
+    let context = crate::approval::DecisionContext {
+        channel: "discord".into(),
+        account_id: app_id.into(),
+        conversation_id: data["channel_id"].as_str().unwrap_or("").into(),
+        principal_id: presser.into(),
+    };
+    let session = discord_component_session(data);
+    let scope = crate::decision_notify::DecisionAccessScope {
+        channel_id: data["guild_id"]
+            .as_str()
+            .and_then(|_| data["channel_id"].as_str()),
+        guild_id: data["guild_id"].as_str(),
+        session_id: Some(&session),
+    };
+    match crate::decision_notify::check_trusted_decision_access(ctx, &context, scope, "").await {
+        Ok(()) => DiscordLane::Decision,
+        Err(_) => DiscordLane::General,
+    }
+}
+
+/// Counts attachment downloads per bot token, so tests can prove a decision
+/// message never downloads one.
+#[cfg(test)]
+pub(crate) mod attachment_download_probe {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    fn counts() -> &'static Mutex<HashMap<String, usize>> {
+        static COUNTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+        COUNTS.get_or_init(Default::default)
+    }
+    pub(crate) fn record(token: &str) {
+        *counts().lock().unwrap().entry(token.into()).or_default() += 1;
+    }
+    pub(crate) fn count(token: &str) -> usize {
+        counts().lock().unwrap().get(token).copied().unwrap_or(0)
+    }
+}
+
+fn discord_bound_text(text: &str) -> bool {
+    crate::channel_decision_route::is_strict_decision(text)
+}
+struct DiscordCurrentChannel {
+    session_id: String,
+    is_thread: bool,
+}
+async fn discord_verified_message_identity(
+    http: &reqwest::Client,
+    token: &str,
+    channel_id: &str,
+    guild_id: &str,
+) -> Option<DiscordCurrentChannel> {
+    if channel_id.is_empty() {
+        return None;
+    }
+    // Official absence of guild_id identifies a DM in the authenticated
+    // gateway envelope; it is not a client-supplied bypass flag.
+    if guild_id.is_empty() {
+        return Some(DiscordCurrentChannel {
+            session_id: format!("discord:{channel_id}"),
+            is_thread: false,
+        });
+    }
+    let url = format!("{DISCORD_API}/channels/{channel_id}");
+    #[cfg(test)]
+    let url = crate::test_channel_provider::url(token, &url);
+    let response = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let response = http
+            .get(url)
+            .header("Authorization", format!("Bot {token}"))
+            .send()
+            .await?;
+        response.error_for_status()?.json::<Value>().await
+    })
+    .await;
+    let Ok(Ok(channel)) = response else {
+        return None;
+    };
+    if channel["id"].as_str() != Some(channel_id) || channel["guild_id"].as_str() != Some(guild_id)
+    {
+        return None;
+    }
+    let is_thread = discord_thread_kind(channel["type"].as_u64()?)?;
+    Some(DiscordCurrentChannel {
+        session_id: if is_thread {
+            format!("discord:thread:{channel_id}")
+        } else {
+            format!("discord:{channel_id}")
+        },
+        is_thread,
+    })
+}
+
+/// Resolve only platform-provided channel metadata; missing type must never
+/// turn a thread into a base-channel allowlist subject.
+fn discord_component_session(data: &Value) -> String {
+    let channel_id = data["channel_id"].as_str().unwrap_or("");
+    let channel = &data["channel"];
+    if channel_id.is_empty()
+        || channel["id"].as_str() != Some(channel_id)
+        || channel["guild_id"]
+            .as_str()
+            .is_some_and(|guild| Some(guild) != data["guild_id"].as_str())
+    {
+        return String::new();
+    }
+    match channel["type"].as_u64().and_then(discord_thread_kind) {
+        Some(true) => format!("discord:thread:{channel_id}"),
+        Some(false) => format!("discord:{channel_id}"),
+        _ => String::new(),
     }
 }
 
@@ -2060,7 +2623,24 @@ async fn handle_component_interaction(
         let outcome = if discord_uid.is_empty() {
             Some(Err("無法識別點擊者身分".to_string()))
         } else {
-            crate::decision_notify::route_press(&ctx.home_dir, "discord", discord_uid, custom_id).await
+            crate::decision_notify::route_verified_bound_press(
+                ctx,
+                &crate::approval::DecisionContext {
+                    channel: "discord".into(),
+                    account_id: app_id.into(),
+                    conversation_id: data["channel_id"].as_str().unwrap_or("").into(),
+                    principal_id: discord_uid.into(),
+                },
+                custom_id,
+                crate::decision_notify::DecisionAccessScope {
+                    channel_id: data["guild_id"]
+                        .as_str()
+                        .and_then(|_| data["channel_id"].as_str()),
+                    guild_id: data["guild_id"].as_str(),
+                    session_id: Some(&discord_component_session(data)),
+                },
+            )
+            .await
         };
         match outcome {
             // Decision landed → light ephemeral ack. The persistent card
@@ -2070,20 +2650,38 @@ async fn handle_component_interaction(
             // interaction's 3-second/15-minute response window (see
             // `decision_card::collapse_all`).
             Some(Ok(m)) => {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral(m))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral(m)),
+                )
+                .await;
             }
             // Unauthorized / already settled → ephemeral note; the message
             // (and its buttons) stays for whoever IS allowed to act.
             Some(Err(m)) => {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral(format!("⚠️ {m}")))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral(format!("⚠️ {m}"))),
+                )
+                .await;
             }
             // `parse` said yes and `route_press` said no — impossible unless
             // the two disagree; refuse rather than silently ignoring.
             None => {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral("⚠️ 無效的決定動作".to_string()))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral("⚠️ 無效的決定動作".to_string())),
+                )
+                .await;
             }
         }
         return;
@@ -2101,38 +2699,76 @@ async fn handle_component_interaction(
                 Ok(()) => "✅ 已開啟新的對話".to_string(),
                 Err(e) => format!("⚠️ 清除工作階段失敗：{e}"),
             };
-            send_interaction_response(http, interaction_id, interaction_token, 4, Some(ephemeral(msg))).await;
+            send_interaction_response(
+                http,
+                interaction_id,
+                interaction_token,
+                4,
+                Some(ephemeral(msg)),
+            )
+            .await;
         }
         "agent_menu" => {
             let agents: Vec<String> = {
                 let reg = ctx.registry.read().await;
-                reg.list().iter().map(|a| a.config.agent.name.clone()).collect()
+                reg.list()
+                    .iter()
+                    .map(|a| a.config.agent.name.clone())
+                    .collect()
             };
             if agents.is_empty() {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral("沒有可切換的 Agent".to_string()))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral("沒有可切換的 Agent".to_string())),
+                )
+                .await;
                 return;
             }
             let menu = channel_format::discord_agent_select_menu(&agents);
-            send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({
-                "content": "選擇此伺服器要使用的 Agent（需要「管理伺服器」權限）：",
-                "components": [menu],
-                "flags": 64
-            }))).await;
+            send_interaction_response(
+                http,
+                interaction_id,
+                interaction_token,
+                4,
+                Some(json!({
+                    "content": "選擇此伺服器要使用的 Agent（需要「管理伺服器」權限）：",
+                    "components": [menu],
+                    "flags": 64
+                })),
+            )
+            .await;
         }
         "agent_select" => {
-            let selected = cdata["values"].as_array()
+            let selected = cdata["values"]
+                .as_array()
                 .and_then(|v| v.first())
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if guild_id.is_empty() {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral("❌ 切換 Agent 只能在伺服器中使用".to_string()))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral("❌ 切換 Agent 只能在伺服器中使用".to_string())),
+                )
+                .await;
                 return;
             }
             if !has_manage_guild_permission(data) {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral("❌ 需要「管理伺服器」權限才能切換 Agent".to_string()))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral(
+                        "❌ 需要「管理伺服器」權限才能切換 Agent".to_string(),
+                    )),
+                )
+                .await;
                 return;
             }
             let known = {
@@ -2140,23 +2776,52 @@ async fn handle_component_interaction(
                 reg.get(selected).is_some()
             };
             if !known {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(ephemeral(format!("❌ 找不到 Agent `{selected}`")))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(ephemeral(format!("❌ 找不到 Agent `{selected}`"))),
+                )
+                .await;
                 return;
             }
-            let _ = ctx.channel_settings.set("discord", guild_id, keys::AGENT_OVERRIDE, selected).await;
-            send_interaction_response(http, interaction_id, interaction_token, 4,
-                Some(ephemeral(format!("✅ 此伺服器已切換至 Agent：**{selected}**")))).await;
+            let _ = ctx
+                .channel_settings
+                .set("discord", guild_id, keys::AGENT_OVERRIDE, selected)
+                .await;
+            send_interaction_response(
+                http,
+                interaction_id,
+                interaction_token,
+                4,
+                Some(ephemeral(format!(
+                    "✅ 此伺服器已切換至 Agent：**{selected}**"
+                ))),
+            )
+            .await;
         }
         // Legacy button on messages sent before v1.36 (Discord replies have
         // no voice mode) — acknowledge honestly instead of silently dropping.
         "voice_toggle" => {
-            send_interaction_response(http, interaction_id, interaction_token, 4,
-                Some(ephemeral("ℹ️ Discord 尚不支援語音回覆模式".to_string()))).await;
+            send_interaction_response(
+                http,
+                interaction_id,
+                interaction_token,
+                4,
+                Some(ephemeral("ℹ️ Discord 尚不支援語音回覆模式".to_string())),
+            )
+            .await;
         }
         _ => {
-            send_interaction_response(http, interaction_id, interaction_token, 4,
-                Some(ephemeral("未知的按鈕動作".to_string()))).await;
+            send_interaction_response(
+                http,
+                interaction_id,
+                interaction_token,
+                4,
+                Some(ephemeral("未知的按鈕動作".to_string())),
+            )
+            .await;
         }
     }
 }
@@ -2188,19 +2853,27 @@ async fn handle_slash_command(
     let cmd_name = cmd_data["name"].as_str().unwrap_or("");
     let guild_id = data["guild_id"].as_str().unwrap_or("");
     let channel_id = data["channel_id"].as_str().unwrap_or("");
-    let user = data.get("member")
+    let user = data
+        .get("member")
         .and_then(|m| m.get("user"))
         .or_else(|| data.get("user"));
     let user_id = user.and_then(|u| u["id"].as_str()).unwrap_or("unknown");
-    let username = user.and_then(|u| u["username"].as_str()).unwrap_or("someone");
+    let username = user
+        .and_then(|u| u["username"].as_str())
+        .unwrap_or("someone");
 
     info!("Discord /{cmd_name} from [{username}] guild:{guild_id}");
 
     match cmd_name {
         "ask" => {
             // Guild whitelist applies to slash commands too.
-            if !guild_id.is_empty() && !ctx.channel_settings.is_guild_allowed("discord", guild_id).await {
-                let product = crate::branding::effective_product_name(&duduclaw_core::platform::duduclaw_home());
+            if !guild_id.is_empty()
+                && !ctx
+                    .channel_settings
+                    .is_guild_allowed("discord", guild_id)
+                    .await
+            {
+                let product = "DuDuClaw".to_string();
                 send_interaction_response(http, interaction_id, interaction_token, 4,
                     Some(json!({"content": format!("❌ 此伺服器未被授權使用 {product}"), "flags": 64}))).await;
                 return;
@@ -2218,48 +2891,69 @@ async fn handle_slash_command(
             // Honour the guild-level agent override (written by /agent or the
             // Switch Agent select menu).
             let scope = if guild_id.is_empty() { "dm" } else { guild_id };
-            let agent_override = match ctx.channel_settings.get("discord", scope, keys::AGENT_OVERRIDE).await {
+            let agent_override = match ctx
+                .channel_settings
+                .get("discord", scope, keys::AGENT_OVERRIDE)
+                .await
+            {
                 Some(name) if !name.is_empty() => {
                     let reg = ctx.registry.read().await;
-                    if reg.get(&name).is_some() { Some(name) } else { None }
+                    if reg.get(&name).is_some() {
+                        Some(name)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
 
             let session_id = format!("discord:{channel_id}");
-            let reply = if let Some(agent) = &agent_override {
-                build_reply_for_agent(prompt, ctx, agent, &session_id, user_id, None).await
+            let guarded = if let Some(agent) = &agent_override {
+                build_guarded_reply_for_agent(prompt, ctx, agent, &session_id, user_id, None).await
             } else {
-                build_reply_with_session(prompt, ctx, &session_id, user_id, None).await
+                build_guarded_reply_with_session(prompt, ctx, &session_id, user_id, None).await
             };
 
             let agent_name = {
                 let reg = ctx.registry.read().await;
                 match &agent_override {
                     Some(n) => reg.get(n).map(|a| a.config.agent.display_name.clone()),
-                    None => reg.main_agent().map(|a| a.config.agent.display_name.clone()),
+                    None => reg
+                        .main_agent()
+                        .map(|a| a.config.agent.display_name.clone()),
                 }
             };
 
-            let payload = channel_format::to_discord_message(&reply, agent_name.as_deref(), false);
-            edit_interaction_response(http, app_id, interaction_token, &payload).await;
+            let payload =
+                channel_format::to_discord_message(&guarded.text, agent_name.as_deref(), false);
+            if guarded.still_valid().await {
+                edit_interaction_response(http, app_id, interaction_token, &payload).await;
+            }
         }
 
         "status" => {
             let agent_info = {
                 let reg = ctx.registry.read().await;
-                reg.main_agent().map(|a| {
-                    format!("**Agent**: {} ({})\n**Model**: {}",
-                        a.config.agent.display_name,
-                        a.config.agent.name,
-                        a.config.model.preferred)
-                }).unwrap_or_else(|| "No agent configured".to_string())
+                reg.main_agent()
+                    .map(|a| {
+                        format!(
+                            "**Agent**: {} ({})\n**Model**: {}",
+                            a.config.agent.display_name,
+                            a.config.agent.name,
+                            a.config.model.preferred
+                        )
+                    })
+                    .unwrap_or_else(|| "No agent configured".to_string())
             };
 
             let settings = &ctx.channel_settings;
             let scope = if guild_id.is_empty() { "dm" } else { guild_id };
-            let mention_only = settings.get_bool("discord", scope, keys::MENTION_ONLY, false).await;
-            let auto_thread = settings.get_bool("discord", scope, keys::AUTO_THREAD, false).await;
+            let mention_only = settings
+                .get_bool("discord", scope, keys::MENTION_ONLY, false)
+                .await;
+            let auto_thread = settings
+                .get_bool("discord", scope, keys::AUTO_THREAD, false)
+                .await;
 
             let status_text = format!(
                 "{agent_info}\n\n**Guild Settings**:\n\
@@ -2269,7 +2963,8 @@ async fn handle_slash_command(
                 if auto_thread { "✅" } else { "❌" },
             );
 
-            let product = crate::branding::effective_product_name(&duduclaw_core::platform::duduclaw_home());
+            let product =
+                "DuDuClaw".to_string();
             let embed = json!({
                 "embeds": [{
                     "title": format!("{product} Status"),
@@ -2278,29 +2973,44 @@ async fn handle_slash_command(
                     "footer": { "text": product }
                 }]
             });
-            send_interaction_response(http, interaction_id, interaction_token, 4, Some(embed)).await;
+            send_interaction_response(http, interaction_id, interaction_token, 4, Some(embed))
+                .await;
         }
 
         "config" => {
             // DMs cannot modify config (would affect global scope)
             if guild_id.is_empty() {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(json!({"content": "❌ /config 只能在伺服器中使用", "flags": 64}))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(json!({"content": "❌ /config 只能在伺服器中使用", "flags": 64})),
+                )
+                .await;
                 return;
             }
             // Server-side permission check: require MANAGE_GUILD
             if !has_manage_guild_permission(data) {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(json!({"content": "❌ 需要「管理伺服器」權限才能修改設定", "flags": 64}))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(json!({"content": "❌ 需要「管理伺服器」權限才能修改設定", "flags": 64})),
+                )
+                .await;
                 return;
             }
 
-            let sub = cmd_data["options"]
-                .as_array()
-                .and_then(|opts| opts.first());
+            let sub = cmd_data["options"].as_array().and_then(|opts| opts.first());
 
             let sub_name = sub.and_then(|s| s["name"].as_str()).unwrap_or("");
-            let scope = if guild_id.is_empty() { "global" } else { guild_id };
+            let scope = if guild_id.is_empty() {
+                "global"
+            } else {
+                guild_id
+            };
 
             match sub_name {
                 "mention_only" => {
@@ -2310,10 +3020,32 @@ async fn handle_slash_command(
                         .and_then(|o| o["value"].as_bool())
                         .unwrap_or(false);
 
-                    let _ = ctx.channel_settings.set("discord", scope, keys::MENTION_ONLY, if enabled { "true" } else { "false" }).await;
+                    let _ = ctx
+                        .channel_settings
+                        .set(
+                            "discord",
+                            scope,
+                            keys::MENTION_ONLY,
+                            if enabled { "true" } else { "false" },
+                        )
+                        .await;
 
-                    let msg = format!("Mention-only mode: **{}**", if enabled { "Enabled ✅" } else { "Disabled ❌" });
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": msg, "flags": 64}))).await;
+                    let msg = format!(
+                        "Mention-only mode: **{}**",
+                        if enabled {
+                            "Enabled ✅"
+                        } else {
+                            "Disabled ❌"
+                        }
+                    );
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": msg, "flags": 64})),
+                    )
+                    .await;
                 }
                 "auto_thread" => {
                     let enabled = sub
@@ -2322,22 +3054,61 @@ async fn handle_slash_command(
                         .and_then(|o| o["value"].as_bool())
                         .unwrap_or(false);
 
-                    let _ = ctx.channel_settings.set("discord", scope, keys::AUTO_THREAD, if enabled { "true" } else { "false" }).await;
+                    let _ = ctx
+                        .channel_settings
+                        .set(
+                            "discord",
+                            scope,
+                            keys::AUTO_THREAD,
+                            if enabled { "true" } else { "false" },
+                        )
+                        .await;
 
-                    let msg = format!("Auto-thread mode: **{}**", if enabled { "Enabled ✅" } else { "Disabled ❌" });
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": msg, "flags": 64}))).await;
+                    let msg = format!(
+                        "Auto-thread mode: **{}**",
+                        if enabled {
+                            "Enabled ✅"
+                        } else {
+                            "Disabled ❌"
+                        }
+                    );
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": msg, "flags": 64})),
+                    )
+                    .await;
                 }
                 "show" => {
                     let all = ctx.channel_settings.get_all("discord", scope).await;
                     let text = if all.is_empty() {
                         "No custom settings configured. Using defaults.".to_string()
                     } else {
-                        all.iter().map(|(k, v)| format!("`{k}`: {v}")).collect::<Vec<_>>().join("\n")
+                        all.iter()
+                            .map(|(k, v)| format!("`{k}`: {v}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     };
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": text, "flags": 64}))).await;
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": text, "flags": 64})),
+                    )
+                    .await;
                 }
                 _ => {
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": "Unknown subcommand", "flags": 64}))).await;
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": "Unknown subcommand", "flags": 64})),
+                    )
+                    .await;
                 }
             }
         }
@@ -2360,17 +3131,38 @@ async fn handle_slash_command(
                         ),
                         Err(_) => "No active session.".to_string(),
                     };
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": info, "flags": 64}))).await;
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": info, "flags": 64})),
+                    )
+                    .await;
                 }
                 "reset" => {
                     let msg = match ctx.session_manager.delete_session(&session_id).await {
                         Ok(()) => format!("✅ Session `{session_id}` cleared."),
                         Err(e) => format!("⚠️ Failed to clear session: {e}"),
                     };
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": msg, "flags": 64}))).await;
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": msg, "flags": 64})),
+                    )
+                    .await;
                 }
                 _ => {
-                    send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": "Unknown subcommand", "flags": 64}))).await;
+                    send_interaction_response(
+                        http,
+                        interaction_id,
+                        interaction_token,
+                        4,
+                        Some(json!({"content": "Unknown subcommand", "flags": 64})),
+                    )
+                    .await;
                 }
             }
         }
@@ -2378,14 +3170,28 @@ async fn handle_slash_command(
         "agent" => {
             // DMs cannot switch agent (would affect global scope)
             if guild_id.is_empty() {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(json!({"content": "❌ /agent 只能在伺服器中使用", "flags": 64}))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(json!({"content": "❌ /agent 只能在伺服器中使用", "flags": 64})),
+                )
+                .await;
                 return;
             }
             // Require MANAGE_GUILD to switch agent
             if !has_manage_guild_permission(data) {
-                send_interaction_response(http, interaction_id, interaction_token, 4,
-                    Some(json!({"content": "❌ 需要「管理伺服器」權限才能切換 Agent", "flags": 64}))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(
+                        json!({"content": "❌ 需要「管理伺服器」權限才能切換 Agent", "flags": 64}),
+                    ),
+                )
+                .await;
                 return;
             }
 
@@ -2395,22 +3201,57 @@ async fn handle_slash_command(
                 .and_then(|o| o["value"].as_str())
                 .unwrap_or("");
 
-            let scope = if guild_id.is_empty() { "global" } else { guild_id };
+            let scope = if guild_id.is_empty() {
+                "global"
+            } else {
+                guild_id
+            };
             let reg = ctx.registry.read().await;
             if reg.get(agent_name).is_some() {
                 drop(reg);
-                let _ = ctx.channel_settings.set("discord", scope, keys::AGENT_OVERRIDE, agent_name).await;
+                let _ = ctx
+                    .channel_settings
+                    .set("discord", scope, keys::AGENT_OVERRIDE, agent_name)
+                    .await;
                 let msg = format!("Switched to agent: **{agent_name}**");
-                send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": msg}))).await;
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(json!({"content": msg})),
+                )
+                .await;
             } else {
-                let agents: Vec<String> = reg.list().iter().map(|a| a.config.agent.name.clone()).collect();
-                let msg = format!("Agent `{agent_name}` not found.\nAvailable: {}", agents.join(", "));
-                send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": msg, "flags": 64}))).await;
+                let agents: Vec<String> = reg
+                    .list()
+                    .iter()
+                    .map(|a| a.config.agent.name.clone())
+                    .collect();
+                let msg = format!(
+                    "Agent `{agent_name}` not found.\nAvailable: {}",
+                    agents.join(", ")
+                );
+                send_interaction_response(
+                    http,
+                    interaction_id,
+                    interaction_token,
+                    4,
+                    Some(json!({"content": msg, "flags": 64})),
+                )
+                .await;
             }
         }
 
         _ => {
-            send_interaction_response(http, interaction_id, interaction_token, 4, Some(json!({"content": "Unknown command", "flags": 64}))).await;
+            send_interaction_response(
+                http,
+                interaction_id,
+                interaction_token,
+                4,
+                Some(json!({"content": "Unknown command", "flags": 64})),
+            )
+            .await;
         }
     }
 }
@@ -2432,6 +3273,8 @@ async fn send_interaction_response(
     });
 
     let url = format!("{DISCORD_API}/interactions/{interaction_id}/{interaction_token}/callback");
+    #[cfg(test)]
+    let url = crate::test_channel_provider::url(interaction_token, &url);
     if let Err(e) = http.post(&url).json(&body).send().await {
         error!("Discord interaction response error: {e}");
     }
@@ -2452,7 +3295,10 @@ async fn edit_interaction_response(
         Ok(resp) if !resp.status().is_success() => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            error!("Discord edit interaction failed ({status}): {}", truncate_bytes(&body, 200));
+            error!(
+                "Discord edit interaction failed ({status}): {}",
+                truncate_bytes(&body, 200)
+            );
         }
         Err(e) => error!("Discord edit interaction error: {e}"),
         _ => {}
@@ -2537,14 +3383,17 @@ pub fn guild_id_for_channel(home_dir: &Path, channel_id: &str) -> Option<String>
 
 #[cfg(test)]
 mod channel_guild_tests {
-    use super::{guild_id_for_channel, record_channel_guild, CHANNEL_GUILD_STORE_CAP};
+    use super::{CHANNEL_GUILD_STORE_CAP, guild_id_for_channel, record_channel_guild};
 
     #[test]
     fn round_trip_write_then_read() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(guild_id_for_channel(dir.path(), "chan-1"), None);
         record_channel_guild(dir.path(), "chan-1", "guild-1");
-        assert_eq!(guild_id_for_channel(dir.path(), "chan-1"), Some("guild-1".to_string()));
+        assert_eq!(
+            guild_id_for_channel(dir.path(), "chan-1"),
+            Some("guild-1".to_string())
+        );
     }
 
     #[test]
@@ -2577,7 +3426,10 @@ mod channel_guild_tests {
         let dir = tempfile::tempdir().unwrap();
         record_channel_guild(dir.path(), "chan-1", "guild-1");
         record_channel_guild(dir.path(), "chan-1", "guild-2");
-        assert_eq!(guild_id_for_channel(dir.path(), "chan-1"), Some("guild-2".to_string()));
+        assert_eq!(
+            guild_id_for_channel(dir.path(), "chan-1"),
+            Some("guild-2".to_string())
+        );
     }
 
     #[test]
@@ -2597,7 +3449,8 @@ mod channel_guild_tests {
 // ── Config ──────────────────────────────────────────────────
 
 async fn read_discord_token(home_dir: &Path) -> Option<String> {
-    crate::config_crypto::read_encrypted_config_field(home_dir, "channels", "discord_bot_token").await
+    crate::config_crypto::read_encrypted_config_field(home_dir, "channels", "discord_bot_token")
+        .await
 }
 
 #[cfg(test)]
@@ -2661,7 +3514,11 @@ mod invalid_session_tests {
         for nanos in 0..50_000u32 {
             seen.insert(invalid_session_jitter_ms(nanos));
         }
-        assert!(seen.len() > 100, "jitter looks clipped: only {} values", seen.len());
+        assert!(
+            seen.len() > 100,
+            "jitter looks clipped: only {} values",
+            seen.len()
+        );
     }
 }
 
@@ -2707,3 +3564,1061 @@ mod reply_context_tests {
         assert!(block.contains("amy"));
     }
 }
+
+#[cfg(test)]
+mod thread_archive_tests {
+    use super::thread_archive_minutes;
+
+    #[test]
+    fn archive_minutes_accepts_only_discord_values() {
+        assert_eq!(thread_archive_minutes("60"), 60);
+        assert_eq!(thread_archive_minutes("4320"), 4320);
+        assert_eq!(thread_archive_minutes(" 10080 "), 10080);
+        assert_eq!(thread_archive_minutes("1440"), 1440);
+        assert_eq!(thread_archive_minutes("30"), 1440);
+        assert_eq!(thread_archive_minutes(""), 1440);
+        assert_eq!(thread_archive_minutes("abc"), 1440);
+    }
+}
+
+#[cfg(test)]
+mod native_callback_acl_tests {
+    use super::*;
+    use crate::decision_notify::native_loop_fixture::*;
+    use crate::test_channel_provider::TestChannelProvider;
+    #[tokio::test]
+    async fn actual_native_callback_rechecks_sql_revocation_and_fails_closed() {
+        for mode in [
+            "allow",
+            "session_allow",
+            "thread_allow",
+            "missing_type",
+            "user",
+            "blocked",
+            "channel",
+            "guild",
+            "pairing",
+            "corrupt",
+            "db",
+            "binding",
+        ] {
+            let provider = TestChannelProvider::start().await;
+            let fixture = NativeCuFixture::new(&provider.token).await;
+            let context = crate::approval::DecisionContext {
+                channel: "discord".into(),
+                account_id: "A1".into(),
+                principal_id: "H1".into(),
+                conversation_id: "C1".into(),
+            };
+            let id = pending_native_request(&fixture, context).await;
+            let allowed = matches!(mode, "allow" | "session_allow" | "thread_allow");
+            if mode == "session_allow" || mode == "thread_allow" || mode == "missing_type" {
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set(
+                        "discord",
+                        "global",
+                        "allowed_users",
+                        // F4: both the person and the conversation are listed.
+                        if mode == "thread_allow" {
+                            r#"["discord:thread:C1","H1"]"#
+                        } else {
+                            r#"["discord:C1","H1"]"#
+                        },
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                revoke_native_access(&fixture, "discord", "G1", mode).await;
+            }
+            let mut data = json!({
+                "guild_id": "G1",
+                "channel_id": "C1",
+                "channel": {"id":"C1","type":0,"guild_id":"G1"},
+                "member": {"user":{"id":"H1"}},
+                "data": {"custom_id": crate::decision_action::encode(
+                    crate::decision_action::DecisionSource::Approval,
+                    crate::decision_action::DecisionAct::Approve,
+                    id.as_str()
+                )}
+            });
+            if mode == "thread_allow" {
+                data["channel"]["type"] = json!(11);
+            }
+            if mode == "missing_type" {
+                data["channel"].as_object_mut().unwrap().remove("type");
+            }
+            if !allowed && mode != "missing_type" {
+                provider
+                    .enqueue_response("/channels/C1", json!({"id":"C1","type":0,"guild_id":"G1"}));
+                handle_message_create(&json!({
+                    "id": "text-revoke",
+                    "author": {"id":"H1","username":"Human","bot":false},
+                    "channel_id": "C1",
+                    "guild_id": "G1",
+                    "content": format!("確認 {}",id.as_str())
+                }),"BOT",&reqwest::Client::new(),&provider.token,&fixture.ctx,None,"A1").await;
+                assert_native_pending(&fixture, &id).await;
+            }
+            handle_component_interaction(
+                &data,
+                "native-test",
+                &provider.token,
+                "A1",
+                &reqwest::Client::new(),
+                &fixture.ctx,
+            )
+            .await;
+            if allowed {
+                assert_native_approved(&fixture, &id).await;
+            } else {
+                assert_native_pending(&fixture, &id).await;
+            }
+            assert!(
+                provider
+                    .requests()
+                    .iter()
+                    .any(|r| r.path.ends_with("/callback")
+                        && r.body["data"]["content"].as_str().is_some_and(|text| {
+                            if allowed {
+                                text.contains("同意")
+                            } else {
+                                text.contains("⚠")
+                            }
+                        })),
+                "native rejection did not ACK {mode}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod thread_type_decision_acl_tests {
+    use super::*;
+    use crate::decision_notify::native_loop_fixture::*;
+
+    #[tokio::test]
+    async fn official_thread_types_use_same_session_in_native_and_text_decisions() {
+        for channel_type in [10, 11, 12] {
+            for mode in ["allow", "blocked", "base_only"] {
+                for native in [false, true] {
+                    let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+                    let fixture = NativeCuFixture::new(&provider.token).await;
+                    let context = crate::approval::DecisionContext {
+                        channel: "discord".into(),
+                        account_id: "A1".into(),
+                        conversation_id: "C1".into(),
+                        principal_id: "H1".into(),
+                    };
+                    let id = pending_native_request(&fixture, context).await;
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set(
+                            "discord",
+                            "global",
+                            "allowed_users",
+                            // F4: both the person and the conversation are listed.
+                            if mode == "base_only" {
+                                r#"["discord:C1","H1"]"#
+                            } else {
+                                r#"["discord:thread:C1","H1"]"#
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set(
+                            "discord",
+                            "global",
+                            "blocked_users",
+                            if mode == "blocked" {
+                                r#"["discord:thread:C1"]"#
+                            } else {
+                                "[]"
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    if native {
+                        let data = json!({
+                            "guild_id": "G1",
+                            "channel_id": "C1",
+                            "channel": {"id":"C1","type":channel_type,"guild_id":"G1"},
+                            "member": {"user":{"id":"H1"}},
+                            "data": {"custom_id": crate::decision_action::encode(
+                                crate::decision_action::DecisionSource::Approval,
+                                crate::decision_action::DecisionAct::Approve,
+                                id.as_str()
+                            )}
+                        });
+                        handle_component_interaction(
+                            &data,
+                            "thread-types",
+                            &provider.token,
+                            "A1",
+                            &reqwest::Client::new(),
+                            &fixture.ctx,
+                        )
+                        .await;
+                    } else {
+                        provider.enqueue_response(
+                            "/channels/C1",
+                            json!({"id":"C1","type":channel_type,"guild_id":"G1"}),
+                        );
+                        let data = json!({
+                            "id": "thread-types",
+                            "channel_id": "C1",
+                            "guild_id": "G1",
+                            "author": {"id":"H1","bot":false},
+                            "content": format!("approve {}",id.as_str())
+                        });
+                        handle_message_create(
+                            &data,
+                            "BOT",
+                            &reqwest::Client::new(),
+                            &provider.token,
+                            &fixture.ctx,
+                            None,
+                            "A1",
+                        )
+                        .await;
+                    }
+                    if mode == "allow" {
+                        assert_native_approved(&fixture, &id).await;
+                    } else {
+                        assert_native_pending(&fixture, &id).await;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn official_partial_channel_thread_types_and_unknown_types_refuse_classification() {
+        for channel_type in [10, 11, 12] {
+            assert_eq!(discord_thread_kind(channel_type), Some(true));
+            assert_eq!(
+                discord_component_session(
+                    &json!({"channel_id":"C1","channel":{"id":"C1","type":channel_type}})
+                ),
+                "discord:thread:C1"
+            );
+        }
+        assert_eq!(discord_thread_kind(999), None);
+        assert_eq!(
+            discord_component_session(&json!({"channel_id":"C1","channel":{"id":"C1","type":999}})),
+            ""
+        );
+    }
+}
+
+#[cfg(test)]
+mod current_channel_lookup_acl_tests {
+    use super::*;
+    use crate::decision_notify::native_loop_fixture::*;
+
+    #[tokio::test]
+    async fn message_create_resolves_current_channel_not_child_thread_or_absent_type() {
+        for mode in [
+            "parent_blocked",
+            "type10_allow",
+            "type11_allow",
+            "type12_allow",
+            "type10_base",
+            "type11_base",
+            "type12_base",
+            "error",
+            "id_mismatch",
+            "guild_mismatch",
+            "unknown",
+        ] {
+            for transformed in [false, true] {
+                let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+                let fixture = NativeCuFixture::new(&provider.token).await;
+                let context = crate::approval::DecisionContext {
+                    channel: "discord".into(),
+                    account_id: "A1".into(),
+                    conversation_id: "C1".into(),
+                    principal_id: "H1".into(),
+                };
+                let id = pending_native_request(&fixture, context).await;
+                let kind = if mode.contains("11") {
+                    11
+                } else if mode.contains("12") {
+                    12
+                } else if mode == "parent_blocked" {
+                    0
+                } else {
+                    10
+                };
+                let allow = mode.ends_with("_allow");
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set(
+                        "discord",
+                        "global",
+                        "allowed_users",
+                        // F4: both the person and the conversation are listed.
+                        if allow {
+                            r#"["discord:thread:C1","H1"]"#
+                        } else if mode.ends_with("_base") {
+                            r#"["discord:C1","H1"]"#
+                        } else {
+                            r#"["H1"]"#
+                        },
+                    )
+                    .await
+                    .unwrap();
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set(
+                        "discord",
+                        "global",
+                        "blocked_users",
+                        if mode == "parent_blocked" {
+                            r#"["discord:C1"]"#
+                        } else {
+                            "[]"
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let mut channel = json!({"id":"C1","type":kind,"guild_id":"G1"});
+                if mode == "id_mismatch" {
+                    channel["id"] = json!("OTHER");
+                }
+                if mode == "guild_mismatch" {
+                    channel["guild_id"] = json!("OTHER");
+                }
+                if mode == "unknown" {
+                    channel["type"] = json!(999);
+                }
+                provider.enqueue_response("/channels/C1", channel);
+                if mode == "error" {
+                    provider.refuse();
+                }
+                let message = json!({
+                    "id": "current-channel",
+                    "channel_id": "C1",
+                    "guild_id": "G1",
+                    "thread": {"id":"CHILD"},
+                    "position": 4,
+                    "author": {"id":"H1","bot":false},
+                    "mentions": [{"id":"BOT"}],
+                    "content": format!("{}approve {}",if transformed { "<@BOT> " } else { "" },id.as_str())
+                });
+                handle_message_create(
+                    &message,
+                    "BOT",
+                    &reqwest::Client::new(),
+                    &provider.token,
+                    &fixture.ctx,
+                    None,
+                    "A1",
+                )
+                .await;
+                if allow {
+                    assert_native_approved(&fixture, &id).await;
+                } else {
+                    assert_native_pending(&fixture, &id).await;
+                }
+                let lookups: Vec<_> = provider
+                    .requests()
+                    .into_iter()
+                    .filter(|r| r.path.ends_with("/channels/C1"))
+                    .collect();
+                assert_eq!(lookups.len(), 1, "{mode}, transformed={transformed}");
+                assert_eq!(
+                    lookups[0].authorization.as_deref(),
+                    Some(format!("Bot {}", provider.token).as_str())
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod ordinary_dispatch_probe {
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Records = Arc<Mutex<Vec<String>>>;
+    fn probes() -> &'static Mutex<std::collections::HashMap<String, Records>> {
+        static PROBES: OnceLock<Mutex<std::collections::HashMap<String, Records>>> =
+            OnceLock::new();
+        PROBES.get_or_init(Default::default)
+    }
+    pub(super) fn install(token: &str) -> Records {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        probes()
+            .lock()
+            .unwrap()
+            .insert(token.into(), records.clone());
+        records
+    }
+    pub(super) fn record_if_installed(token: &str, session: &str) -> bool {
+        let Some(records) = probes().lock().unwrap().remove(token) else {
+            return false;
+        };
+        records.lock().unwrap().push(session.into());
+        true
+    }
+    pub(super) fn remove(token: &str) {
+        probes().lock().unwrap().remove(token);
+    }
+}
+
+#[cfg(test)]
+mod ordinary_current_channel_acl_tests {
+    use super::*;
+    use crate::decision_notify::native_loop_fixture::NativeCuFixture;
+    async fn seed(fixture: &NativeCuFixture) {
+        for (session, text) in [
+            ("discord:C1", "base-history"),
+            ("discord:thread:C1", "thread-history"),
+        ] {
+            fixture
+                .ctx
+                .session_manager
+                .get_or_create(session, "alice")
+                .await
+                .unwrap();
+            fixture
+                .ctx
+                .session_manager
+                .append_message(session, "user", text, 1)
+                .await
+                .unwrap();
+        }
+    }
+    fn archived(fixture: &NativeCuFixture, session: &str) -> bool {
+        let db = rusqlite::Connection::open(fixture.home.path().join("sessions.db")).unwrap();
+        db.query_row(
+            "SELECT archived_at IS NOT NULL FROM sessions WHERE id=?1",
+            [session],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+    fn message(content: &str) -> Value {
+        json!({
+            "id": "ordinary-current",
+            "channel_id": "C1",
+            "guild_id": "G1",
+            "thread": {"id":"CHILD"},
+            "position": 4,
+            "author": {"id":"H1","bot":false},
+            "content": content
+        })
+    }
+    async fn invoke(
+        fixture: &NativeCuFixture,
+        provider: &crate::test_channel_provider::TestChannelProvider,
+        content: &str,
+    ) {
+        handle_message_create(
+            &message(content),
+            "BOT",
+            &reqwest::Client::new(),
+            &provider.token,
+            &fixture.ctx,
+            None,
+            "A1",
+        )
+        .await;
+    }
+    #[tokio::test]
+    async fn ordinary_and_new_use_authoritative_thread_subject_with_auto_thread_on_or_off() {
+        for kind in [10, 11, 12] {
+            for auto_thread in [false, true] {
+                for mode in ["thread_allow", "thread_blocked", "base_only"] {
+                    for content in ["ordinary conversation", "/new"] {
+                        let provider =
+                            crate::test_channel_provider::TestChannelProvider::start().await;
+                        let fixture = NativeCuFixture::new(&provider.token).await;
+                        seed(&fixture).await;
+                        let records = ordinary_dispatch_probe::install(&provider.token);
+                        fixture
+                            .ctx
+                            .channel_settings
+                            .set(
+                                "discord",
+                                "G1",
+                                "auto_thread",
+                                if auto_thread { "true" } else { "false" },
+                            )
+                            .await
+                            .unwrap();
+                        fixture
+                            .ctx
+                            .channel_settings
+                            .set(
+                                "discord",
+                                "global",
+                                "allowed_users",
+                                // F4: both the person and the conversation are listed.
+                                match mode {
+                                    "thread_allow" => r#"["discord:thread:C1","H1"]"#,
+                                    "thread_blocked" => r#"["H1"]"#,
+                                    _ => r#"["discord:C1","H1"]"#,
+                                },
+                            )
+                            .await
+                            .unwrap();
+                        fixture
+                            .ctx
+                            .channel_settings
+                            .set(
+                                "discord",
+                                "global",
+                                "blocked_users",
+                                if mode == "thread_blocked" {
+                                    r#"["discord:thread:C1"]"#
+                                } else {
+                                    "[]"
+                                },
+                            )
+                            .await
+                            .unwrap();
+                        provider.enqueue_response(
+                            "/channels/C1",
+                            json!({"id":"C1","guild_id":"G1","type":kind}),
+                        );
+                        invoke(&fixture, &provider, content).await;
+                        let allowed = mode == "thread_allow";
+                        assert_eq!(
+                            *records.lock().unwrap(),
+                            if allowed && content != "/new" {
+                                vec!["discord:thread:C1".to_owned()]
+                            } else {
+                                vec![]
+                            },
+                            "kind={kind} auto={auto_thread} mode={mode} content={content}"
+                        );
+                        let base = fixture
+                            .ctx
+                            .session_manager
+                            .get_messages("discord:C1")
+                            .await
+                            .unwrap();
+                        let thread = fixture
+                            .ctx
+                            .session_manager
+                            .get_messages("discord:thread:C1")
+                            .await
+                            .unwrap();
+                        assert_eq!(base.len(), 1);
+                        assert_eq!(base[0].content, "base-history");
+                        assert_eq!(thread.len(), 1, "archiving retains replayable history");
+                        assert_eq!(thread[0].content, "thread-history");
+                        assert!(!archived(&fixture, "discord:C1"));
+                        assert_eq!(
+                            archived(&fixture, "discord:thread:C1"),
+                            allowed && content == "/new"
+                        );
+                        let requests = provider.requests();
+                        assert_eq!(
+                            requests
+                                .iter()
+                                .filter(|r| r.path.ends_with("/channels/C1"))
+                                .count(),
+                            1
+                        );
+                        assert!(!requests.iter().any(|r| r.path.ends_with("/threads")));
+                        assert_eq!(fixture.executed.load(Ordering::SeqCst), 0);
+                        ordinary_dispatch_probe::remove(&provider.token);
+                    }
+                }
+            }
+        }
+    }
+    #[tokio::test]
+    async fn failed_current_channel_lookup_cannot_dispatch_reset_history_or_create_thread() {
+        for mode in ["error", "id", "guild", "unknown"] {
+            for content in ["ordinary conversation", "/new"] {
+                let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+                let fixture = NativeCuFixture::new(&provider.token).await;
+                seed(&fixture).await;
+                let records = ordinary_dispatch_probe::install(&provider.token);
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set("discord", "G1", "auto_thread", "true")
+                    .await
+                    .unwrap();
+                let mut channel = json!({"id":"C1","guild_id":"G1","type":10});
+                match mode {
+                    "error" => provider.refuse(),
+                    "id" => channel["id"] = json!("OTHER"),
+                    "guild" => channel["guild_id"] = json!("OTHER"),
+                    _ => channel["type"] = json!(999),
+                }
+                provider.enqueue_response("/channels/C1", channel);
+                invoke(&fixture, &provider, content).await;
+                assert!(records.lock().unwrap().is_empty());
+                for session in ["discord:C1", "discord:thread:C1"] {
+                    assert_eq!(
+                        fixture
+                            .ctx
+                            .session_manager
+                            .get_messages(session)
+                            .await
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                }
+                assert!(!archived(&fixture, "discord:C1"));
+                assert!(!archived(&fixture, "discord:thread:C1"));
+                assert_eq!(
+                    provider.requests().len(),
+                    1,
+                    "lookup failure sent other requests"
+                );
+                assert_eq!(fixture.executed.load(Ordering::SeqCst), 0);
+                ordinary_dispatch_probe::remove(&provider.token);
+            }
+        }
+    }
+    #[tokio::test]
+    async fn authoritative_base_channel_can_create_thread_and_dispatch_new_identity() {
+        let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+        let fixture = NativeCuFixture::new(&provider.token).await;
+        seed(&fixture).await;
+        let records = ordinary_dispatch_probe::install(&provider.token);
+        fixture
+            .ctx
+            .channel_settings
+            .set("discord", "G1", "auto_thread", "true")
+            .await
+            .unwrap();
+        fixture
+            .ctx
+            .channel_settings
+            // F4: both the person and the conversation are listed.
+            .set("discord", "global", "allowed_users", r#"["H1","discord:C1"]"#)
+            .await
+            .unwrap();
+        provider.enqueue_response("/channels/C1", json!({"id":"C1","guild_id":"G1","type":0}));
+        provider.enqueue_response("/threads", json!({"id":"NEW"}));
+        invoke(&fixture, &provider, "ordinary conversation").await;
+        assert_eq!(*records.lock().unwrap(), vec!["discord:thread:NEW"]);
+        assert_eq!(
+            provider
+                .requests()
+                .iter()
+                .filter(|r| r.path.ends_with("/threads"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            fixture
+                .ctx
+                .session_manager
+                .get_messages("discord:C1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[tokio::test]
+    async fn authoritative_base_subject_with_auto_thread_off_preserves_thread_history() {
+        for mode in ["base_allow", "base_blocked", "thread_only"] {
+            for content in ["ordinary conversation", "/new"] {
+                let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+                let fixture = NativeCuFixture::new(&provider.token).await;
+                seed(&fixture).await;
+                let records = ordinary_dispatch_probe::install(&provider.token);
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set("discord", "G1", "auto_thread", "false")
+                    .await
+                    .unwrap();
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set(
+                        "discord",
+                        "global",
+                        "allowed_users",
+                        // F4: both the person and the conversation are listed.
+                        match mode {
+                            "base_allow" => r#"["discord:C1","H1"]"#,
+                            "base_blocked" => r#"["H1"]"#,
+                            _ => r#"["discord:thread:C1","H1"]"#,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set(
+                        "discord",
+                        "global",
+                        "blocked_users",
+                        if mode == "base_blocked" {
+                            r#"["discord:C1"]"#
+                        } else {
+                            "[]"
+                        },
+                    )
+                    .await
+                    .unwrap();
+                provider
+                    .enqueue_response("/channels/C1", json!({"id":"C1","guild_id":"G1","type":0}));
+                invoke(&fixture, &provider, content).await;
+                assert_eq!(
+                    *records.lock().unwrap(),
+                    if mode == "base_allow" && content != "/new" {
+                        vec!["discord:C1".to_owned()]
+                    } else {
+                        vec![]
+                    }
+                );
+                assert_eq!(
+                    archived(&fixture, "discord:C1"),
+                    mode == "base_allow" && content == "/new"
+                );
+                assert!(!archived(&fixture, "discord:thread:C1"));
+                assert_eq!(
+                    fixture
+                        .ctx
+                        .session_manager
+                        .get_messages("discord:thread:C1")
+                        .await
+                        .unwrap()[0]
+                        .content,
+                    "thread-history"
+                );
+                assert!(
+                    !provider
+                        .requests()
+                        .iter()
+                        .any(|r| r.path.ends_with("/threads"))
+                );
+                ordinary_dispatch_probe::remove(&provider.token);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn trusted_dm_absence_uses_base_session_without_guild_lookup() {
+        let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+        let fixture = NativeCuFixture::new(&provider.token).await;
+        let records = ordinary_dispatch_probe::install(&provider.token);
+        let mut data = message("ordinary conversation");
+        data.as_object_mut().unwrap().remove("guild_id");
+        handle_message_create(
+            &data,
+            "BOT",
+            &reqwest::Client::new(),
+            &provider.token,
+            &fixture.ctx,
+            None,
+            "A1",
+        )
+        .await;
+        assert_eq!(*records.lock().unwrap(), vec!["discord:C1"]);
+        assert!(provider.requests().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod normal_pairing_acl_tests {
+    use super::*;
+    use crate::decision_notify::native_loop_fixture::*;
+    #[tokio::test]
+    async fn actual_message_create_preserves_pairing_verdicts_and_strict_bound_isolation() {
+        for scope in ["dm", "guild_base", "guild_thread"] {
+            for mode in [
+                "human",
+                "session",
+                "invalid",
+                "expired",
+                "human_blocked",
+                "session_blocked",
+                "db",
+                "corrupt",
+                "hint",
+                "new_hint",
+                "mention",
+                "mention_ignored",
+                "channel_blocked",
+                "guild_blocked",
+                "lookup",
+            ] {
+                if scope == "dm"
+                    && matches!(
+                        mode,
+                        "mention_ignored" | "channel_blocked" | "guild_blocked" | "lookup"
+                    )
+                {
+                    continue;
+                }
+                let provider = crate::test_channel_provider::TestChannelProvider::start().await;
+                let fixture = NativeCuFixture::new(&provider.token).await;
+                let session = if scope == "guild_thread" {
+                    "discord:thread:C1"
+                } else {
+                    "discord:C1"
+                };
+                fixture
+                    .ctx
+                    .session_manager
+                    .get_or_create(session, "alice")
+                    .await
+                    .unwrap();
+                fixture
+                    .ctx
+                    .session_manager
+                    .append_message(session, "user", "history", 1)
+                    .await
+                    .unwrap();
+                let records = ordinary_dispatch_probe::install(&provider.token);
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set("discord", "global", "require_pairing", "true")
+                    .await
+                    .unwrap();
+                fixture
+                    .ctx
+                    .channel_settings
+                    .set("discord", "G1", "auto_thread", "false")
+                    .await
+                    .unwrap();
+                let subject = if mode == "session" || mode == "session_blocked" {
+                    session
+                } else {
+                    "H1"
+                };
+                let code = fixture
+                    .ctx
+                    .access_control
+                    .generate_pairing_code(subject)
+                    .await
+                    .unwrap();
+                if mode == "expired" {
+                    let path = fixture.home.path().join("access_control.json");
+                    let mut state: Value =
+                        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    state["pending"][subject]["expires_at"] = json!("2000-01-01T00:00:00Z");
+                    std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+                }
+                if mode == "human_blocked" || mode == "session_blocked" {
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set(
+                            "discord",
+                            "global",
+                            "blocked_users",
+                            &serde_json::to_string(&[subject]).unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                if mode == "channel_blocked" {
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set("discord", "G1", "allowed_channels", r#"["OTHER"]"#)
+                        .await
+                        .unwrap();
+                }
+                if mode == "guild_blocked" {
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set("discord", "global", "allowed_guilds", r#"["OTHER"]"#)
+                        .await
+                        .unwrap();
+                }
+                if mode == "corrupt" {
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set("discord", "global", "require_pairing", "invalid")
+                        .await
+                        .unwrap();
+                }
+                if mode == "db" {
+                    rusqlite::Connection::open(fixture.home.path().join("sessions.db"))
+                        .unwrap()
+                        .execute("DROP TABLE channel_settings", [])
+                        .unwrap();
+                }
+                if mode == "mention_ignored" {
+                    fixture
+                        .ctx
+                        .channel_settings
+                        .set("discord", "G1", "mention_only", "true")
+                        .await
+                        .unwrap();
+                }
+                let context = crate::approval::DecisionContext {
+                    channel: "discord".into(),
+                    account_id: "A1".into(),
+                    conversation_id: "C1".into(),
+                    principal_id: "H1".into(),
+                };
+                let id = pending_native_request(&fixture, context).await;
+                let content = match mode {
+                    "invalid" => "/pair invalid".into(),
+                    "hint" => "ordinary conversation".into(),
+                    "new_hint" => "/new".into(),
+                    "mention" => format!("<@BOT> /pair {code}"),
+                    _ => format!("/pair {code}"),
+                };
+                let mut data = json!({
+                    "id": "pairing",
+                    "channel_id": "C1",
+                    "author": {"id":"H1","bot":false},
+                    "content": content
+                });
+                if scope != "dm" {
+                    data["guild_id"] = json!("G1");
+                    provider.enqueue_response("/channels/C1",json!({
+                        "id": "C1",
+                        "guild_id": "G1",
+                        "type": if scope=="guild_thread" {10} else {0}
+                    }));
+                }
+                if mode == "mention" {
+                    data["mentions"] = json!([{"id":"BOT"}]);
+                }
+                if mode == "lookup" {
+                    provider.refuse();
+                }
+                handle_message_create(
+                    &data,
+                    "BOT",
+                    &reqwest::Client::new(),
+                    &provider.token,
+                    &fixture.ctx,
+                    None,
+                    "A1",
+                )
+                .await;
+                let approved = fixture.ctx.access_control.runtime_approved_users().await;
+                let success = matches!(mode, "human" | "session" | "mention");
+                assert_eq!(
+                    approved.iter().any(|id| id == subject),
+                    success,
+                    "scope={scope} mode={mode}"
+                );
+                assert!(
+                    records.lock().unwrap().is_empty(),
+                    "pairing must not dispatch a model"
+                );
+                assert_native_pending(&fixture, &id).await;
+                let requests = provider.requests();
+                let replies: Vec<_> = requests
+                    .iter()
+                    .filter_map(|r| r.body["content"].as_str())
+                    .collect();
+                if success {
+                    assert!(replies.iter().any(|text| text.contains("配對成功")));
+                } else if matches!(mode, "invalid" | "expired") {
+                    assert!(
+                        replies
+                            .iter()
+                            .any(|text| text.contains("配對碼錯誤或已過期"))
+                    );
+                } else if matches!(mode, "hint" | "new_hint") {
+                    assert!(replies.iter().any(|text| text.contains("尚未配對")));
+                } else {
+                    assert!(
+                        replies.is_empty(),
+                        "blocked/unknown authority must not respond"
+                    );
+                }
+                assert_eq!(
+                    fixture
+                        .ctx
+                        .session_manager
+                        .get_messages(session)
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                let db =
+                    rusqlite::Connection::open(fixture.home.path().join("sessions.db")).unwrap();
+                let archived: bool = db
+                    .query_row(
+                        "SELECT archived_at IS NOT NULL FROM sessions WHERE id=?1",
+                        [session],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert!(!archived, "unpaired /new must not archive history");
+                assert!(!requests.iter().any(|r| r.path.ends_with("/threads")));
+                if matches!(mode, "human" | "session") {
+                    // Pairing is persisted and then normal and strict entry
+                    // points may proceed under their respective gate contracts.
+                    let reopened = crate::access_control::AccessController::with_persistence(
+                        fixture.home.path().join("access_control.json"),
+                    );
+                    assert!(
+                        reopened
+                            .runtime_approved_users()
+                            .await
+                            .iter()
+                            .any(|id| id == subject)
+                    );
+                    data["content"] = json!("ordinary after pairing");
+                    if scope != "dm" {
+                        provider.enqueue_response("/channels/C1", json!({
+                            "id": "C1",
+                            "guild_id": "G1",
+                            "type": if scope=="guild_thread" {10} else {0}
+                        }));
+                    }
+                    handle_message_create(
+                        &data,
+                        "BOT",
+                        &reqwest::Client::new(),
+                        &provider.token,
+                        &fixture.ctx,
+                        None,
+                        "A1",
+                    )
+                    .await;
+                    assert_eq!(*records.lock().unwrap(), vec![session.to_owned()]);
+                    data["content"] = json!(format!("approve {}", id.as_str()));
+                    if scope != "dm" {
+                        provider.enqueue_response("/channels/C1", json!({
+                            "id": "C1",
+                            "guild_id": "G1",
+                            "type": if scope=="guild_thread" {10} else {0}
+                        }));
+                    }
+                    handle_message_create(
+                        &data,
+                        "BOT",
+                        &reqwest::Client::new(),
+                        &provider.token,
+                        &fixture.ctx,
+                        None,
+                        "A1",
+                    )
+                    .await;
+                    assert_native_approved(&fixture, &id).await;
+                }
+                ordinary_dispatch_probe::remove(&provider.token);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "channel_decision_route/adapter_tests/discord.rs"]
+mod f4_decision_route_tests;

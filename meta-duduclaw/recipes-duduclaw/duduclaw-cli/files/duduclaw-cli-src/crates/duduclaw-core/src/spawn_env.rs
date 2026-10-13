@@ -1,14 +1,15 @@
 //! Allowlisted environment for spawned agent-CLI subprocesses.
 //!
-//! WP-8B (credentials doctrine P3, `commercial/docs/DESIGN-credentials-doctrine-2026-08.md`
+//! WP-8B (credentials doctrine P3, `commercial/docs/specs/DESIGN-credentials-doctrine-2026-08.md`
 //! §1.6 / §3 P3): the primary agent-spawn paths (`claude_runner.rs`'s
 //! `prepare_claude_cmd`, `channel_reply.rs`'s `spawn_claude_cli_with_env` /
 //! `spawn_claude_cli_pty_with_env`, and the external-judge spawn in
 //! `judge_mode.rs`) used to hand the child process the gateway's FULL
 //! environment (`tokio::process::Command` inherits by default unless
 //! `env_clear()` is called), including every vendor `*_API_KEY` the operator
-//! configured for OTHER agents/providers. Only `duduclaw-cli-worker`'s
-//! supervisor (`worker_supervisor.rs`, "Round 3 security fix MED-M5") had
+//! configured for OTHER agents/providers. Only the former PTY-pool worker
+//! supervisor (`worker_supervisor.rs`, "Round 3 security fix MED-M5", removed
+//! 2026-09) had
 //! already closed this: `env_clear()` + an explicit allowlist. This module
 //! generalizes that already-shipped, already-validated pattern into a single
 //! shared list so every other spawn site can adopt it instead of growing its
@@ -34,7 +35,7 @@
 //! `LANG`/`TERM`/`SHELL`/`TMPDIR`) successfully resolved OS-keychain OAuth
 //! and completed a Bash-tool round-trip. The wider allowlist below is
 //! deliberately more generous than that minimal proof — matching
-//! `worker_supervisor.rs`'s already-shipped set plus a few defensive,
+//! that supervisor's already-shipped set plus a few defensive,
 //! non-sensitive additions (XDG / proxy / timezone) for deployment shapes
 //! (headless Linux, corporate proxy) this workstation can't exercise
 //! directly. See the DESIGN doc's honesty note in the WP-8B report: this is
@@ -108,13 +109,22 @@ pub const AGENT_CLI_ENV_ALLOWLIST: &[&str] = &[
     // scrub silently kept this off even when the operator set `=1` — the
     // TODO-spawn-env-allowlist-fallout sweep's one silent in-child casualty.
     "DUDUCLAW_SEMANTIC_VECTORS",
+    // RFC-23 §14.4 data-file guard mode ("on" / "read_only" / "off"). Not a
+    // credential — a three-value policy word the PreToolUse hook reads to
+    // decide whether a built-in `Read`/`Bash` may touch a CSV/spreadsheet.
+    // The gateway sets it explicitly at each spawn site when redaction is
+    // active for that agent (that explicit `cmd.env` wins over this list);
+    // the allowlist entry is what lets an operator set the mode on the
+    // gateway process itself and have it reach a spawn the gateway did not
+    // decorate. Absent ⇒ the hook is inert, which is the pre-§14.4 behavior.
+    "DUDUCLAW_DATA_FILE_GUARD",
 ];
 
 /// macOS only: Cocoa `NSString`/Keychain Services initialization reads this
 /// before the OS keychain can be queried — without it, OS-keychain OAuth
 /// accounts (the default `claude auth login` session, i.e. anything that
 /// isn't an explicit API key or `setup-token`) can fail to authenticate.
-/// Carried over from `worker_supervisor.rs`'s Round 3 fix.
+/// Carried over from the former `worker_supervisor.rs`'s Round 3 fix.
 ///
 /// Declared unconditionally (only the usage loop in
 /// [`agent_cli_spawn_env_pairs`] is `#[cfg]`-gated) so the secret-shape test
@@ -128,7 +138,7 @@ pub const AGENT_CLI_ENV_ALLOWLIST_MACOS: &[&str] = &["__CF_USER_TEXT_ENCODING"];
 /// the host spells them.
 ///
 /// Two entry families:
-/// - Credential/settings location (`worker_supervisor.rs` Round 4, MED-C3):
+/// - Credential/settings location (former `worker_supervisor.rs` Round 4, MED-C3):
 ///   `claude` locates its OAuth credentials + settings via `%APPDATA%\claude\`;
 ///   without these the spawned CLI cannot authenticate.
 /// - The Windows system set (2026-08-20 field incident): the v1.61.x scrub
@@ -385,6 +395,21 @@ mod tests {
                     "`{name}` looks like a credential (suffix `{suffix}`) — must not be in the spawn-env allowlist"
                 );
             }
+        }
+    }
+
+    /// RFC-23 §14.4: the guard-mode variable is on the list and is a policy
+    /// word, not a credential — pinned by name so a future rename cannot
+    /// silently disable the guard on every spawn.
+    #[test]
+    fn data_file_guard_mode_is_allowlisted_and_is_not_secret_shaped() {
+        assert!(
+            AGENT_CLI_ENV_ALLOWLIST.contains(&crate::ENV_DATA_FILE_GUARD),
+            "the §14.4 guard mode must survive the spawn-env scrub"
+        );
+        assert_eq!(crate::ENV_DATA_FILE_GUARD, "DUDUCLAW_DATA_FILE_GUARD");
+        for suffix in ["_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_KEY"] {
+            assert!(!"DUDUCLAW_DATA_FILE_GUARD".ends_with(suffix));
         }
     }
 

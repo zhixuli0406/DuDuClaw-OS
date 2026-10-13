@@ -1,0 +1,1 @@
+var e=[`gemini`];function t(t){return typeof t==`string`&&e.includes(t)}export{t};

@@ -6,7 +6,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use duduclaw_core::truncate_bytes;
 use axum::{
     Router,
     body::Bytes,
@@ -14,28 +13,45 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::post,
 };
+use duduclaw_core::truncate_bytes;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::{error, info, warn};
 
 use crate::channel_format;
-use crate::channel_reply::{ChannelStatusMap, ReplyContext, build_reply_with_session, set_channel_connected};
+use crate::channel_reply::{
+    ChannelStatusMap, ReplyContext, build_guarded_reply_for_agent, set_channel_connected,
+};
 use crate::channel_settings::keys;
 
+mod ingress;
+pub(crate) use ingress::durable_line_enabled;
+use ingress::{drain_line_ingress, line_conversation, record_reply_failure};
+
 const LINE_API: &str = "https://api.line.me/v2/bot";
+fn line_provider_url(_token: &str, path: &str) -> String {
+    let url = format!("{LINE_API}{path}");
+    #[cfg(test)]
+    return crate::test_channel_provider::url(_token, &url);
+    #[cfg(not(test))]
+    url
+}
 
 type HmacSha256 = Hmac<Sha256>;
 
 // ── LINE API types ──────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct LineWebhookBody {
+    destination: Option<String>,
     events: Vec<LineEvent>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct LineEvent {
+    #[serde(rename = "webhookEventId")]
+    webhook_event_id: Option<String>,
     #[serde(rename = "type")]
     event_type: String,
     #[serde(rename = "replyToken")]
@@ -44,6 +60,18 @@ struct LineEvent {
     message: Option<LineMessage>,
     /// Present on `postback` events (quick-reply button presses).
     postback: Option<LinePostback>,
+    /// When the event occurred, milliseconds since the epoch.
+    #[serde(default)]
+    timestamp: Option<i64>,
+    /// `isRedelivery` is true on a webhook LINE delivered again.
+    #[serde(rename = "deliveryContext", default)]
+    delivery_context: Option<LineDeliveryContext>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LineDeliveryContext {
+    #[serde(rename = "isRedelivery", default)]
+    is_redelivery: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,11 +213,16 @@ pub struct LineState {
     http: reqwest::Client,
     channel_status: ChannelStatusMap,
     event_tx: tokio::sync::broadcast::Sender<String>,
+    ingress: Option<Arc<crate::channel_ingress::IngressStore>>,
 }
 
 // ── Public API ──────────────────────────────────────────────
 
 impl LineState {
+    pub(crate) fn home_dir(&self) -> &Path {
+        &self.home_dir
+    }
+
     /// Build a `LineState` sharing the same `channel_status`/`event_tx` as
     /// the rest of the gateway (both are cloned off `ctx`, which is itself
     /// an `Arc` — cloning the fields shares the underlying state, it does
@@ -202,13 +235,24 @@ impl LineState {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();
-        Self {
+        let ingress = crate::channel_ingress::IngressStore::shared(home_dir)
+            .map_err(|_| error!("LINE ingress store unavailable"))
+            .ok();
+        let state = Self {
+            ingress,
             home_dir: home_dir.to_path_buf(),
             channel_status: ctx.channel_status.clone(),
             event_tx: ctx.event_tx.clone(),
             http,
             ctx,
+        };
+        if tokio::runtime::Handle::try_current().is_ok() && ingress::claim_worker_home(&state) {
+            let worker_state = state.clone();
+            tokio::spawn(async move {
+                drain_line_ingress(worker_state).await;
+            });
         }
+        state
     }
 }
 
@@ -224,7 +268,9 @@ pub async fn start_line_bot(home_dir: &Path, ctx: Arc<ReplyContext>) -> Router {
     // LINE channel without waiting for the first webhook.
     verify_line_status(home_dir, &state.http, &ctx.channel_status, &ctx.event_tx).await;
 
-    info!("   LINE webhook endpoint mounted: /webhook/line (token read per request — no restart needed on config change)");
+    info!(
+        "   LINE webhook endpoint mounted: /webhook/line (token read per request — no restart needed on config change)"
+    );
     Router::new()
         .route("/webhook/line", post(line_webhook_handler))
         .with_state(state)
@@ -252,18 +298,39 @@ async fn verify_line_status(
     let (token, secret) = match read_line_config(home_dir).await {
         Some(pair) => pair,
         None => {
-            set_channel_connected(channel_status, "line", false, Some("not configured".into()), Some(event_tx)).await;
+            set_channel_connected(
+                channel_status,
+                "line",
+                false,
+                Some("not configured".into()),
+                Some(event_tx),
+            )
+            .await;
             return;
         }
     };
     if token.is_empty() {
-        set_channel_connected(channel_status, "line", false, Some("not configured".into()), Some(event_tx)).await;
+        set_channel_connected(
+            channel_status,
+            "line",
+            false,
+            Some("not configured".into()),
+            Some(event_tx),
+        )
+        .await;
         return;
     }
     // HS2: an empty secret would make signature verification accept forged
     // requests; surface it as not-connected so the operator fixes it.
     if secret.is_empty() {
-        set_channel_connected(channel_status, "line", false, Some("channel secret missing".into()), Some(event_tx)).await;
+        set_channel_connected(
+            channel_status,
+            "line",
+            false,
+            Some("channel secret missing".into()),
+            Some(event_tx),
+        )
+        .await;
         return;
     }
     match http
@@ -288,7 +355,14 @@ async fn verify_line_status(
         }
         Err(e) => {
             warn!("LINE connection check failed: {e}");
-            set_channel_connected(channel_status, "line", false, Some(e.to_string()), Some(event_tx)).await;
+            set_channel_connected(
+                channel_status,
+                "line",
+                false,
+                Some(e.to_string()),
+                Some(event_tx),
+            )
+            .await;
         }
     }
 }
@@ -314,20 +388,35 @@ async fn line_webhook_handler(
 /// it); the relay path only needs to know success (`is_success()`) vs
 /// failure to classify the frame for its own `relay_frames_total` metric —
 /// see `relay_client::inject_line_hook`.
-pub(crate) async fn handle_line_webhook(state: LineState, headers: &HeaderMap, body: Bytes) -> StatusCode {
-    // Load the current LINE credentials per request — config changes apply live.
-    let (token, secret) = match read_line_config(&state.home_dir).await {
-        Some((t, s)) if !t.is_empty() && !s.is_empty() => (t, s),
-        _ => {
-            // Not configured (or missing secret). Accept so LINE's "Verify" still
-            // gets a 200, but process nothing — fail closed (no secret ⇒ can't and
-            // won't validate/handle events).
-            return StatusCode::OK;
-        }
+pub(crate) async fn handle_line_webhook(
+    state: LineState,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    // One read of config.toml for the credentials and the stop switch; the
+    // credentials are re-read per request so config changes apply live.
+    // Before the 200 only what verification and the durable write need is
+    // checked (review I-MEDIUM-7); the route/authority snapshot is stored
+    // right after the commit (`ingress::spawn_snapshots`).
+    let config = match tokio::fs::read_to_string(state.home_dir.join("config.toml")).await {
+        Ok(text) => match text.parse::<toml::Table>() {
+            Ok(table) => table,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE,
+        },
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE,
     };
+    let (verified_token, secret) =
+        match line_credentials_for_table(&state.home_dir, &config).await {
+            Some((t, s)) if !t.is_empty() && !s.is_empty() => (t, s),
+            // No credentials means no authenticated durable acceptance.
+            _ => return StatusCode::SERVICE_UNAVAILABLE,
+        };
 
     // Validate signature
-    let signature = match headers.get("x-line-signature").and_then(|v| v.to_str().ok()) {
+    let signature = match headers
+        .get("x-line-signature")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(sig) => sig.to_string(),
         None => {
             warn!("LINE webhook: missing X-Line-Signature");
@@ -343,381 +432,633 @@ pub(crate) async fn handle_line_webhook(state: LineState, headers: &HeaderMap, b
     // Parse body
     let webhook: LineWebhookBody = match serde_json::from_slice(&body) {
         Ok(w) => w,
-        Err(e) => {
-            warn!("LINE webhook: parse error: {e}");
+        Err(_) => {
+            warn!("LINE webhook: invalid event envelope");
             return StatusCode::BAD_REQUEST;
         }
     };
 
     // Update last_event timestamp on each webhook call
-    set_channel_connected(&state.channel_status, "line", true, None, Some(&state.event_tx)).await;
+    set_channel_connected(
+        &state.channel_status,
+        "line",
+        true,
+        None,
+        Some(&state.event_tx),
+    )
+    .await;
 
-    // Process events in a DETACHED task so the webhook returns 200 immediately.
-    // LINE times out a slow webhook response and the reply_token is short-lived;
-    // blocking the 200 on a multi-second model reply gets the handler future (and
-    // the in-flight reply) cancelled when LINE disconnects → "已讀沒回應".
-    tokio::spawn(async move {
-    for event in webhook.events {
-        // ── Quick-reply button presses (postback events) ──
-        if event.event_type == "postback" {
-            handle_postback(&event, &state, &token).await;
-            continue;
+    if !crate::channel_ingress::config::IngressConfig::from_table(&config).line_enabled {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    let Some(store) = &state.ingress else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    let raw: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    let destination = match webhook.destination.as_deref() {
+        Some(id) if !id.is_empty() => id,
+        _ if webhook.events.is_empty() => "verification",
+        _ => return StatusCode::BAD_REQUEST,
+    };
+    // Computed once per envelope.
+    let account = crate::channel_ingress::digest(&["line", destination]);
+    let pending = crate::channel_ingress::pending_authorization(
+        &crate::channel_ingress::digest(&[&verified_token, &secret]),
+    );
+    let mut accepted = Vec::new();
+    for (event, raw_event) in webhook
+        .events
+        .iter()
+        .zip(raw["events"].as_array().into_iter().flatten())
+    {
+        let Some(event_id) = event
+            .webhook_event_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        else {
+            // LINE guarantees webhookEventId. An unidentifiable event cannot be ACKed.
+            return StatusCode::BAD_REQUEST;
+        };
+        let conversation = line_conversation(event);
+        accepted.push(crate::channel_ingress::AcceptedEvent {
+            decision_fastlane: line_decision_fastlane(event),
+            decision_binding: line_decision_request_id(event).map(|request_id| serde_json::json!({
+                "request_id": request_id,
+                "context_hash": crate::channel_ingress::digest(&[
+                    "line",
+                    destination,
+                    &conversation,
+                    event.source.as_ref().and_then(|s| s.user_id.as_deref()).unwrap_or("")
+                ])
+            }).to_string()),
+            event_id: event_id.to_string(),
+            account: account.clone(),
+            revision: crate::channel_ingress::PENDING_REVISION.to_string(),
+            authorization_revision: pending.clone(),
+            conversation,
+            payload: serde_json::json!({"destination":destination,"event":raw_event}).to_string(),
+        });
+    }
+    if store
+        .append(&accepted, chrono::Utc::now().timestamp())
+        .await
+        .is_err()
+    {
+        error!("LINE durable append failed; webhook not acknowledged");
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    let ids = accepted
+        .iter()
+        .map(|e| crate::channel_ingress::digest(&["line", &e.account, &e.event_id]))
+        .collect();
+    ingress::spawn_snapshots(state.clone(), ids);
+    StatusCode::OK
+}
+
+fn line_decision_request_id(event: &LineEvent) -> Option<String> {
+    if event.event_type == "postback" {
+        let action = event
+            .postback
+            .as_ref()
+            .and_then(|p| p.data.as_deref())
+            .and_then(crate::decision_action::parse)?;
+        return (action.source == crate::decision_action::DecisionSource::Approval
+            && uuid::Uuid::parse_str(&action.id).is_ok())
+        .then_some(action.id);
+    }
+    let message = event.message.as_ref().filter(|m| m.msg_type == "text")?;
+    // Same definition every adapter uses (F4): verb + complete request id.
+    crate::channel_decision_route::parse_strict_decision(message.text.as_deref().unwrap_or(""))
+        .map(|command| command.id.to_owned())
+}
+fn line_decision_fastlane(event: &LineEvent) -> bool {
+    line_decision_request_id(event).is_some()
+}
+
+async fn process_line_decision(event: LineEvent, state: &LineState, token: &str) {
+    let command = if event.event_type == "postback" {
+        let Some(action) = event
+            .postback
+            .as_ref()
+            .and_then(|p| p.data.as_deref())
+            .and_then(crate::decision_action::parse)
+        else {
+            return;
+        };
+        format!(
+            "{} {}",
+            if action.approve() { "approve" } else { "deny" },
+            action.id
+        )
+    } else {
+        event
+            .message
+            .as_ref()
+            .and_then(|m| m.text.clone())
+            .unwrap_or_default()
+    };
+    let source = event.source.as_ref();
+    let scope = crate::decision_notify::DecisionAccessScope {
+        channel_id: source.and_then(|s| s.group_id.as_deref().or(s.room_id.as_deref())),
+        guild_id: None,
+        session_id: None,
+    };
+    let result = match crate::approval::CURRENT_DECISION_CONTEXT.try_with(Clone::clone) {
+        Ok(Some(context)) => {
+            if event.event_type == "postback" {
+                crate::decision_notify::route_verified_bound_press(
+                    &state.ctx,
+                    &context,
+                    event
+                        .postback
+                        .as_ref()
+                        .and_then(|p| p.data.as_deref())
+                        .unwrap_or(""),
+                    scope,
+                )
+                .await
+            } else {
+                crate::decision_notify::route_trusted_decision_fastlane_with_scope(
+                    &state.ctx, &context, &command, scope,
+                )
+                .await
+            }
         }
-
-        if event.event_type != "message" {
-            continue;
+        _ => Some(Err(crate::channel_decision_route::DECISION_REFUSED.into())),
+    };
+    #[cfg(test)]
+    ingress::decision_commit_test_pause(state, event.webhook_event_id.as_deref().unwrap_or(""))
+        .await;
+    let message = match result {
+        Some(Ok(answer)) => answer,
+        Some(Err(error)) => format!("⚠️ {error}"),
+        None => {
+            record_reply_failure("decision_command_invalid");
+            return;
         }
+    };
+    if let Some(reply_token) = event.reply_token.as_deref() {
+        let _ = send_reply_rich(
+            &state.http,
+            token,
+            reply_token,
+            vec![serde_json::json!({"type":"text","text":message})],
+        )
+        .await;
+    }
+}
 
-        let Some(msg) = &event.message else { continue };
-        let Some(reply_token) = &event.reply_token else { continue };
-
-        // Skip unsupported message types (e.g., location, sticker)
-        let supported_types = ["text", "image", "video", "audio", "file"];
-        if !supported_types.contains(&msg.msg_type.as_str()) {
-            continue;
-        }
-
-        {
-            let source = &event.source;
-            let source_type = source.as_ref().and_then(|s| s.source_type.as_deref()).unwrap_or("user");
-            let is_group = source_type == "group" || source_type == "room";
-            let scope_id = source.as_ref()
-                .and_then(|s| s.group_id.as_deref().or(s.room_id.as_deref()))
-                .unwrap_or("global");
-
-            // ── Channel whitelist (group chats only) ──
-            if is_group && !state.ctx.channel_settings.is_channel_allowed("line", "global", scope_id).await {
+async fn process_line_events(
+    events: Vec<LineEvent>,
+    state: &LineState,
+    token: &str,
+    agent_id: &str,
+    _account_id: &str,
+) {
+    async {
+        for event in events {
+            // ── Quick-reply button presses (postback events) ──
+            if event.event_type == "postback" {
+                handle_postback(&event, &state, &token).await;
                 continue;
             }
 
-            // WP1.6 (ecosystem): quoting a decision card with a bare verb
-            // (「同意」/「拒絕」…) counts as pressing its button — LINE watch
-            // and quick-reply surfaces carry `quotedMessageId` but no
-            // postback. Quoting the card IS addressing the bot, so this runs
-            // before the mention-only gate. Same dispatch (auth +
-            // accounting) as a physical press; everything else falls
-            // through to normal chat.
-            if msg.msg_type == "text" {
-                if let (Some(qid), Some(text)) = (msg.quoted_message_id.as_deref(), msg.text.as_deref()) {
-                    let sender_for_decision = event
-                        .source
-                        .as_ref()
-                        .and_then(|s| s.user_id.as_deref())
-                        .unwrap_or("unknown");
-                    let card_chat = if is_group { scope_id } else { sender_for_decision };
-                    if let Some(outcome) = crate::decision_text::route_text_reply(
-                        &state.home_dir,
-                        "line",
-                        sender_for_decision,
-                        card_chat,
-                        qid,
-                        text,
-                    )
-                    .await
+            if event.event_type != "message" {
+                continue;
+            }
+
+            let Some(msg) = &event.message else { continue };
+            let Some(reply_token) = &event.reply_token else {
+                continue;
+            };
+
+            // Skip unsupported message types (e.g., location, sticker)
+            let supported_types = ["text", "image", "video", "audio", "file"];
+            if !supported_types.contains(&msg.msg_type.as_str()) {
+                continue;
+            }
+
+            {
+                let source = &event.source;
+                let source_type = source
+                    .as_ref()
+                    .and_then(|s| s.source_type.as_deref())
+                    .unwrap_or("user");
+                let is_group = source_type == "group" || source_type == "room";
+                let scope_id = source
+                    .as_ref()
+                    .and_then(|s| s.group_id.as_deref().or(s.room_id.as_deref()))
+                    .unwrap_or("global");
+
+                // ── Channel whitelist (group chats only) ──
+                if is_group
+                    && !state
+                        .ctx
+                        .channel_settings
+                        .is_channel_allowed("line", "global", scope_id)
+                        .await
+                {
+                    continue;
+                }
+
+                // WP1.6 (ecosystem): quoting a decision card with a bare verb
+                // (「同意」/「拒絕」…) counts as pressing its button — LINE watch
+                // and quick-reply surfaces carry `quotedMessageId` but no
+                // postback. Quoting the card IS addressing the bot, so this runs
+                // before the mention-only gate. Same dispatch (auth +
+                // accounting) as a physical press; everything else falls
+                // through to normal chat.
+                if msg.msg_type == "text" {
+                    if let (Some(qid), Some(text)) =
+                        (msg.quoted_message_id.as_deref(), msg.text.as_deref())
                     {
-                        let ack = match outcome {
-                            Ok(m) => m,
-                            Err(e) => format!("⚠ {e}"),
+                        let sender_for_decision = event
+                            .source
+                            .as_ref()
+                            .and_then(|s| s.user_id.as_deref())
+                            .unwrap_or("unknown");
+                        let card_chat = if is_group {
+                            scope_id
+                        } else {
+                            sender_for_decision
                         };
-                        let _ = send_reply_rich(
-                            &state.http,
-                            &token,
-                            reply_token,
-                            vec![serde_json::json!({ "type": "text", "text": ack })],
+                        if let Some(outcome) = crate::decision_text::route_text_reply(
+                            &state.home_dir,
+                            "line",
+                            sender_for_decision,
+                            card_chat,
+                            qid,
+                            text,
+                        )
+                        .await
+                        {
+                            let ack = match outcome {
+                                Ok(m) => m,
+                                Err(e) => format!("⚠ {e}"),
+                            };
+                            let _ = send_reply_rich(
+                                &state.http,
+                                &token,
+                                reply_token,
+                                vec![serde_json::json!({ "type": "text", "text": ack })],
+                            )
+                            .await;
+                            continue;
+                        }
+                    }
+                }
+
+                // ── Mention-only mode (group chats only, LINE has no native @mention) ──
+                let mention_only = state
+                    .ctx
+                    .channel_settings
+                    .get_bool("line", scope_id, keys::MENTION_ONLY, false)
+                    .await;
+                if is_group && mention_only {
+                    continue;
+                }
+
+                let sender = source
+                    .as_ref()
+                    .and_then(|s| s.user_id.as_deref())
+                    .unwrap_or("unknown");
+
+                // ── Build input text + attachment references ──
+                let mut attachment_lines: Vec<String> = Vec::new();
+                let mut base_text = msg.text.as_deref().unwrap_or("").to_string();
+                // Voice-to-text: an `audio` message is transcribed and folded into the
+                // input text (mirrors Telegram). Additive — the saved attachment
+                // reference is still emitted, so a failed/keyless transcription
+                // degrades gracefully rather than dropping the message.
+                let mut voice_text = String::new();
+
+                // Handle non-text message types: download content and save to disk
+                if msg.msg_type != "text" {
+                    if let Some(msg_id) = &msg.id {
+                        let type_label = &msg.msg_type;
+                        info!("📩 LINE [{sender}]: {type_label} message");
+
+                        // Determine content URL: LINE-hosted or external
+                        let content_data = if let Some(cp) = &msg.content_provider
+                            && cp.provider_type == "external"
+                            && let Some(url) = &cp.original_content_url
+                        {
+                            // External URL — download directly
+                            crate::media::download_url(
+                                &state.http,
+                                url,
+                                None,
+                                crate::media::MAX_FILE_SIZE as usize,
+                            )
+                            .await
+                            .ok()
+                        } else {
+                            // LINE-hosted — download via Content API
+                            download_line_content(&state.http, &token, msg_id)
+                                .await
+                                .ok()
+                        };
+
+                        if let Some(data) = content_data {
+                            // Transcribe voice/audio messages to text.
+                            if msg.msg_type == "audio" {
+                                match crate::stt::transcribe_channel_audio(
+                                    &state.ctx.home_dir,
+                                    &data,
+                                    Some("zh"),
+                                )
+                                .await
+                                {
+                                    Ok(t) if !t.trim().is_empty() => {
+                                        info!(
+                                            "🎙 LINE [{sender}] transcribed: {}",
+                                            duduclaw_core::truncate_bytes(&t, 80)
+                                        );
+                                        voice_text = t;
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => warn!("LINE voice transcription failed: {e}"),
+                                }
+                            }
+                            let mime = crate::media::detect_mime(&data);
+                            let mt = crate::media::media_type_from_mime(&mime);
+                            let fname = if let Some(name) = &msg.file_name {
+                                name.clone()
+                            } else {
+                                let ext = crate::media::extension_from_mime(&mime);
+                                format!("{type_label}.{ext}")
+                            };
+                            // WP1.3: land under the resolved agent's dir.
+                            let attach_base = crate::channel_reply::resolve_attachment_base(
+                                state.ctx.as_ref(),
+                                Some(agent_id),
+                            )
+                            .await;
+                            match crate::media::save_attachment_in_base(&attach_base, &data, &fname)
+                                .await
+                            {
+                                Ok(path) => {
+                                    attachment_lines.push(crate::media::format_attachment_ref(
+                                        &mt, &fname, &path,
+                                    ));
+                                }
+                                Err(e) => warn!("Failed to save LINE {type_label}: {e}"),
+                            }
+                        }
+                    }
+                }
+
+                // Fold any transcription into the base text.
+                if !voice_text.is_empty() {
+                    base_text = if base_text.trim().is_empty() {
+                        voice_text
+                    } else {
+                        format!("{base_text}\n{voice_text}")
+                    };
+                }
+
+                // Combine text + attachment references
+                let input_text = if attachment_lines.is_empty() {
+                    base_text.clone()
+                } else if base_text.trim().is_empty() {
+                    attachment_lines.join("\n")
+                } else {
+                    format!("{base_text}\n\n{}", attachment_lines.join("\n"))
+                };
+
+                if input_text.trim().is_empty() {
+                    continue;
+                }
+
+                info!("📩 LINE [{sender}]: {}", truncate_bytes(&input_text, 80));
+
+                // ── Chat commands (/status, /new, /handoff, /undo, /rollback, …) ──
+                // Intercepted before the AI pipeline — zero LLM cost. Mirrors slack.rs.
+                if crate::chat_commands::is_command(&input_text) {
+                    if let Some(cmd) = crate::chat_commands::parse_command(&input_text, None) {
+                        let session_id = if let Some(gid) =
+                            source.as_ref().and_then(|s| s.group_id.as_deref())
+                        {
+                            format!("line:{gid}")
+                        } else if let Some(rid) = source.as_ref().and_then(|s| s.room_id.as_deref())
+                        {
+                            format!("line:{rid}")
+                        } else {
+                            format!("line:{sender}")
+                        };
+                        // Central access gate (pairing / allowlist / blocklist) —
+                        // same enforcement the AI path applies; commands must not
+                        // bypass it.
+                        if let Some(gate_reply) = crate::channel_reply::check_user_access_gate(
+                            &state.ctx,
+                            &session_id,
+                            sender,
+                            &input_text,
+                        )
+                        .await
+                        {
+                            if !gate_reply.is_empty() {
+                                let messages =
+                                    vec![serde_json::json!({ "type": "text", "text": gate_reply })];
+                                let _ = send_reply_rich(
+                                    &state.http,
+                                    &token,
+                                    reply_token,
+                                    messages.clone(),
+                                )
+                                .await;
+                            }
+                            continue; // blocked users are silently ignored
+                        }
+                        // Real per-channel admin status (fail-closed) — never hardcoded.
+                        let is_admin = crate::channel_reply::is_channel_admin(
+                            &state.ctx,
+                            "line",
+                            &[sender, &session_id],
                         )
                         .await;
+                        let reply = crate::chat_commands::handle_command(
+                            &cmd,
+                            &state.ctx,
+                            &session_id,
+                            agent_id,
+                            is_admin,
+                            sender,
+                        )
+                        .await;
+                        let messages = vec![serde_json::json!({ "type": "text", "text": reply })];
+                        let _ = send_reply_rich(&state.http, &token, reply_token, messages.clone())
+                            .await;
                         continue;
                     }
                 }
-            }
 
-            // ── Mention-only mode (group chats only, LINE has no native @mention) ──
-            let mention_only = state.ctx.channel_settings.get_bool("line", scope_id, keys::MENTION_ONLY, false).await;
-            if is_group && mention_only {
-                continue;
-            }
+                let on_progress = ingress::line_progress_callback(&state, &event, token);
 
-            let sender = source.as_ref()
-                .and_then(|s| s.user_id.as_deref())
-                .unwrap_or("unknown");
-
-            // ── Build input text + attachment references ──
-            let mut attachment_lines: Vec<String> = Vec::new();
-            let mut base_text = msg.text.as_deref().unwrap_or("").to_string();
-            // Voice-to-text: an `audio` message is transcribed and folded into the
-            // input text (mirrors Telegram). Additive — the saved attachment
-            // reference is still emitted, so a failed/keyless transcription
-            // degrades gracefully rather than dropping the message.
-            let mut voice_text = String::new();
-
-            // Handle non-text message types: download content and save to disk
-            if msg.msg_type != "text" {
-                if let Some(msg_id) = &msg.id {
-                    let type_label = &msg.msg_type;
-                    info!("📩 LINE [{sender}]: {type_label} message");
-
-                    // Determine content URL: LINE-hosted or external
-                    let content_data = if let Some(cp) = &msg.content_provider
-                        && cp.provider_type == "external"
-                        && let Some(url) = &cp.original_content_url
-                    {
-                        // External URL — download directly
-                        crate::media::download_url(&state.http, url, None, crate::media::MAX_FILE_SIZE as usize).await.ok()
-                    } else {
-                        // LINE-hosted — download via Content API
-                        download_line_content(&state.http, &token, msg_id).await.ok()
-                    };
-
-                    if let Some(data) = content_data {
-                        // Transcribe voice/audio messages to text.
-                        if msg.msg_type == "audio" {
-                            match duduclaw_inference::whisper::transcribe(
-                                &data,
-                                Some("zh"),
-                                &duduclaw_inference::whisper::WhisperMode::Api,
-                            )
-                            .await
-                            {
-                                Ok(t) if !t.trim().is_empty() => {
-                                    info!(
-                                        "🎙 LINE [{sender}] transcribed: {}",
-                                        duduclaw_core::truncate_bytes(&t, 80)
-                                    );
-                                    voice_text = t;
-                                }
-                                Ok(_) => {}
-                                Err(e) => warn!("LINE voice transcription failed: {e}"),
-                            }
-                        }
-                        let mime = crate::media::detect_mime(&data);
-                        let mt = crate::media::media_type_from_mime(&mime);
-                        let fname = if let Some(name) = &msg.file_name {
-                            name.clone()
-                        } else {
-                            let ext = crate::media::extension_from_mime(&mime);
-                            format!("{type_label}.{ext}")
-                        };
-                        // WP1.3: land under the resolved agent's dir.
-                        let attach_base = crate::channel_reply::resolve_attachment_base(
-                            state.ctx.as_ref(), None,
-                        ).await;
-                        match crate::media::save_attachment_in_base(&attach_base, &data, &fname).await {
-                            Ok(path) => {
-                                attachment_lines.push(crate::media::format_attachment_ref(&mt, &fname, &path));
-                            }
-                            Err(e) => warn!("Failed to save LINE {type_label}: {e}"),
-                        }
-                    }
-                }
-            }
-
-            // Fold any transcription into the base text.
-            if !voice_text.is_empty() {
-                base_text = if base_text.trim().is_empty() {
-                    voice_text
-                } else {
-                    format!("{base_text}\n{voice_text}")
-                };
-            }
-
-            // Combine text + attachment references
-            let input_text = if attachment_lines.is_empty() {
-                base_text.clone()
-            } else if base_text.trim().is_empty() {
-                attachment_lines.join("\n")
-            } else {
-                format!("{base_text}\n\n{}", attachment_lines.join("\n"))
-            };
-
-            if input_text.trim().is_empty() {
-                continue;
-            }
-
-            info!("📩 LINE [{sender}]: {}", truncate_bytes(&input_text, 80));
-
-            // ── Chat commands (/status, /new, /handoff, /undo, /rollback, …) ──
-            // Intercepted before the AI pipeline — zero LLM cost. Mirrors slack.rs.
-            if crate::chat_commands::is_command(&input_text) {
-                if let Some(cmd) = crate::chat_commands::parse_command(&input_text, None) {
-                    let session_id = if let Some(gid) =
-                        source.as_ref().and_then(|s| s.group_id.as_deref())
-                    {
+                // Build session ID scoped to group/room or user DM
+                let session_id =
+                    if let Some(gid) = source.as_ref().and_then(|s| s.group_id.as_deref()) {
                         format!("line:{gid}")
                     } else if let Some(rid) = source.as_ref().and_then(|s| s.room_id.as_deref()) {
                         format!("line:{rid}")
                     } else {
                         format!("line:{sender}")
                     };
-                    // Central access gate (pairing / allowlist / blocklist) —
-                    // same enforcement the AI path applies; commands must not
-                    // bypass it.
-                    if let Some(gate_reply) = crate::channel_reply::check_user_access_gate(
+
+                #[cfg(test)]
+                if let Some(job) =
+                    crate::decision_notify::native_loop_fixture::take_job_for(token, &input_text)
+                {
+                    // Replace only the model turn, retaining the authenticated
+                    // adapter scope, access gate and real CU approval/action.
+                    if crate::channel_reply::check_user_access_gate(
                         &state.ctx,
                         &session_id,
                         sender,
                         &input_text,
                     )
                     .await
+                    .is_none()
                     {
-                        if !gate_reply.is_empty() {
-                            let messages =
-                                vec![serde_json::json!({ "type": "text", "text": gate_reply })];
-                            if !send_reply_rich(&state.http, &token, reply_token, messages.clone())
-                                .await
-                            {
-                                push_message_rich(&state.http, &token, sender, messages).await;
-                            }
-                        }
-                        continue; // blocked users are silently ignored
-                    }
-                    let agent_id = {
-                        let reg = state.ctx.registry.read().await;
-                        reg.main_agent()
-                            .map(|a| a.config.agent.name.clone())
-                            .unwrap_or_default()
-                    };
-                    // Real per-channel admin status (fail-closed) — never hardcoded.
-                    let is_admin = crate::channel_reply::is_channel_admin(
-                        &state.ctx,
-                        "line",
-                        &[sender, &session_id],
-                    )
-                    .await;
-                    let reply = crate::chat_commands::handle_command(
-                        &cmd, &state.ctx, &session_id, &agent_id, is_admin, sender,
-                    )
-                    .await;
-                    let messages = vec![serde_json::json!({ "type": "text", "text": reply })];
-                    if !send_reply_rich(&state.http, &token, reply_token, messages.clone()).await {
-                        push_message_rich(&state.http, &token, sender, messages).await;
+                        job.await;
+                        let _ = send_reply_rich(
+                            &state.http,
+                            token,
+                            reply_token,
+                            vec![
+                                serde_json::json!({"type":"text","text":"fixture turn completed"}),
+                            ],
+                        )
+                        .await;
                     }
                     continue;
                 }
-            }
 
-            // Progress callback via Push API (requires userId).
-            // LINE Push API has monthly message quotas — debounce at 60s
-            // (more conservative than Telegram's 30s).
-            let user_id_for_push = event.source
-                .as_ref()
-                .and_then(|s| s.user_id.clone());
-            let on_progress: Option<crate::channel_reply::ProgressCallback> = if let Some(uid) = user_id_for_push {
-                let push_http = state.http.clone();
-                let push_token = token.clone();
-                let last_progress = Arc::new(std::sync::Mutex::new(std::time::Instant::now()
-                    .checked_sub(std::time::Duration::from_secs(120))
-                    .unwrap_or_else(std::time::Instant::now)));
-                Some(Box::new(move |event: crate::channel_reply::ProgressEvent| {
-                    // Step / ModelInfo events are dashboard-only signals — never
-                    // rendered as channel text (would be an empty message).
-                    // Mirrors the telegram/slack progress callback filter
-                    // (WP-10C: LINE was the one channel missing this).
-                    if !should_forward_line_progress_event(&event) {
-                        return;
-                    }
-                    let mut last = match last_progress.lock() {
-                        Ok(g) => g,
-                        Err(e) => e.into_inner(),
+                // Loading animation (LINE shows it in 1:1 chats only; the API
+                // silently no-ops elsewhere). RAII guard stops the refresh loop.
+                let loading_guard =
+                    event
+                        .source
+                        .as_ref()
+                        .and_then(|s| s.user_id.clone())
+                        .map(|uid| {
+                            crate::channel_typing::line_loading(
+                                state.http.clone(),
+                                token.to_string(),
+                                uid,
+                            )
+                        });
+
+                // `sender` falls back to a literal placeholder when the event
+                // has no `source.userId`; it keeps that value everywhere it is
+                // an addressing or logging key (the DM session id, the push
+                // target, the revoked-reply notice), but it must never become
+                // the CCR principal — every unidentified sender would hash to
+                // one shared retrieval scope.
+                // `reply_principal_for_sender` yields "" there, which turns
+                // CCR off for the turn (fail-closed).
+                let guarded = build_guarded_reply_for_agent(
+                    &input_text,
+                    &state.ctx,
+                    agent_id,
+                    &session_id,
+                    crate::ccr_runtime::reply_principal_for_sender(sender),
+                    on_progress,
+                )
+                .await;
+                drop(loading_guard);
+
+                if !guarded.still_valid().await {
+                    send_ccr_revoked_reply(&state.http, &token, reply_token, sender).await;
+                    continue;
+                }
+
+                // WP1.3: 📎DELIVER: — LINE has no bot file API, so the default
+                // `send_document` degrades to a text notice (→ dashboard Files
+                // panel) and the marker is stripped from the reply.
+                // The notice joins the answer, so it goes out through the same
+                // revalidated reply / late-reply path and receipt (I-MEDIUM-3).
+                let reply = {
+                    let notices = ingress::LineNoticeCollector::default();
+                    let text = crate::channel_reply::deliver_documents_for_reply_guarded(
+                        state.ctx.as_ref(),
+                        None,
+                        guarded.text.clone(),
+                        &notices,
+                        Some(&guarded),
+                    )
+                    .await;
+                    notices.append_to(text)
+                };
+
+                if !guarded.still_valid().await {
+                    send_ccr_revoked_reply(&state.http, &token, reply_token, sender).await;
+                    continue;
+                }
+
+                // Guard: don't send empty replies
+                if reply.trim().is_empty() {
+                    warn!("LINE: reply is empty — skipping send for {sender}");
+                    continue;
+                }
+
+                // Use Flex Message for long replies, plain text for short ones
+                let agent_name = {
+                    let reg = state.ctx.registry.read().await;
+                    reg.main_agent()
+                        .map(|a| a.config.agent.display_name.clone())
+                };
+                // M25: segment long replies. A single Flex bubble has tight text
+                // limits, so an over-limit reply would be rejected and silently
+                // dropped. `segment_line_reply` returns one Flex bubble for short
+                // replies, or several plain-text messages (each within LINE's
+                // 5000-char text limit, capped at 5 messages/request) for long ones.
+                let mut messages = segment_line_reply(&reply, agent_name.as_deref());
+
+                // Attach quick-reply buttons to the LAST message (LINE only shows
+                // quickReply on the most recent message). Presses arrive as
+                // `postback` events handled above. P1: the goal-intent
+                // confirmation buttons when `reply` is the specific turn that
+                // just appended the confirmation menu, otherwise the ordinary
+                // conversation-control quick reply (unchanged from before P1).
+                if let Some(last) = messages.last_mut() {
+                    last["quickReply"] = if crate::goal_intent::reply_has_confirmation_menu(&reply)
+                    {
+                        crate::goal_intent::pending_button_nonce(&session_id)
+                            .map(|nonce| channel_format::line_gintent_quick_reply(&nonce))
+                            .unwrap_or_else(channel_format::line_quick_reply)
+                    } else {
+                        channel_format::line_quick_reply()
                     };
-                    let throttle = crate::channel_capabilities::progress_throttle_secs("line").unwrap_or(60);
-                    if last.elapsed().as_secs() < throttle {
-                        return;
-                    }
-                    *last = std::time::Instant::now();
-                    drop(last);
+                }
 
-                    let msg_text = event.to_display();
-                    let c = push_http.clone();
-                    let t = push_token.clone();
-                    let u = uid.clone();
-                    tokio::spawn(async move {
-                        push_message(&c, &t, &u, &msg_text).await;
-                    });
-                }))
-            } else {
-                None
-            };
-
-            // Build session ID scoped to group/room or user DM
-            let session_id = if let Some(gid) = source.as_ref().and_then(|s| s.group_id.as_deref()) {
-                format!("line:{gid}")
-            } else if let Some(rid) = source.as_ref().and_then(|s| s.room_id.as_deref()) {
-                format!("line:{rid}")
-            } else {
-                format!("line:{sender}")
-            };
-
-            // Loading animation (LINE shows it in 1:1 chats only; the API
-            // silently no-ops elsewhere). RAII guard stops the refresh loop.
-            let loading_guard = event
-                .source
-                .as_ref()
-                .and_then(|s| s.user_id.clone())
-                .map(|uid| crate::channel_typing::line_loading(state.http.clone(), token.clone(), uid));
-
-            let reply = build_reply_with_session(&input_text, &state.ctx, &session_id, sender, on_progress).await;
-            drop(loading_guard);
-
-            // WP1.3: 📎DELIVER: — LINE has no bot-push file API, so the sender's
-            // default `send_document` degrades to a text notice (→ dashboard
-            // Files panel) and the marker is stripped from the reply.
-            let reply = {
-                let doc_sender = crate::channel_sender::LineSender {
-                    access_token: token.clone(),
-                    user_id: sender.to_string(),
-                    http: state.http.clone(),
-                };
-                crate::channel_reply::deliver_documents_for_reply(
-                    state.ctx.as_ref(), None, reply, &doc_sender,
-                ).await
-            };
-
-            // Guard: don't send empty replies
-            if reply.trim().is_empty() {
-                warn!("LINE: reply is empty — skipping send for {sender}");
-                continue;
-            }
-
-            // Use Flex Message for long replies, plain text for short ones
-            let agent_name = {
-                let reg = state.ctx.registry.read().await;
-                reg.main_agent().map(|a| a.config.agent.display_name.clone())
-            };
-            // M25: segment long replies. A single Flex bubble has tight text
-            // limits, so an over-limit reply would be rejected and silently
-            // dropped. `segment_line_reply` returns one Flex bubble for short
-            // replies, or several plain-text messages (each within LINE's
-            // 5000-char text limit, capped at 5 messages/request) for long ones.
-            let mut messages = segment_line_reply(&reply, agent_name.as_deref());
-
-            // Attach quick-reply buttons to the LAST message (LINE only shows
-            // quickReply on the most recent message). Presses arrive as
-            // `postback` events handled above. P1: the goal-intent
-            // confirmation buttons when `reply` is the specific turn that
-            // just appended the confirmation menu, otherwise the ordinary
-            // conversation-control quick reply (unchanged from before P1).
-            if let Some(last) = messages.last_mut() {
-                last["quickReply"] = if crate::goal_intent::reply_has_confirmation_menu(&reply) {
-                    crate::goal_intent::pending_button_nonce(&session_id)
-                        .map(|nonce| channel_format::line_gintent_quick_reply(&nonce))
-                        .unwrap_or_else(channel_format::line_quick_reply)
-                } else {
-                    channel_format::line_quick_reply()
-                };
-            }
-
-            // Try Reply API first; if it fails (e.g. reply token expired after
-            // long AI processing), fall back to Push API which doesn't require
-            // a reply token but counts against the monthly message quota.
-            if !send_reply_rich(&state.http, &token, reply_token, messages.clone()).await {
-                warn!("LINE: reply API failed — falling back to push API for {sender}");
-                push_message_rich(&state.http, &token, sender, messages).await;
+                // Delivery (reply, or the late-reply Push per
+                // `line_late_reply`) and its receipt: `ingress::deliver`.
+                if !guarded.still_valid().await {
+                    send_ccr_revoked_reply(&state.http, &token, reply_token, sender).await;
+                    continue;
+                }
+                let _ = send_reply_rich(&state.http, &token, reply_token, messages).await;
             }
         }
     }
-    });
+    .await
+}
 
-    StatusCode::OK
+async fn send_ccr_revoked_reply(
+    http: &reqwest::Client,
+    token: &str,
+    reply_token: &str,
+    _sender: &str,
+) {
+    let messages = vec![serde_json::json!({
+        "type": "text",
+        "text": crate::channel_reply::CCR_DELIVERY_REFUSED_TEXT
+    })];
+    let _ = send_reply_rich(http, token, reply_token, messages.clone()).await;
 }
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -737,30 +1078,36 @@ async fn handle_postback(event: &LineEvent, state: &LineState, token: &str) {
         .as_ref()
         .and_then(|p| p.data.as_deref())
         .unwrap_or("");
-    let Some(reply_token) = &event.reply_token else { return };
+    let Some(reply_token) = &event.reply_token else {
+        return;
+    };
     let source = &event.source;
     let sender = source
         .as_ref()
         .and_then(|s| s.user_id.as_deref())
         .unwrap_or("unknown");
 
-    info!("🔘 LINE [{sender}] postback: {data}");
+    info!("LINE postback received");
 
     // Decision buttons — every "a human must decide this" card, whichever
     // store backs it. `None` ⇒ not a decision button, fall through to the
     // other postback actions below.
     if sender != "unknown" {
-        if let Some(result) =
-            crate::decision_notify::route_press(&state.ctx.home_dir, "line", sender, data).await
+        if let Some(result) = match crate::approval::CURRENT_DECISION_CONTEXT.try_with(Clone::clone)
         {
+            Ok(Some(context)) => {
+                crate::decision_notify::route_bound_press(&state.ctx.home_dir, &context, data).await
+            }
+            _ => {
+                crate::decision_notify::route_press(&state.ctx.home_dir, "line", sender, data).await
+            }
+        } {
             let answer = match result {
                 Ok(msg) => msg,
                 Err(msg) => format!("⚠️ {msg}"),
             };
             let messages = vec![serde_json::json!({ "type": "text", "text": answer })];
-            if !send_reply_rich(&state.http, token, reply_token, messages.clone()).await {
-                push_message_rich(&state.http, token, sender, messages).await;
-            }
+            let _ = send_reply_rich(&state.http, token, reply_token, messages.clone()).await;
             return;
         }
     }
@@ -773,15 +1120,13 @@ async fn handle_postback(event: &LineEvent, state: &LineState, token: &str) {
     // (see the caller: "LINE times out a slow webhook response… blocking the
     // 200 on a multi-second model reply gets the handler future… cancelled"),
     // so awaiting `handle_gintent_button`'s possible plan-first LLM call here
-    // is safe — a since-expired reply token just falls through to the same
-    // Push API fallback every other LINE reply already uses.
+    // is safe; an expired reply token is recorded as a delivery failure.
     if sender != "unknown" {
         if let Some((choice, nonce)) = crate::goal_intent::parse_gintent_action(data) {
-            let outcome = crate::goal_intent::handle_gintent_button(&state.ctx, choice, &nonce).await;
+            let outcome =
+                crate::goal_intent::handle_gintent_button(&state.ctx, choice, &nonce).await;
             let messages = vec![serde_json::json!({ "type": "text", "text": outcome })];
-            if !send_reply_rich(&state.http, token, reply_token, messages.clone()).await {
-                push_message_rich(&state.http, token, sender, messages).await;
-            }
+            let _ = send_reply_rich(&state.http, token, reply_token, messages.clone()).await;
             return;
         }
     }
@@ -789,7 +1134,8 @@ async fn handle_postback(event: &LineEvent, state: &LineState, token: &str) {
     let answer = match data {
         "duduclaw:new_session" => {
             // Session id scoped the same way as the message path.
-            let session_id = if let Some(gid) = source.as_ref().and_then(|s| s.group_id.as_deref()) {
+            let session_id = if let Some(gid) = source.as_ref().and_then(|s| s.group_id.as_deref())
+            {
                 format!("line:{gid}")
             } else if let Some(rid) = source.as_ref().and_then(|s| s.room_id.as_deref()) {
                 format!("line:{rid}")
@@ -805,9 +1151,7 @@ async fn handle_postback(event: &LineEvent, state: &LineState, token: &str) {
     };
 
     let messages = vec![serde_json::json!({ "type": "text", "text": answer })];
-    if !send_reply_rich(&state.http, token, reply_token, messages.clone()).await {
-        push_message_rich(&state.http, token, sender, messages).await;
-    }
+    let _ = send_reply_rich(&state.http, token, reply_token, messages.clone()).await;
 }
 
 /// LINE limits for outbound message segmentation.
@@ -902,71 +1246,23 @@ async fn download_line_content(
         &url,
         Some(("Authorization", &format!("Bearer {token}"))),
         crate::media::MAX_FILE_SIZE as usize,
-    ).await
+    )
+    .await
 }
 
-/// Send a rich reply (Flex Message, etc.) via the LINE Reply API.
+/// Send the answer of an ingress run: the Reply API while the reply token
+/// is fresh, otherwise per `[channel_ingress] line_late_reply` (Push to the
+/// same conversation, or a recorded expiry). Revalidates first; the result
+/// goes into the run's receipt. See `ingress::delivery`.
 ///
-/// Returns `true` on success, `false` on failure (e.g. reply token expired).
+/// Returns `true` when LINE accepted the message.
 async fn send_reply_rich(
     http: &reqwest::Client,
     token: &str,
     reply_token: &str,
     messages: Vec<serde_json::Value>,
 ) -> bool {
-    let body = serde_json::json!({
-        "replyToken": reply_token,
-        "messages": messages
-    });
-
-    match http
-        .post(format!("{LINE_API}/message/reply"))
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) if !resp.status().is_success() => {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            error!("LINE reply failed ({status}): {}", truncate_bytes(&text, 200));
-            false
-        }
-        Err(e) => {
-            error!("LINE reply error: {e}");
-            false
-        }
-        _ => true,
-    }
-}
-
-/// Send a rich push message (Flex Message) to a specific LINE user.
-///
-/// Used as fallback when the Reply API fails (e.g. reply token expired after
-/// long AI processing). Counts against the monthly message quota.
-async fn push_message_rich(http: &reqwest::Client, token: &str, user_id: &str, messages: Vec<serde_json::Value>) {
-    let body = serde_json::json!({
-        "to": user_id,
-        "messages": messages
-    });
-
-    match http
-        .post(format!("{LINE_API}/message/push"))
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) if !resp.status().is_success() => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            error!("LINE push (rich) failed ({status}): {}", truncate_bytes(&body, 200));
-        }
-        Err(e) => error!("LINE push (rich) error: {e}"),
-        _ => info!("LINE: push fallback succeeded for {user_id}"),
-    }
+    ingress::deliver(http, token, reply_token, messages).await
 }
 
 /// Whether a `ProgressEvent` should be pushed to a LINE user as a message.
@@ -990,39 +1286,35 @@ fn should_forward_line_progress_event(event: &crate::channel_reply::ProgressEven
     !event.to_display().is_empty()
 }
 
-/// Send a push message to a specific LINE user (for progress updates).
-///
-/// Uses the LINE Push API which counts against the monthly message quota.
-async fn push_message(http: &reqwest::Client, token: &str, user_id: &str, text: &str) {
-    let body = serde_json::json!({
-        "to": user_id,
-        "messages": [{ "type": "text", "text": text }]
-    });
-
-    match http
-        .post(format!("{LINE_API}/message/push"))
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) if !resp.status().is_success() => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            warn!("LINE push failed ({status}): {}", truncate_bytes(&body, 200));
-        }
-        Err(e) => warn!("LINE push error: {e}"),
-        _ => {}
-    }
-}
-
-async fn read_line_config(home_dir: &Path) -> Option<(String, String)> {
-    let token = crate::config_crypto::read_encrypted_config_field(home_dir, "channels", "line_channel_token").await?;
-    let secret = crate::config_crypto::read_encrypted_config_field(home_dir, "channels", "line_channel_secret")
-        .await
-        .unwrap_or_default();
+async fn line_credentials_for_table(
+    home_dir: &Path,
+    table: &toml::Table,
+) -> Option<(String, String)> {
+    let token = crate::config_crypto::decrypt_config_field_async(
+        table,
+        "channels",
+        "line_channel_token",
+        home_dir,
+    )
+    .await?
+    .expose_owned();
+    let secret = crate::config_crypto::decrypt_config_field_async(
+        table,
+        "channels",
+        "line_channel_secret",
+        home_dir,
+    )
+    .await
+    .map(|s| s.expose_owned())
+    .unwrap_or_default();
     Some((token, secret))
+}
+async fn read_line_config(home_dir: &Path) -> Option<(String, String)> {
+    let text = tokio::fs::read_to_string(home_dir.join("config.toml"))
+        .await
+        .ok()?;
+    let table: toml::Table = text.parse().ok()?;
+    line_credentials_for_table(home_dir, &table).await
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -1044,7 +1336,10 @@ mod tests {
         let long = "字".repeat(line_limits::FLEX_SAFE + 6000);
         let msgs = segment_line_reply(&long, None);
         assert!(msgs.len() > 1, "long reply should be segmented");
-        assert!(msgs.len() <= line_limits::MAX_MESSAGES, "must respect 5-message cap");
+        assert!(
+            msgs.len() <= line_limits::MAX_MESSAGES,
+            "must respect 5-message cap"
+        );
         for m in &msgs {
             assert_eq!(m["type"], "text");
             // Each text message stays within LINE's 5000-char limit.
@@ -1119,7 +1414,9 @@ mod tests {
 
     #[test]
     fn model_info_event_is_not_forwarded_to_line() {
-        let ev = ProgressEvent::ModelInfo { model: "claude-x".into() };
+        let ev = ProgressEvent::ModelInfo {
+            model: "claude-x".into(),
+        };
         assert!(
             ev.to_display().is_empty(),
             "precondition: ModelInfo must render empty"
@@ -1134,17 +1431,77 @@ mod tests {
     fn keepalive_and_tool_use_and_todo_update_are_forwarded_to_line() {
         // These variants all render non-empty text and must keep reaching
         // the LINE Push API (this fix must not over-filter).
-        assert!(should_forward_line_progress_event(&ProgressEvent::Keepalive));
-        assert!(should_forward_line_progress_event(&ProgressEvent::ToolUse {
-            tool: "Read".into(),
-            detail: Some("foo.rs".into()),
-        }));
-        assert!(should_forward_line_progress_event(&ProgressEvent::TodoUpdate {
-            todos: vec![TodoItem {
-                content: "do the thing".into(),
-                status: "pending".into(),
-                active_form: None,
-            }],
-        }));
+        assert!(should_forward_line_progress_event(
+            &ProgressEvent::Keepalive
+        ));
+        assert!(should_forward_line_progress_event(
+            &ProgressEvent::ToolUse {
+                tool: "Read".into(),
+                detail: Some("foo.rs".into()),
+            }
+        ));
+        assert!(should_forward_line_progress_event(
+            &ProgressEvent::TodoUpdate {
+                todos: vec![TodoItem {
+                    content: "do the thing".into(),
+                    status: "pending".into(),
+                    active_form: None,
+                }],
+            }
+        ));
     }
 }
+
+/// Regression guard for the anonymous-sender CCR leak: this adapter used to
+/// pass its `"unknown"` placeholder straight into the reply pipeline's
+/// `user_id`, so every sender the webhook could not identify hashed to the
+/// same `source_acl` and could retrieve the others' saved tool originals.
+#[cfg(test)]
+mod ccr_principal_tests {
+    use crate::ccr_runtime::source_scan::call_args_at;
+    use crate::ccr_runtime::{reply_principal_for_sender, source_acl_for_principal};
+
+    const SRC: &str = include_str!("line.rs");
+    const AGENT: &str = "agent-a";
+    const SESSION: &str = "line:Cgroup123";
+
+    /// Structural: every `build_guarded_reply_for_agent` call in this file
+    /// must launder its principal. Checked over the real source because the
+    /// call site lives inside a long async webhook handler that cannot be
+    /// driven from a unit test.
+    #[test]
+    fn every_guarded_reply_call_launders_the_ccr_principal() {
+        let args = call_args_at(SRC, "build_guarded_reply_for_agent(", 4);
+        assert!(
+            !args.is_empty(),
+            "no guarded-reply call found — did the call site move?"
+        );
+        for arg in args {
+            assert!(
+                arg.starts_with("crate::ccr_runtime::reply_principal_for_sender("),
+                "the CCR principal argument must be laundered, found `{arg}`"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unidentified_sender_disables_ccr_instead_of_sharing_one_scope() {
+        let anonymous = reply_principal_for_sender("unknown");
+        assert!(anonymous.is_empty());
+        assert!(
+            source_acl_for_principal(AGENT, SESSION, anonymous).is_none(),
+            "an unidentified sender must disable CCR, never pool into one scope"
+        );
+
+        let alice = reply_principal_for_sender("Ualice");
+        let bob = reply_principal_for_sender("Ubob");
+        assert_ne!(
+            source_acl_for_principal(AGENT, SESSION, alice).unwrap(),
+            source_acl_for_principal(AGENT, SESSION, bob).unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "channel_decision_route/adapter_tests/line.rs"]
+mod f4_decision_route_tests;

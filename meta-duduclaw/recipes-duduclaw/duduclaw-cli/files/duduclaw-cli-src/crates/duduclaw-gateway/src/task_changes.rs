@@ -19,8 +19,8 @@
 //!    therefore called from `dispatcher.rs` — the ONE place every goal-loop
 //!    dispatch round's native events are already collected — and persists
 //!    just the file-effect subset into `task_changes.jsonl`, keyed by task id.
-//! 2. **MCP audit rows** (`tool_calls.jsonl`) — `shared_wiki_write` and
-//!    friends. Already durable; attributed to the task by the same
+//! 2. **MCP audit rows** (`tool_calls.jsonl`) — shared-wiki writes
+//!    (`wiki_write` with `scope="shared"`) and friends. Already durable; attributed to the task by the same
 //!    (agent, claim→review window) convention `dispatch_engine` uses for the
 //!    `<tool_activity>` judge block.
 //!
@@ -140,7 +140,7 @@ pub struct FileChange {
     pub path: String,
     pub op: ChangeOp,
     /// The tool that produced the effect, verbatim (`Write`, `apply_patch`,
-    /// `shared_wiki_write`, …).
+    /// `wiki_write`, …).
     pub tool_name: String,
     /// RFC3339 UTC.
     pub timestamp: String,
@@ -260,7 +260,15 @@ const SHELL_TOOLS: &[&str] = &["Bash", "shell", "run_shell_command", "run_termin
 /// file change. Deliberately short — a long speculative list would turn the
 /// tab into noise, and a tool with no path-bearing argument (e.g. `canvas_push`)
 /// would only ever be silently dropped, so it does not belong here.
-const MCP_WRITE_TOOLS: &[&str] = &["shared_wiki_write", "agent_update_soul"];
+///
+/// `shared_wiki_write` was removed in v1.69.0; it stays here so rows written
+/// before the upgrade still show up. Its replacement, `wiki_write`, counts
+/// only with `scope="shared"` (see [`SHARED_SCOPE_ONLY_TOOLS`]).
+const MCP_WRITE_TOOLS: &[&str] = &["shared_wiki_write", "wiki_write", "agent_update_soul"];
+
+/// Tools that are a file change only when their input carries
+/// `scope = "shared"` — writing the agent's own wiki was never listed here.
+const SHARED_SCOPE_ONLY_TOOLS: &[&str] = &["wiki_write"];
 const MCP_DELETE_TOOLS: &[&str] = &["shared_wiki_delete"];
 
 /// Leading command verbs whose file effect is unambiguous. Matched against
@@ -375,7 +383,11 @@ fn field_str(parsed: Option<&serde_json::Value>, raw: &str, key: &str) -> Option
             other => out.push(other),
         }
     }
-    if out.trim().is_empty() { None } else { Some(out) }
+    if out.trim().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// A few MCP tools name their target indirectly. The mapping is exact and
@@ -415,6 +427,14 @@ pub fn extract_change(
     let raw = input_text.unwrap_or("");
     let parsed: Option<serde_json::Value> = serde_json::from_str(raw).ok();
     let parsed_ref = parsed.as_ref();
+    if SHARED_SCOPE_ONLY_TOOLS.contains(&tool_name)
+        && !parsed_ref
+            .and_then(|v| v.get("scope"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("shared"))
+    {
+        return None;
+    }
 
     let (path, snippet) = if op == ChangeOp::Shell {
         let command = field_str(parsed_ref, raw, "command")
@@ -435,7 +455,9 @@ pub fn extract_change(
     } else {
         let path = mcp_path_override(tool_name, parsed_ref, raw)
             .or_else(|| PATH_KEYS.iter().find_map(|k| field_str(parsed_ref, raw, k)))?;
-        let snippet = SNIPPET_KEYS.iter().find_map(|k| field_str(parsed_ref, raw, k));
+        let snippet = SNIPPET_KEYS
+            .iter()
+            .find_map(|k| field_str(parsed_ref, raw, k));
         (path, snippet)
     };
 
@@ -601,6 +623,34 @@ fn read_ledger(home_dir: &Path, task_id: &str) -> Vec<FileChange> {
         .collect()
 }
 
+/// The shared-wiki write audit row (`handle_shared_wiki_write`) has no
+/// `input` field: it carries `params_summary = "path=<page> size=<bytes>"`
+/// and, since v1.69.0, `scope = "shared"` as a row-level field. Rebuild the
+/// input envelope [`extract_change`] reads from that shape. A row of the
+/// removed `shared_wiki_write` name is shared by definition. Any other tool,
+/// or a row without a recoverable path, yields `None`.
+fn shared_wiki_write_input(tool_name: &str, row: &serde_json::Value) -> Option<String> {
+    let shared = match tool_name {
+        "shared_wiki_write" => true,
+        "wiki_write" => row
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("shared")),
+        _ => false,
+    };
+    if !shared {
+        return None;
+    }
+    let summary = row.get("params_summary").and_then(|v| v.as_str())?;
+    let rest = summary.strip_prefix("path=")?;
+    let (path, _size) = rest.rsplit_once(" size=")?;
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({ "page_path": path, "scope": "shared" }).to_string())
+}
+
 /// Read the MCP audit rows attributable to this task: same `agent_id` +
 /// `[since, until]` window convention `dispatch_engine` already uses for the
 /// judge's `<tool_activity>` block. An empty/unparseable window yields no
@@ -640,15 +690,18 @@ fn read_mcp_rows(home_dir: &Path, agent_id: &str, since: &str, until: &str) -> V
             continue;
         };
         let success = v.get("success").and_then(|x| x.as_bool()).unwrap_or(false);
-        let input = v.get("input").and_then(|x| x.as_str());
-        if let Some(change) = extract_change(
-            tool_name,
-            success,
-            ts,
-            input,
-            ChangeSource::McpAudit,
-            None,
-        ) {
+        let synthesized = if v.get("input").is_none() {
+            shared_wiki_write_input(tool_name, &v)
+        } else {
+            None
+        };
+        let input = v
+            .get("input")
+            .and_then(|x| x.as_str())
+            .or(synthesized.as_deref());
+        if let Some(change) =
+            extract_change(tool_name, success, ts, input, ChangeSource::McpAudit, None)
+        {
             out.push(change);
         }
     }
@@ -714,8 +767,15 @@ mod tests {
     #[test]
     fn write_tool_yields_path_and_snippet() {
         let input = r#"{"file_path":"/repo/src/main.rs","content":"fn main() {}"}"#;
-        let c = extract_change("Write", true, "2026-08-15T10:00:00Z", Some(input), ChangeSource::Native, Some(2))
-            .expect("Write is a file effect");
+        let c = extract_change(
+            "Write",
+            true,
+            "2026-08-15T10:00:00Z",
+            Some(input),
+            ChangeSource::Native,
+            Some(2),
+        )
+        .expect("Write is a file effect");
         assert_eq!(c.path, "/repo/src/main.rs");
         assert_eq!(c.op, ChangeOp::Write);
         assert_eq!(c.snippet.as_deref(), Some("fn main() {}"));
@@ -734,8 +794,15 @@ mod tests {
     #[test]
     fn notebook_edit_uses_notebook_path() {
         let input = r#"{"notebook_path":"/repo/nb.ipynb","new_source":"print(1)"}"#;
-        let c = extract_change("NotebookEdit", true, "t", Some(input), ChangeSource::Native, None)
-            .unwrap();
+        let c = extract_change(
+            "NotebookEdit",
+            true,
+            "t",
+            Some(input),
+            ChangeSource::Native,
+            None,
+        )
+        .unwrap();
         assert_eq!(c.path, "/repo/nb.ipynb");
         assert_eq!(c.op, ChangeOp::Edit);
     }
@@ -744,8 +811,15 @@ mod tests {
     fn read_only_and_unknown_tools_produce_nothing() {
         for tool in ["Read", "Grep", "memory_search", "tasks_list", "WebFetch"] {
             assert!(
-                extract_change(tool, true, "t", Some(r#"{"file_path":"/x"}"#), ChangeSource::Native, None)
-                    .is_none(),
+                extract_change(
+                    tool,
+                    true,
+                    "t",
+                    Some(r#"{"file_path":"/x"}"#),
+                    ChangeSource::Native,
+                    None
+                )
+                .is_none(),
                 "{tool} must not be reported as a file change"
             );
         }
@@ -762,12 +836,25 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(!c.success, "a blocked/failed write is exactly what live state hides");
+        assert!(
+            !c.success,
+            "a blocked/failed write is exactly what live state hides"
+        );
     }
 
     #[test]
     fn missing_path_field_yields_nothing_never_a_placeholder() {
-        assert!(extract_change("Write", true, "t", Some(r#"{"content":"x"}"#), ChangeSource::Native, None).is_none());
+        assert!(
+            extract_change(
+                "Write",
+                true,
+                "t",
+                Some(r#"{"content":"x"}"#),
+                ChangeSource::Native,
+                None
+            )
+            .is_none()
+        );
         assert!(extract_change("Write", true, "t", None, ChangeSource::Native, None).is_none());
     }
 
@@ -777,14 +864,16 @@ mod tests {
         // here as an unparseable fragment — the path must survive anyway.
         let input = r#"{"file_path":"/repo/big.rs","content":"aaaaaaaaaa"#;
         assert!(serde_json::from_str::<serde_json::Value>(input).is_err());
-        let c = extract_change("Write", true, "t", Some(input), ChangeSource::Native, None).unwrap();
+        let c =
+            extract_change("Write", true, "t", Some(input), ChangeSource::Native, None).unwrap();
         assert_eq!(c.path, "/repo/big.rs");
     }
 
     #[test]
     fn masked_text_is_passed_through_verbatim_never_re_read() {
         let input = r#"{"file_path":"/repo/.env","content":"API_KEY=***MASKED***"}"#;
-        let c = extract_change("Write", true, "t", Some(input), ChangeSource::Native, None).unwrap();
+        let c =
+            extract_change("Write", true, "t", Some(input), ChangeSource::Native, None).unwrap();
         assert_eq!(c.snippet.as_deref(), Some("API_KEY=***MASKED***"));
     }
 
@@ -797,7 +886,8 @@ mod tests {
         })
         .to_string();
         // Must not panic on a mid-char byte budget.
-        let c = extract_change("Write", true, "t", Some(&input), ChangeSource::Native, None).unwrap();
+        let c =
+            extract_change("Write", true, "t", Some(&input), ChangeSource::Native, None).unwrap();
         assert!(c.path.len() <= PATH_MAX_BYTES);
         assert!(c.snippet.as_ref().unwrap().len() <= SNIPPET_MAX_BYTES);
         assert!(c.path.starts_with("/repo/報告"));
@@ -819,7 +909,10 @@ mod tests {
             "npm run build && cp dist/x /srv/x",
             "/bin/rm x",
         ] {
-            assert!(shell_command_mutates(cmd), "{cmd} should count as a file effect");
+            assert!(
+                shell_command_mutates(cmd),
+                "{cmd} should count as a file effect"
+            );
         }
     }
 
@@ -833,7 +926,10 @@ mod tests {
             "alarm --check",
             "python -c 'print(1)'",
         ] {
-            assert!(!shell_command_mutates(cmd), "{cmd} must not be called a file change");
+            assert!(
+                !shell_command_mutates(cmd),
+                "{cmd} must not be called a file change"
+            );
         }
     }
 
@@ -849,7 +945,9 @@ mod tests {
     #[test]
     fn read_only_shell_yields_no_row() {
         let input = r#"{"command":"cargo test --workspace"}"#;
-        assert!(extract_change("Bash", true, "t", Some(input), ChangeSource::Native, None).is_none());
+        assert!(
+            extract_change("Bash", true, "t", Some(input), ChangeSource::Native, None).is_none()
+        );
     }
 
     // ── ledger round trip ───────────────────────────────────────────────
@@ -864,16 +962,35 @@ mod tests {
             3,
             &[
                 native("Read", true, Some(r#"{"file_path":"/repo/a.rs"}"#)),
-                native("Write", true, Some(r#"{"file_path":"/repo/a.rs","content":"x"}"#)),
+                native(
+                    "Write",
+                    true,
+                    Some(r#"{"file_path":"/repo/a.rs","content":"x"}"#),
+                ),
                 native("Bash", true, Some(r#"{"command":"ls"}"#)),
                 native("Bash", false, Some(r#"{"command":"rm -rf /repo/tmp"}"#)),
             ],
         );
-        let ev = collect_task_changes(dir.path(), "task-1", "worker", "2026-01-01T00:00:00Z", "2030-01-01T00:00:00Z", 50);
+        let ev = collect_task_changes(
+            dir.path(),
+            "task-1",
+            "worker",
+            "2026-01-01T00:00:00Z",
+            "2030-01-01T00:00:00Z",
+            50,
+        );
         assert_eq!(ev.changes.len(), 2, "Read + read-only Bash are excluded");
         assert_eq!(ev.distinct_paths, 1, "shell rows are not paths");
-        assert!(ev.changes.iter().any(|c| c.path == "/repo/a.rs" && c.op == ChangeOp::Write));
-        assert!(ev.changes.iter().any(|c| c.op == ChangeOp::Shell && !c.success));
+        assert!(
+            ev.changes
+                .iter()
+                .any(|c| c.path == "/repo/a.rs" && c.op == ChangeOp::Write)
+        );
+        assert!(
+            ev.changes
+                .iter()
+                .any(|c| c.op == ChangeOp::Shell && !c.success)
+        );
         assert!(ev.changes.iter().all(|c| c.round == Some(3)));
     }
 
@@ -885,14 +1002,22 @@ mod tests {
             "task-A",
             "worker",
             1,
-            &[native("Write", true, Some(r#"{"file_path":"/a","content":"1"}"#))],
+            &[native(
+                "Write",
+                true,
+                Some(r#"{"file_path":"/a","content":"1"}"#),
+            )],
         );
         record_round_changes(
             dir.path(),
             "task-B",
             "worker",
             1,
-            &[native("Write", true, Some(r#"{"file_path":"/b","content":"2"}"#))],
+            &[native(
+                "Write",
+                true,
+                Some(r#"{"file_path":"/b","content":"2"}"#),
+            )],
         );
         let ev = collect_task_changes(dir.path(), "task-A", "", "", "", 50);
         assert_eq!(ev.changes.len(), 1);
@@ -902,7 +1027,14 @@ mod tests {
     #[test]
     fn no_evidence_is_an_honest_empty_result() {
         let dir = tempfile::tempdir().unwrap();
-        let ev = collect_task_changes(dir.path(), "task-1", "worker", "2026-01-01T00:00:00Z", "2030-01-01T00:00:00Z", 50);
+        let ev = collect_task_changes(
+            dir.path(),
+            "task-1",
+            "worker",
+            "2026-01-01T00:00:00Z",
+            "2030-01-01T00:00:00Z",
+            50,
+        );
         assert_eq!(ev, TaskChangeEvidence::default());
         assert!(ev.changes.is_empty());
         assert_eq!(ev.distinct_paths, 0);
@@ -912,10 +1044,22 @@ mod tests {
     #[test]
     fn empty_task_id_or_no_events_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        record_round_changes(dir.path(), "", "worker", 1, &[native("Write", true, Some(r#"{"file_path":"/a"}"#))]);
+        record_round_changes(
+            dir.path(),
+            "",
+            "worker",
+            1,
+            &[native("Write", true, Some(r#"{"file_path":"/a"}"#))],
+        );
         record_round_changes(dir.path(), "task-1", "worker", 1, &[]);
         // A round whose events had no file effect must not create the file either.
-        record_round_changes(dir.path(), "task-1", "worker", 1, &[native("Read", true, Some("{}"))]);
+        record_round_changes(
+            dir.path(),
+            "task-1",
+            "worker",
+            1,
+            &[native("Read", true, Some("{}"))],
+        );
         assert!(!dir.path().join(TASK_CHANGES_FILE).exists());
     }
 
@@ -927,7 +1071,11 @@ mod tests {
             "task-1",
             "worker",
             1,
-            &[native("Write", true, Some(r#"{"file_path":"/a","content":"1"}"#))],
+            &[native(
+                "Write",
+                true,
+                Some(r#"{"file_path":"/a","content":"1"}"#),
+            )],
         );
         let path = dir.path().join(TASK_CHANGES_FILE);
         let mut body = std::fs::read_to_string(&path).unwrap();
@@ -941,7 +1089,13 @@ mod tests {
     fn per_round_row_cap_is_enforced() {
         let dir = tempfile::tempdir().unwrap();
         let events: Vec<NativeToolEvent> = (0..MAX_ROWS_PER_ROUND + 20)
-            .map(|i| native("Write", true, Some(&format!(r#"{{"file_path":"/f{i}","content":"x"}}"#))))
+            .map(|i| {
+                native(
+                    "Write",
+                    true,
+                    Some(&format!(r#"{{"file_path":"/f{i}","content":"x"}}"#)),
+                )
+            })
             .collect();
         record_round_changes(dir.path(), "task-1", "worker", 1, &events);
         let ev = collect_task_changes(dir.path(), "task-1", "", "", "", MAX_QUERY_LIMIT);
@@ -954,16 +1108,19 @@ mod tests {
         let path = dir.path().join(TASK_CHANGES_FILE);
         let mut body = String::new();
         for i in 0..5 {
-            body.push_str(&serde_json::json!({
-                "timestamp": format!("2026-08-15T10:0{i}:00+00:00"),
-                "task_id": "task-1",
-                "agent_id": "worker",
-                "path": format!("/f{i}"),
-                "op": "write",
-                "tool_name": "Write",
-                "success": true,
-                "source": "native",
-            }).to_string());
+            body.push_str(
+                &serde_json::json!({
+                    "timestamp": format!("2026-08-15T10:0{i}:00+00:00"),
+                    "task_id": "task-1",
+                    "agent_id": "worker",
+                    "path": format!("/f{i}"),
+                    "op": "write",
+                    "tool_name": "Write",
+                    "success": true,
+                    "source": "native",
+                })
+                .to_string(),
+            );
             body.push('\n');
         }
         std::fs::write(&path, body).unwrap();
@@ -1004,6 +1161,88 @@ mod tests {
         assert_eq!(ev.changes[0].round, None);
     }
 
+    /// The rows the real writers leave. A shared-wiki write is written by
+    /// `handle_shared_wiki_write` through `append_tool_call_with_extras`: no
+    /// `input` field, `params_summary = "path=<page> size=<bytes>"`, and
+    /// `scope = "shared"` at row level. Writing the agent's own wiki leaves no
+    /// row at all (`wiki_write` is not in the generic audit list).
+    #[test]
+    fn real_shared_wiki_write_rows_count_and_other_scopes_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // v1.69.0 shape: name `wiki_write`, row-level scope.
+        duduclaw_security::audit::append_tool_call_with_extras(
+            home,
+            "w",
+            "wiki_write",
+            "path=sop/new.md size=12",
+            true,
+            &[("scope", "shared".into()), ("matches_caller", true.into())],
+        );
+        // Pre-1.69 shape: name `shared_wiki_write`, no scope field.
+        duduclaw_security::audit::append_tool_call_with_extras(
+            home,
+            "w",
+            "shared_wiki_write",
+            "path=sop/old.md size=7",
+            true,
+            &[("matches_caller", true.into())],
+        );
+        // A `wiki_write` row that is not the shared scope is never a change.
+        duduclaw_security::audit::append_tool_call_with_extras(
+            home,
+            "w",
+            "wiki_write",
+            "path=notes/own.md size=3",
+            true,
+            &[("scope", "agent".into())],
+        );
+        duduclaw_security::audit::append_tool_call_with_extras(
+            home,
+            "w",
+            "wiki_write",
+            "path=notes/none.md size=3",
+            true,
+            &[],
+        );
+        let now = chrono::Utc::now();
+        let ev = collect_task_changes(
+            home,
+            "task-1",
+            "w",
+            &(now - chrono::Duration::minutes(5)).to_rfc3339(),
+            &(now + chrono::Duration::minutes(5)).to_rfc3339(),
+            50,
+        );
+        let mut paths: Vec<&str> = ev.changes.iter().map(|c| c.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["sop/new.md", "sop/old.md"], "{paths:?}");
+        assert!(ev.changes.iter().all(|c| c.source == ChangeSource::McpAudit));
+    }
+
+    /// A row that does carry `input` (older or hand-made) still works, and
+    /// `wiki_write` there counts only with `scope="shared"`.
+    #[test]
+    fn wiki_write_with_an_input_envelope_counts_only_with_shared_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            r#"{"timestamp":"2026-08-15T10:01:00+00:00","agent_id":"w","tool_name":"wiki_write","success":true,"input":"{\"scope\":\"shared\",\"page_path\":\"sop/new.md\"}"}"#,
+            r#"{"timestamp":"2026-08-15T10:02:00+00:00","agent_id":"w","tool_name":"wiki_write","success":true,"input":"{\"page_path\":\"notes/own.md\"}"}"#,
+            r#"{"timestamp":"2026-08-15T10:03:00+00:00","agent_id":"w","tool_name":"wiki_write","success":true,"input":"{\"scope\":\"agent\",\"page_path\":\"notes/own2.md\"}"}"#,
+        ];
+        std::fs::write(dir.path().join("tool_calls.jsonl"), rows.join("\n")).unwrap();
+        let ev = collect_task_changes(
+            dir.path(),
+            "task-1",
+            "w",
+            "2026-08-15T10:00:00+00:00",
+            "2026-08-15T10:05:00+00:00",
+            50,
+        );
+        let paths: Vec<&str> = ev.changes.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, vec!["sop/new.md"], "{paths:?}");
+    }
+
     #[test]
     fn unknown_assignee_drops_the_mcp_half_instead_of_widening_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -1012,7 +1251,14 @@ mod tests {
             r#"{"timestamp":"2026-08-15T10:02:00+00:00","agent_id":"w","tool_name":"shared_wiki_write","success":true,"input":"{\"page_path\":\"sop/a.md\"}"}"#,
         )
         .unwrap();
-        let ev = collect_task_changes(dir.path(), "task-1", "", "2026-08-15T10:00:00+00:00", "2026-08-15T10:05:00+00:00", 50);
+        let ev = collect_task_changes(
+            dir.path(),
+            "task-1",
+            "",
+            "2026-08-15T10:00:00+00:00",
+            "2026-08-15T10:05:00+00:00",
+            50,
+        );
         assert!(ev.changes.is_empty());
     }
 
@@ -1025,7 +1271,10 @@ mod tests {
         )
         .unwrap();
         let ev = collect_task_changes(dir.path(), "task-1", "w", "nope", "also-nope", 50);
-        assert!(ev.changes.is_empty(), "a bad window must not degrade to 'everything'");
+        assert!(
+            ev.changes.is_empty(),
+            "a bad window must not degrade to 'everything'"
+        );
     }
 
     #[test]
@@ -1045,7 +1294,15 @@ mod tests {
 
     #[test]
     fn wire_json_is_stable_and_nulls_absent_fields() {
-        let c = extract_change("Write", true, "2026-08-15T10:00:00Z", Some(r#"{"file_path":"/a"}"#), ChangeSource::McpAudit, None).unwrap();
+        let c = extract_change(
+            "Write",
+            true,
+            "2026-08-15T10:00:00Z",
+            Some(r#"{"file_path":"/a"}"#),
+            ChangeSource::McpAudit,
+            None,
+        )
+        .unwrap();
         let j = c.to_wire_json();
         assert_eq!(j["path"], "/a");
         assert_eq!(j["op"], "write");

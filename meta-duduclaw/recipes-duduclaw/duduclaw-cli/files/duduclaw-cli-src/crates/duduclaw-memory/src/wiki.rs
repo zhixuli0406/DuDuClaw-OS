@@ -358,6 +358,12 @@ impl WikiStore {
         &self.wiki_dir
     }
 
+    /// Fence for this Wiki root. Per-directory since W2-B: another agent's
+    /// delivery window or page write no longer fails writes here.
+    pub fn delivery_fence(&self) -> crate::wiki_fence::WikiDeliveryFence {
+        crate::wiki_fence::WikiDeliveryFence::for_wiki_dir(&self.wiki_dir)
+    }
+
     /// Derive `agent_id` from the wiki directory path.
     ///
     /// Layout: `<home>/agents/<agent_id>/wiki/` → `Some("<agent_id>")`.
@@ -375,6 +381,7 @@ impl WikiStore {
 
     /// Create the wiki directory scaffold (subdirs + reserved files) if missing.
     pub fn ensure_scaffold(&self) -> Result<()> {
+        let _fence = self.delivery_fence().exclusive_for_write()?;
         // create_dir_all is idempotent — safe for concurrent callers
         for sub in WIKI_SUBDIRS {
             let p = self.wiki_dir.join(sub);
@@ -413,11 +420,60 @@ impl WikiStore {
 
     /// Read and parse a wiki page from disk.
     pub fn read_page(&self, path: &str) -> Result<WikiPage> {
+        self.read_page_with_raw(path).map(|(page, _)| page)
+    }
+
+    /// Read one exact file version for consumers that must bind parsed page
+    /// content to its raw on-disk digest.
+    pub fn read_page_with_raw(&self, path: &str) -> Result<(WikiPage, String)> {
         self.validate_page_path(path)?;
         let full = self.wiki_dir.join(path);
         let content = std::fs::read_to_string(&full)
             .map_err(|e| DuDuClawError::Memory(format!("read {path}: {e}")))?;
-        parse_wiki_page(path, &content)
+        let page = parse_wiki_page(path, &content)?;
+        Ok((page, content))
+    }
+
+    /// Read one bounded version for customer exports. Missing frontmatter
+    /// timestamps use the same file handle's mtime, never a moving `now()`.
+    pub fn read_export_page(&self, path: &str, max_bytes: u64) -> Result<(WikiPage, String)> {
+        use std::io::Read;
+        self.validate_page_path(path)?;
+        let _lease = self.delivery_fence().try_shared()?;
+        let full = self.wiki_dir.join(path);
+        let metadata = std::fs::symlink_metadata(&full)
+            .map_err(|e| DuDuClawError::Memory(format!("export page metadata: {e}")))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(DuDuClawError::Memory("export page path refused".into()));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)] {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options.open(&full)
+            .map_err(|e| DuDuClawError::Memory(format!("export page open: {e}")))?;
+        let metadata = file.metadata()
+            .map_err(|e| DuDuClawError::Memory(format!("export page metadata: {e}")))?;
+        if !metadata.is_file() {
+            return Err(DuDuClawError::Memory("export page path refused".into()));
+        }
+        if metadata.len() > max_bytes {
+            return Err(DuDuClawError::Memory("EXPORT_TOO_LARGE".into()));
+        }
+        let modified: DateTime<Utc> = metadata.modified()
+            .map_err(|e| DuDuClawError::Memory(format!("export page timestamp: {e}")))?.into();
+        let mut raw = String::new();
+        file.take(max_bytes.saturating_add(1)).read_to_string(&mut raw)
+            .map_err(|e| DuDuClawError::Memory(format!("export page read: {e}")))?;
+        if raw.len() as u64 > max_bytes {
+            return Err(DuDuClawError::Memory("EXPORT_TOO_LARGE".into()));
+        }
+        let mut page = parse_wiki_page(path, &raw)?;
+        if extract_datetime_field(&raw, "updated").is_none() { page.updated = modified; }
+        if extract_datetime_field(&raw, "created").is_none() { page.created = modified; }
+        Ok((page, raw))
     }
 
     /// Read raw content of any wiki file (including reserved files).
@@ -490,6 +546,19 @@ impl WikiStore {
     /// Write a page to disk with atomic write (temp + rename).
     /// Automatically updates `_index.md` and appends to `_log.md`.
     pub fn write_page(&self, path: &str, content: &str) -> Result<()> {
+        self.validate_page_path(path)?;
+        if content.len() > MAX_PAGE_SIZE {
+            return Err(DuDuClawError::Memory(format!(
+                "page too large: {} bytes (max {})",
+                content.len(),
+                MAX_PAGE_SIZE
+            )));
+        }
+        let _fence = self.delivery_fence().exclusive_for_write()?;
+        self.write_page_under_fence(path, content)
+    }
+
+    fn write_page_under_fence(&self, path: &str, content: &str) -> Result<()> {
         self.validate_page_path(path)?;
 
         if content.len() > MAX_PAGE_SIZE {
@@ -570,6 +639,7 @@ impl WikiStore {
     /// pages outside the wiki tree (review H4).
     pub fn archive_page(&self, path: &str) -> Result<bool> {
         self.validate_page_path(path)?;
+        let _fence = self.delivery_fence().exclusive_for_write()?;
         let src = self.wiki_dir.join(path);
         if !src.exists() {
             return Ok(false);
@@ -620,6 +690,7 @@ impl WikiStore {
     /// Move an archived page back to its original location.
     pub fn restore_archived(&self, path: &str) -> Result<bool> {
         self.validate_page_path(path)?;
+        let _fence = self.delivery_fence().exclusive_for_write()?;
         let archived = self.wiki_dir.join("_archive").join(path);
         if !archived.exists() {
             return Ok(false);
@@ -655,17 +726,20 @@ impl WikiStore {
         new_trust: f32,
         new_do_not_inject: bool,
     ) -> Result<()> {
+        self.validate_page_path(path)?;
+        let _fence = self.delivery_fence().exclusive_for_write()?;
         let mut page = self.read_page(path)?;
         page.trust = new_trust;
         page.do_not_inject = new_do_not_inject;
         page.updated = Utc::now();
         let content = serialize_page(&page);
-        self.write_page(path, &content)
+        self.write_page_under_fence(path, &content)
     }
 
     /// Delete a page from disk.
     pub fn delete_page(&self, path: &str) -> Result<()> {
         self.validate_page_path(path)?;
+        let _fence = self.delivery_fence().exclusive_for_write()?;
         let full = self.wiki_dir.join(path);
         if full.exists() {
             std::fs::remove_file(&full)
@@ -678,6 +752,41 @@ impl WikiStore {
             }
             // Best-effort FTS sync
             self.fts_sync_remove(path);
+            info!(page = path, "Wiki page deleted");
+        }
+        Ok(())
+    }
+
+    /// Like [`Self::delete_page`], but a failure to drop the page from the
+    /// index is an error instead of a warning, so the caller can retry. A
+    /// retry finds the file gone and only repairs the index (forget by
+    /// source, P2-B L-2).
+    pub fn delete_page_checked(&self, path: &str) -> Result<()> {
+        self.validate_page_path(path)?;
+        let _fence = self.delivery_fence().exclusive_for_write()?;
+        let full = self.wiki_dir.join(path);
+        let existed = full.exists();
+        if existed {
+            std::fs::remove_file(&full)
+                .map_err(|e| DuDuClawError::Memory(format!("delete {path}: {e}")))?;
+        }
+        let indexed = match std::fs::read_to_string(self.wiki_dir.join("_index.md")) {
+            Ok(t) => t.contains(&format!("]({path})")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                return Err(DuDuClawError::Memory(format!("read index for {path}: {e}")));
+            }
+        };
+        if indexed {
+            self.remove_from_index(path).map_err(|e| {
+                DuDuClawError::Memory(format!("remove {path} from index: {e}"))
+            })?;
+        }
+        self.fts_sync_remove(path);
+        if existed {
+            if let Err(e) = self.append_log("delete", path) {
+                warn!("Failed to log delete {path}: {e}");
+            }
             info!(page = path, "Wiki page deleted");
         }
         Ok(())
@@ -932,6 +1041,7 @@ impl WikiStore {
 
     /// Rebuild `_index.md` from scratch by scanning all pages.
     pub fn rebuild_index(&self) -> Result<usize> {
+        let _fence = self.delivery_fence().exclusive_for_write()?;
         let pages = self.list_pages()?;
         let mut lines = vec!["# Wiki Index".to_string(), String::new()];
         lines.push("<!-- Auto-maintained by WikiStore. One entry per page. -->".to_string());
@@ -1472,7 +1582,11 @@ impl WikiStore {
         }
     }
 
-    fn validate_page_path(&self, path: &str) -> Result<()> {
+    /// Validate a caller-supplied page path (traversal, encoding, reserved
+    /// names, `.md` suffix). `pub(crate)` so callers that touch the filesystem
+    /// before `read_page_with_raw` — e.g. `causal_wiki`'s size probe — can
+    /// validate FIRST instead of stat-ing an unvalidated path.
+    pub(crate) fn validate_page_path(&self, path: &str) -> Result<()> {
         if path.is_empty() {
             return Err(DuDuClawError::Memory("empty page path".into()));
         }
@@ -1626,6 +1740,8 @@ impl WikiStore {
                 MAX_PAGE_SIZE
             )));
         }
+
+        let _fence = self.delivery_fence().exclusive_for_write()?;
 
         let full = self.wiki_dir.join(path);
 

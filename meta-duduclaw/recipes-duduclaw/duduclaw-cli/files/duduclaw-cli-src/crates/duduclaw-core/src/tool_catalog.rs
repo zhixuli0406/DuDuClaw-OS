@@ -51,6 +51,189 @@ pub struct ToolCatalogEntry {
     pub category: &'static str,
     /// `mcp` for DuDuClaw MCP tools, `claude` for native Claude Code tools.
     pub kind: &'static str,
+    /// T5 (feature audit 2026-09-29): this tool name is a **deprecated alias**
+    /// for a merged entry point. It is still listed and still callable — MCP's
+    /// `tools/list` is the declaration surface, so hiding a tool makes it
+    /// *uncallable*, which is the opposite of what a deprecation window is for
+    /// — but the dashboard should not offer it as a new choice, and its
+    /// description carries a `[deprecated → …]` prefix. The old→new table is
+    /// `docs/guides/deprecations.md`; removed names are [`REMOVED_MCP_TOOLS`].
+    pub deprecated: bool,
+    /// Side-effect class ([`crate::tool_effect::ToolEffect`]) for the
+    /// capability editor and the action-rules section. An MCP tool missing
+    /// from the classification table shows `admin`, the class the gate
+    /// applies to it (fail closed).
+    pub effect: crate::tool_effect::ToolEffect,
+}
+
+/// MCP tool names that are deprecated aliases of a merged entry point: still
+/// listed and callable, flagged `deprecated: true` in the catalog. Empty since
+/// v1.69.0 removed the last window's aliases (see [`REMOVED_MCP_TOOLS`]); kept
+/// so the next deprecation is a one-line diff.
+pub const DEPRECATED_MCP_TOOLS: &[&str] = &[];
+
+/// Is this MCP tool name a deprecated alias? Exact match, never a prefix or
+/// substring test (coding convention 2).
+pub fn is_deprecated_tool(name: &str) -> bool {
+    DEPRECATED_MCP_TOOLS.contains(&name)
+}
+
+/// An MCP tool name that was removed after its deprecation window, with the
+/// call that replaces it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedMcpTool {
+    /// The removed tool name.
+    pub name: &'static str,
+    /// Release that removed it, without the `v` prefix.
+    pub removed_in: &'static str,
+    /// The tool to call instead.
+    pub replacement: &'static str,
+    /// The argument that selects the removed tool's behaviour on
+    /// [`Self::replacement`], written as the model should type it.
+    pub replacement_args: &'static str,
+    /// Extra guidance for the caller, or empty.
+    pub note: &'static str,
+}
+
+impl RemovedMcpTool {
+    /// The error text a caller of the removed name receives. English on
+    /// purpose: it is read by the model, like every other tool error.
+    pub fn message(&self) -> String {
+        let mut msg = format!(
+            "`{}` was removed in v{}; call `{}` with `{}` instead.",
+            self.name, self.removed_in, self.replacement, self.replacement_args
+        );
+        if !self.note.is_empty() {
+            msg.push(' ');
+            msg.push_str(self.note);
+        }
+        msg
+    }
+
+    /// The replacement as one line for operators, e.g. ``wiki_read` with `scope="shared"``.
+    pub fn suggestion(&self) -> String {
+        format!("`{}` with `{}`", self.replacement, self.replacement_args)
+    }
+}
+
+/// The single table of removed MCP tool names. It drives the error a caller
+/// of a removed name receives and the `duduclaw doctor` scan for leftover
+/// names in employee settings, prompts and skills.
+///
+/// `shared_wiki_delete` and `wiki_share` were never aliases and stay; neither
+/// do `goals_create` (goal hierarchy) or `create_task` (multi-step plans).
+pub const REMOVED_MCP_TOOLS: &[RemovedMcpTool] = &[
+    RemovedMcpTool {
+        name: "shared_wiki_ls",
+        removed_in: "1.69.0",
+        replacement: "wiki_ls",
+        replacement_args: "scope=\"shared\"",
+        note: "",
+    },
+    RemovedMcpTool {
+        name: "shared_wiki_read",
+        removed_in: "1.69.0",
+        replacement: "wiki_read",
+        replacement_args: "scope=\"shared\"",
+        note: "",
+    },
+    RemovedMcpTool {
+        name: "shared_wiki_write",
+        removed_in: "1.69.0",
+        replacement: "wiki_write",
+        replacement_args: "scope=\"shared\"",
+        note: "",
+    },
+    RemovedMcpTool {
+        name: "shared_wiki_search",
+        removed_in: "1.69.0",
+        replacement: "wiki_search",
+        replacement_args: "scope=\"shared\"",
+        note: "",
+    },
+    RemovedMcpTool {
+        name: "shared_wiki_stats",
+        removed_in: "1.69.0",
+        replacement: "wiki_stats",
+        replacement_args: "scope=\"shared\"",
+        note: "",
+    },
+    RemovedMcpTool {
+        name: "shared_wiki_lint",
+        removed_in: "1.69.0",
+        replacement: "wiki_lint",
+        replacement_args: "scope=\"shared\"",
+        note: "",
+    },
+    RemovedMcpTool {
+        name: "schedule_task",
+        removed_in: "1.69.0",
+        replacement: "tasks_create",
+        replacement_args: "schedule=\"<cron expression>\"",
+        note: "Pass the old `name` as `title`, `task` as `description`, `agent_id` as \
+               `assigned_to`; `notify_channel`, `notify_chat_id`, `notify_thread_id` and \
+               `cron_timezone` keep their names.",
+    },
+    RemovedMcpTool {
+        name: "skill_bank_search",
+        removed_in: "1.69.0",
+        replacement: "skill_search",
+        replacement_args: "source=\"bank\"",
+        note: "",
+    },
+];
+
+/// The removed-tool row for `name`, exact match only. Accepts the bare name
+/// or the Claude CLI form `mcp__duduclaw__<name>`.
+pub fn removed_mcp_tool(name: &str) -> Option<&'static RemovedMcpTool> {
+    let bare = name
+        .strip_prefix("mcp__")
+        .and_then(|rest| rest.strip_prefix(DUDUCLAW_MCP_SERVER))
+        .and_then(|rest| rest.strip_prefix("__"))
+        .unwrap_or(name);
+    REMOVED_MCP_TOOLS.iter().find(|t| t.name == bare)
+}
+
+/// The removed name a call is equivalent to, if any: `wiki_<x>` with
+/// `scope="shared"` is the former `shared_wiki_<x>`, `tasks_create` with a
+/// cron `schedule` the former `schedule_task`, `skill_search` with
+/// `source="bank"` the former `skill_bank_search`.
+///
+/// Restrictive per-agent lists written before the removal (`denied_tools`)
+/// still name the old tool; a gate checks this name too so such an entry
+/// keeps refusing the call it used to refuse instead of silently lapsing.
+/// Never used to *grant* anything.
+pub fn removed_name_for_call(tool_name: &str, args: &serde_json::Value) -> Option<&'static str> {
+    let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).map(str::trim);
+    let arg_is = |key: &str, tokens: &[&str]| {
+        arg(key).is_some_and(|v| tokens.iter().any(|t| v.eq_ignore_ascii_case(t)))
+    };
+    match tool_name {
+        "wiki_ls" | "wiki_read" | "wiki_write" | "wiki_search" | "wiki_stats" | "wiki_lint" => {
+            if !arg_is("scope", &["shared"]) {
+                return None;
+            }
+            let legacy = match tool_name {
+                "wiki_ls" => "shared_wiki_ls",
+                "wiki_read" => "shared_wiki_read",
+                "wiki_write" => "shared_wiki_write",
+                "wiki_search" => "shared_wiki_search",
+                "wiki_stats" => "shared_wiki_stats",
+                _ => "shared_wiki_lint",
+            };
+            Some(legacy)
+        }
+        // An RFC3339 instant goes to the reminder rail, which `schedule_task`
+        // never reached; only a cron expression is the old call.
+        "tasks_create" => {
+            let schedule = arg("schedule")?;
+            let is_cron =
+                !schedule.is_empty() && chrono::DateTime::parse_from_rfc3339(schedule).is_err();
+            is_cron.then_some("schedule_task")
+        }
+        "skill_search" => arg_is("source", &["bank", "skill_bank"]).then_some("skill_bank_search"),
+        _ => None,
+    }
 }
 
 /// Static table of DuDuClaw MCP tools: `(name, description, scope, category)`.
@@ -127,6 +310,15 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
         "working_state_handoff",
         "Overwrite the next-wake handoff note",
         "memory:write",
+        "memory",
+    ),
+    (
+        "team_handoff",
+        "File a TaskPacket for the next role in the team",
+        // Internal-only scope (2026-09-28): the packet directory is shared
+        // across tasks, so this tool must never be reachable by an external
+        // MCP key even though the other `memory` tools are `memory:write`.
+        "team:handoff",
         "memory",
     ),
     (
@@ -234,36 +426,6 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
         "wiki:read",
         "wiki",
     ),
-    (
-        "shared_wiki_read",
-        "Read a shared wiki page",
-        "wiki:read",
-        "wiki",
-    ),
-    (
-        "shared_wiki_search",
-        "Search shared wiki",
-        "wiki:read",
-        "wiki",
-    ),
-    (
-        "shared_wiki_ls",
-        "List shared wiki pages",
-        "wiki:read",
-        "wiki",
-    ),
-    (
-        "shared_wiki_stats",
-        "Shared wiki statistics",
-        "wiki:read",
-        "wiki",
-    ),
-    (
-        "shared_wiki_lint",
-        "Shared wiki health check",
-        "wiki:read",
-        "wiki",
-    ),
     // ── Wiki: write (wiki:write) ─────────────────────────────────────────
     ("wiki_write", "Write a wiki page", "wiki:write", "wiki"),
     (
@@ -276,12 +438,6 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     (
         "wiki_rebuild_fts",
         "Rebuild the wiki full-text index",
-        "wiki:write",
-        "wiki",
-    ),
-    (
-        "shared_wiki_write",
-        "Write a shared wiki page",
         "wiki:write",
         "wiki",
     ),
@@ -309,6 +465,56 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
         "Resolve a person to a canonical record",
         "identity:read",
         "identity",
+    ),
+    // ── Read-only SQL data sources (db:read, WP-D §13.7) ─────────────────
+    // One read scope for all four: the connector has no write surface. The
+    // dispatch gate ADDITIONALLY requires `[capabilities] db_sources` to name
+    // the source, so scope alone never reaches a customer database.
+    (
+        "db_sources",
+        "List the SQL data sources this agent may query",
+        "db:read",
+        "db",
+    ),
+    (
+        "db_tables",
+        "List a data source's tables and columns",
+        "db:read",
+        "db",
+    ),
+    (
+        "db_select",
+        "Read rows from one allowed table (structured, parameterized)",
+        "db:read",
+        "db",
+    ),
+    (
+        "db_query",
+        "Run a read-only SELECT/WITH query against a data source",
+        "db:read",
+        "db",
+    ),
+    // ── Local data files (files:read, WP-F2 §14.2) ───────────────────────
+    // The ONLY de-identified route to a local CSV / spreadsheet / text file.
+    // No per-agent grant: the path fence (agent dir + attachments +
+    // `[files] allowed_roots`) is what bounds these, so they are always listed.
+    (
+        "file_read",
+        "Read a plain-text file (txt/md/json/log/yaml)",
+        "files:read",
+        "files",
+    ),
+    (
+        "csv_read",
+        "Read a CSV/TSV file as columns and rows",
+        "files:read",
+        "files",
+    ),
+    (
+        "xlsx_read",
+        "Read one worksheet of an Excel/ODS workbook as columns and rows",
+        "files:read",
+        "files",
     ),
     // ── Odoo: read (odoo:read) ───────────────────────────────────────────
     (
@@ -829,7 +1035,6 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
         "admin",
         "system",
     ),
-    ("schedule_task", "Schedule a cron task", "admin", "cron"),
     ("delete_cron_task", "Delete a cron task", "admin", "cron"),
     ("update_cron_task", "Update a cron task", "admin", "cron"),
     ("pause_cron_task", "Pause a cron task", "admin", "cron"),
@@ -858,12 +1063,6 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     (
         "inference_mode",
         "Switch the inference mode",
-        "admin",
-        "inference",
-    ),
-    (
-        "jitrl_feedback",
-        "Record local-inference feedback",
         "admin",
         "inference",
     ),
@@ -939,10 +1138,15 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "tasks_create",
-        "Create a Kanban board task",
+        "Create task/goal (Admin), or discovery (discovery:execute)",
         "admin",
         "task",
     ),
+    ("discovery_catalog", "List approved discovery roots, evaluators and runtimes", "discovery:execute", "discovery"),
+    ("discovery_list", "List authorized discovery runs", "discovery:execute", "discovery"),
+    ("discovery_tree", "Read a discovery tree and durable accounting", "discovery:execute", "discovery"),
+    ("discovery_artifact", "Read a verified discovery artifact", "discovery:execute", "discovery"),
+    ("discovery_cancel", "Cancel an authorized discovery run", "discovery:execute", "discovery"),
     ("tasks_update", "Update board task fields", "admin", "task"),
     (
         "tasks_claim",
@@ -952,6 +1156,9 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     ),
     ("tasks_complete", "Mark a board task done", "admin", "task"),
     ("tasks_block", "Mark a board task blocked", "admin", "task"),
+    ("responsibility_get", "Read your own continuous responsibilities", "admin", "task"),
+    ("responsibility_followup", "Schedule one follow-up wake-up of your responsibility", "admin", "task"),
+    ("responsibility_ask", "Ask the operator a question for your responsibility", "admin", "task"),
     (
         "tasks_renew",
         "Renew a claimed task's lease",
@@ -1124,6 +1331,30 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
         "admin",
         "computer",
     ),
+    (
+        "computer_navigate",
+        "Open an allowlisted https page",
+        "admin",
+        "computer",
+    ),
+    (
+        "computer_workspace_list",
+        "List your durable computer-use workspaces",
+        "admin",
+        "computer",
+    ),
+    (
+        "computer_workspace_read",
+        "Read a text file from your workspace",
+        "admin",
+        "computer",
+    ),
+    (
+        "computer_workspace_write",
+        "Write a text file into your attached workspace",
+        "admin",
+        "computer",
+    ),
     // ── Agent roster / delegation status (agent) ─────────────────────────
     (
         "list_agents",
@@ -1216,12 +1447,6 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
     (
         "skill_gaps",
         "Report inferred capability gaps",
-        "admin",
-        "skill",
-    ),
-    (
-        "skill_bank_search",
-        "Search learned skills in the skill bank",
         "admin",
         "skill",
     ),
@@ -1330,7 +1555,6 @@ const MCP_TOOLS: &[(&str, &str, &str, &str)] = &[
         "admin",
         "system",
     ),
-    ("log_mood", "Log user mood", "admin", "system"),
     (
         "session_restore_context",
         "Search archived session messages",
@@ -1371,6 +1595,8 @@ pub fn builtin_tool_catalog() -> Vec<ToolCatalogEntry> {
             scope,
             category,
             kind: "mcp",
+            deprecated: is_deprecated_tool(name),
+            effect: crate::tool_effect::effect_of(name),
         });
     }
     for &(name, description) in CLAUDE_TOOLS {
@@ -1381,9 +1607,90 @@ pub fn builtin_tool_catalog() -> Vec<ToolCatalogEntry> {
             scope: "",
             category: "claude",
             kind: "claude",
+            deprecated: false,
+            effect: crate::tool_effect::effect_of_native(name)
+                .unwrap_or(crate::tool_effect::ToolEffect::Admin),
         });
     }
     out
+}
+
+// ── LLM-loop tools (not MCP) ─────────────────────────────────────────────
+
+/// The two reversible-context-retrieval tool names, exposed as constants so
+/// producer and consumer compare against the same string.
+pub const CCR_RETRIEVE_TOOL: &str = "duduclaw_ccr_retrieve";
+/// See [`CCR_RETRIEVE_TOOL`].
+pub const CCR_FIND_TOOL: &str = "duduclaw_ccr_find";
+
+/// A tool the **direct-API tool loop** injects into a `ChatRequest`, as opposed
+/// to one the MCP server dispatches.
+///
+/// Deliberately a separate shape from [`ToolCatalogEntry`]: these tools carry a
+/// real JSON Schema (the MCP table's every parameter is a bare string), they
+/// have no `mcp_auth` scope because no MCP dispatch gate ever sees them, and
+/// they must not show up in the dashboard capability picker — an operator
+/// cannot grant or deny them, the CCR runtime's own scope binding decides
+/// access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmToolSchema {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: serde_json::Value,
+}
+
+/// The CCR tool schemas — **the single registration authority** (O7).
+///
+/// These used to be two `ToolDef` literals inlined in
+/// `duduclaw_llm::tool_loop::loop_run`, a second registration face living far
+/// from every other tool definition in the project: nothing linked it to the
+/// catalog, nothing held it to the description budget, and a caller wanting the
+/// schema had to copy it. They live here instead, in the crate both
+/// `duduclaw-llm` (the tool loop that injects them) and `duduclaw-cli` (the
+/// `ccr run` harness and the registration-drift tests) can reach.
+///
+/// Descriptions are held to the same 200-byte O7 budget as the MCP table; the
+/// full behaviour is documented in `docs/spec/reversible-context-ccr.md`.
+pub fn ccr_tool_schemas() -> Vec<LlmToolSchema> {
+    vec![
+        LlmToolSchema {
+            name: CCR_RETRIEVE_TOOL,
+            description: "Retrieve an authorized, original tool-result fragment by CCR ID. \
+                          Use query to find a specific passage; results are bounded.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "query": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 65536}
+                },
+                "required": ["id"]
+            }),
+        },
+        LlmToolSchema {
+            name: CCR_FIND_TOOL,
+            // The byte range stays in the prose on purpose: it is a runtime
+            // rule, not a schema keyword. `minLength`/`maxLength` would be
+            // counted in UTF-16 code units by a provider's validator and would
+            // reject valid CJK queries, so the model is told the rule instead
+            // (pinned by `tool_loop::tests::cases_loop`).
+            description: "Find up to five CCR handles from earlier turns in this session. \
+                          Query is 3–128 UTF-8 bytes. A hit says whether the phrase matched \
+                          exactly; a lexical hit must be retrieved by id and offset.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "3–128 UTF-8 bytes; the runtime enforces the byte limit"
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 5}
+                },
+                "required": ["query"]
+            }),
+        },
+    ]
 }
 
 /// Strip an optional `(qualifier)` suffix and an optional `mcp__<server>__`
@@ -1417,10 +1724,159 @@ pub fn mcp_tool_base_name(entry: &str) -> &str {
     e
 }
 
+/// The MCP server name DuDuClaw's own tools are served under
+/// (`mcp__duduclaw__<tool>` in Claude CLI permission rules).
+pub const DUDUCLAW_MCP_SERVER: &str = "duduclaw";
+
+/// Split a tool reference into `(server, name)`. A bare name belongs to the
+/// duduclaw server; `mcp__<server>__<name>` names `<server>`; a bare
+/// `mcp__<server>` (Claude CLI's server-level rule) is `(server, "*")`. An
+/// optional `(qualifier)` suffix is dropped.
+fn split_tool_ref(raw: &str) -> (&str, &str) {
+    let e = raw.split('(').next().unwrap_or(raw).trim();
+    match e.strip_prefix("mcp__") {
+        Some(rest) => match rest.find("__") {
+            Some(idx) => (&rest[..idx], &rest[idx + 2..]),
+            None => (rest, "*"),
+        },
+        None => (DUDUCLAW_MCP_SERVER, e),
+    }
+}
+
+/// Name part of a list entry against a tool name: exact, or — only when the
+/// entry ends in `*` and has no other `*` — an anchored prefix match (`*`
+/// alone matches every name). A `*` anywhere else is literal, so it only
+/// matches a tool literally named that way (none exists).
+fn name_pattern_matches(pattern: &str, name: &str) -> bool {
+    if pattern.is_empty() || name.is_empty() {
+        return false;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        if !prefix.contains('*') {
+            return name.starts_with(prefix);
+        }
+    }
+    pattern == name
+}
+
+/// Does one `[capabilities]` list entry (`allowed_tools`, `denied_tools`,
+/// `scoped_tools`, `approval_required_tools`, `irreversible_tools`,
+/// `maybe_irreversible_tools`) name `tool`?
+///
+/// The Claude CLI rule semantics, anchored — never a substring match:
+/// - `*` matches every tool;
+/// - `mcp__duduclaw__*` (or `mcp__duduclaw`) matches every duduclaw tool;
+/// - `mcp__duduclaw__<prefix>*` / bare `<prefix>*` match duduclaw tools whose
+///   name starts with `<prefix>` (`*` only at the end);
+/// - `mcp__duduclaw__<name>` / bare `<name>` match exactly that tool;
+/// - `mcp__<other-server>__…` never matches a duduclaw tool (it names
+///   another server), and vice versa.
+///
+/// `tool` is what the gate sees: a bare duduclaw name, or a qualified name.
+pub fn tool_entry_matches(entry: &str, tool: &str) -> bool {
+    if entry.trim() == "*" {
+        return true;
+    }
+    let (entry_server, entry_name) = split_tool_ref(entry);
+    let (tool_server, tool_name) = split_tool_ref(tool);
+    entry_server == tool_server && name_pattern_matches(entry_name, tool_name)
+}
+
+/// True when any entry of `list` names `tool` (see [`tool_entry_matches`]).
+pub fn tool_list_matches<S: AsRef<str>>(list: impl IntoIterator<Item = S>, tool: &str) -> bool {
+    list.into_iter().any(|e| tool_entry_matches(e.as_ref(), tool))
+}
+
+/// What `[capabilities] denied_tools` / `allowed_tools` decide for one tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolListVerdict {
+    /// Neither list stops the call.
+    Allowed,
+    /// The tool is in `denied_tools` (always wins over `allowed_tools`).
+    Denied,
+    /// `allowed_tools` is non-empty (allowlist mode) and does not name it.
+    NotAllowlisted,
+}
+
+/// The `denied_tools` / `allowed_tools` decision shared by every gate that
+/// enforces them (the MCP dispatch front door, the `tools/list` filter and
+/// the gateway's computer-use route), using [`tool_entry_matches`] (Claude
+/// CLI wildcard rules, anchored, server-aware); `denied_tools` wins; a
+/// non-empty `allowed_tools` switches the agent into allowlist mode.
+///
+/// v1.68.1: before this, entries were compared by exact base name, so the
+/// documented `mcp__duduclaw__*` allowlist entry reduced to `*` and matched
+/// nothing — every platform tool was refused for such employees — and
+/// `mcp__<other>__foo` wrongly matched a duduclaw tool named `foo`.
+pub fn tool_list_verdict(tool_name: &str, denied: &[String], allowed: &[String]) -> ToolListVerdict {
+    if tool_list_matches(denied, tool_name) {
+        return ToolListVerdict::Denied;
+    }
+    if !allowed.is_empty() && !tool_list_matches(allowed, tool_name) {
+        return ToolListVerdict::NotAllowlisted;
+    }
+    ToolListVerdict::Allowed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn production_wildcard_allowlist_allows_platform_tools() {
+        let allowed = strings(&[
+            "mcp__duduclaw__*", "mcp__masterlink__*", "WebSearch", "WebFetch", "Read", "Write", "Edit", "Glob",
+            "Grep", "TodoWrite",
+        ]);
+        for tool in ["memory_store", "user_profile_get", "working_state_set"] {
+            assert_eq!(tool_list_verdict(tool, &[], &allowed), ToolListVerdict::Allowed, "{tool}");
+        }
+        let other_only = strings(&["mcp__masterlink__*"]);
+        assert_eq!(tool_list_verdict("memory_store", &[], &other_only), ToolListVerdict::NotAllowlisted);
+    }
+
+    #[test]
+    fn wildcard_rules_are_anchored_and_server_aware() {
+        let denied = strings(&["mcp__duduclaw__odoo_*"]);
+        assert_eq!(tool_list_verdict("odoo_search", &denied, &[]), ToolListVerdict::Denied);
+        assert_eq!(tool_list_verdict("memory_search", &denied, &[]), ToolListVerdict::Allowed);
+        // Prefix is anchored at the start.
+        assert!(tool_entry_matches("memory_*", "memory_store"));
+        assert!(!tool_entry_matches("memory_*", "agent_memory_x"));
+        // `*` anywhere but the end is literal.
+        assert!(!tool_entry_matches("mem*ry_store", "memory_store"));
+        assert!(!tool_entry_matches("*_store", "memory_store"));
+        // Lone `*` and the server-level rule.
+        assert!(tool_entry_matches("*", "memory_store"));
+        assert!(tool_entry_matches("mcp__duduclaw", "memory_store"));
+        // Another server never names a duduclaw tool.
+        assert!(!tool_entry_matches("mcp__masterlink__foo", "foo"));
+        assert!(!tool_entry_matches("mcp__masterlink__*", "memory_store"));
+        assert_eq!(tool_list_verdict("foo", &strings(&["mcp__masterlink__foo"]), &[]), ToolListVerdict::Allowed);
+        // Qualified tool names on both sides.
+        assert!(tool_entry_matches("memory_store", "mcp__duduclaw__memory_store"));
+        assert!(!tool_entry_matches("mcp__duduclaw__", "memory_store"));
+    }
+
+    #[test]
+    fn tool_list_verdict_denied_wins_and_allowlist_is_exact() {
+        let v = |d: &[&str], a: &[&str]| {
+            let d: Vec<String> = d.iter().map(|s| s.to_string()).collect();
+            let a: Vec<String> = a.iter().map(|s| s.to_string()).collect();
+            tool_list_verdict("computer_click", &d, &a)
+        };
+        assert_eq!(v(&[], &[]), ToolListVerdict::Allowed);
+        assert_eq!(v(&["mcp__duduclaw__computer_click"], &["computer_click"]), ToolListVerdict::Denied);
+        assert_eq!(v(&[], &["computer_clicker"]), ToolListVerdict::NotAllowlisted);
+        assert_eq!(v(&[], &["computer"]), ToolListVerdict::NotAllowlisted);
+        assert_eq!(v(&["computer"], &[]), ToolListVerdict::Allowed);
+        assert_eq!(v(&[], &["mcp__duduclaw__computer_click"]), ToolListVerdict::Allowed);
+    }
 
     #[test]
     fn test_mcp_tool_base_name_bare_passthrough() {
@@ -1512,6 +1968,125 @@ mod tests {
                 e.name
             );
             assert!(!e.scope.is_empty(), "MCP tool {} must have a scope", e.name);
+        }
+    }
+
+    /// v1.69.0: a removed name is gone from the catalog (the dashboard picker
+    /// must not offer it), and the tool that replaces it is still there.
+    #[test]
+    fn removed_tools_are_out_of_the_catalog_and_their_replacements_are_in() {
+        let catalog = builtin_tool_catalog();
+        assert_eq!(REMOVED_MCP_TOOLS.len(), 8);
+        for removed in REMOVED_MCP_TOOLS {
+            assert!(
+                !catalog.iter().any(|e| e.name == removed.name),
+                "{} was removed and must not be catalogued",
+                removed.name
+            );
+            let replacement = catalog
+                .iter()
+                .find(|e| e.name == removed.replacement)
+                .unwrap_or_else(|| panic!("{} must be catalogued", removed.replacement));
+            assert!(!replacement.deprecated, "{} is not an alias", removed.replacement);
+        }
+        // The two shared-wiki tools that were never aliases stay.
+        for kept in ["shared_wiki_delete", "wiki_share"] {
+            assert!(catalog.iter().any(|e| e.name == kept), "{kept}");
+            assert!(removed_mcp_tool(kept).is_none(), "{kept}");
+        }
+    }
+
+    #[test]
+    fn removed_tool_message_names_the_replacement_and_its_argument() {
+        let row = removed_mcp_tool("shared_wiki_read").unwrap();
+        assert_eq!(
+            row.message(),
+            "`shared_wiki_read` was removed in v1.69.0; call `wiki_read` with `scope=\"shared\"` instead."
+        );
+        let row = removed_mcp_tool("schedule_task").unwrap();
+        assert!(row.message().contains("`tasks_create` with `schedule=\"<cron expression>\"`"));
+        assert!(row.message().contains("`assigned_to`"));
+        assert_eq!(
+            removed_mcp_tool("skill_bank_search").unwrap().suggestion(),
+            "`skill_search` with `source=\"bank\"`"
+        );
+    }
+
+    #[test]
+    fn removed_tool_lookup_is_exact_and_accepts_the_qualified_form() {
+        assert!(removed_mcp_tool("mcp__duduclaw__shared_wiki_write").is_some());
+        assert!(removed_mcp_tool("shared_wiki_write_v2").is_none());
+        assert!(removed_mcp_tool("schedule_tasks").is_none());
+        assert!(removed_mcp_tool("mcp__other__shared_wiki_write").is_none());
+        assert!(removed_mcp_tool("mcp__duduclawx__shared_wiki_write").is_none());
+        assert!(!is_deprecated_tool("shared_wiki_write"));
+    }
+
+    #[test]
+    fn removed_name_for_call_maps_only_the_equivalent_arguments() {
+        use serde_json::json;
+        assert_eq!(
+            removed_name_for_call("wiki_write", &json!({"scope": " Shared "})),
+            Some("shared_wiki_write")
+        );
+        assert_eq!(removed_name_for_call("wiki_read", &json!({})), None);
+        assert_eq!(removed_name_for_call("wiki_read", &json!({"scope": "agent"})), None);
+        assert_eq!(
+            removed_name_for_call("tasks_create", &json!({"schedule": "0 9 * * *"})),
+            Some("schedule_task")
+        );
+        assert_eq!(
+            removed_name_for_call("tasks_create", &json!({"schedule": "2026-10-01T09:00:00+08:00"})),
+            None
+        );
+        assert_eq!(removed_name_for_call("tasks_create", &json!({"title": "x"})), None);
+        assert_eq!(
+            removed_name_for_call("skill_search", &json!({"source": "bank"})),
+            Some("skill_bank_search")
+        );
+        assert_eq!(removed_name_for_call("skill_search", &json!({})), None);
+        assert_eq!(removed_name_for_call("shared_wiki_delete", &json!({})), None);
+    }
+
+    // ── O7: CCR is a registration face, not an MCP tool ──────────────────
+
+    /// The schemas must be usable as-is: a name, non-empty prose within the
+    /// same 200-byte budget the MCP table carries, and a real object schema.
+    #[test]
+    fn ccr_tool_schemas_are_well_formed_and_within_the_description_budget() {
+        let schemas = ccr_tool_schemas();
+        assert_eq!(schemas.len(), 2);
+        for s in &schemas {
+            assert!(!s.name.is_empty());
+            assert!(!s.description.is_empty());
+            assert!(
+                s.description.len() <= 200,
+                "{} description is {} bytes, over the 200-byte O7 budget",
+                s.name,
+                s.description.len()
+            );
+            assert_eq!(s.input_schema["type"], "object");
+            assert!(s.input_schema["properties"].is_object());
+            assert!(s.input_schema["required"].is_array());
+        }
+        let names: Vec<_> = schemas.iter().map(|s| s.name).collect();
+        assert!(names.contains(&CCR_RETRIEVE_TOOL));
+        assert!(names.contains(&CCR_FIND_TOOL));
+    }
+
+    /// CCR tools are injected by the direct-API tool loop and are NOT
+    /// dispatched by the MCP server, so they must never leak into the MCP
+    /// catalog — where they would demand an `mcp_auth` scope arm, appear in
+    /// the dashboard capability picker, and be advertised by `tools/list` as
+    /// something the MCP dispatcher could run. They cannot.
+    #[test]
+    fn ccr_tools_are_not_in_the_mcp_catalog() {
+        let catalog = builtin_tool_catalog();
+        for name in [CCR_RETRIEVE_TOOL, CCR_FIND_TOOL] {
+            assert!(
+                !catalog.iter().any(|e| e.name == name),
+                "{name} must not be in the MCP/Claude capability catalog"
+            );
         }
     }
 }

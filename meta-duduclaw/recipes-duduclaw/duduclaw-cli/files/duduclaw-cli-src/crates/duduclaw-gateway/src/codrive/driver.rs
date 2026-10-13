@@ -7,7 +7,7 @@
 //! size convention). This file owns the report shape, the activity-feed
 //! ticker, and the top-level control flow.
 //!
-//! Design authority: `commercial/docs/DESIGN-codrive-desktop-2026-08.md`
+//! Design authority: `commercial/docs/specs/DESIGN-codrive-desktop-2026-08.md`
 //! §3.4 (approval reuse), §6 (safety red lines), §8-3 (refuse-list).
 //!
 //! **CD-2 file-size note**: this file is already near this project's
@@ -232,7 +232,14 @@ pub async fn run_script(
     if script.watch_mode {
         match client.send(&CodriveCmd::Watch { enable: true }).await {
             Ok(_) => {
-                ticker(home_dir, agent_id, "codrive_session", &session_id, "已啟用旁觀模式（人離開自動暫停）").await;
+                ticker(
+                    home_dir,
+                    agent_id,
+                    "codrive_session",
+                    &session_id,
+                    "已啟用旁觀模式（人離開自動暫停）",
+                )
+                .await;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "codrive: failed to enable watch mode — continuing without idle supervision");

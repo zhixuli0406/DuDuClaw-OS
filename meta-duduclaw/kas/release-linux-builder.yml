@@ -1,0 +1,29 @@
+# Release overlay for a large Linux builder (2026-10-13, GCP n2-standard-16:
+# 16 vCPU / 64 GB, see wiki/impl/gcp-builder-2026-10.md).
+#
+# Use instead of serial1.yml when the builder has the memory for parallel
+# tasks:
+#   DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml \
+#     scripts/release-os.sh build --machine duduclaw-qemux86-64
+# Pass the same DUDUCLAW_OS_KAS_OVERLAY to `smoke` and `package` so every
+# kas call in a release run sees the same local.conf.
+#
+# serial1.yml does two unrelated things: -j1 (an OOM guard for the 8–12 GB
+# Docker Desktop VM) and SPDX off. Only the second is needed here. The SPDX
+# block is copied verbatim from serial1.yml; keep the two in step.
+#
+# Thread counts: the base config's `?=` 4/-j4 is conservative for 16 vCPU.
+# duduclaw-cli's recipe pins its own cargo `-j 1`, so the gateway megacrate
+# still compiles one rustc at a time whatever these say.
+header:
+  version: 14
+local_conf_header:
+  release-linux-builder: |
+    BB_NUMBER_THREADS = "8"
+    PARALLEL_MAKE = "-j 8"
+  # Same as serial1.yml's spdx-off: SPDX/SBOM output is optional metadata,
+  # not part of the image or the trust chain, and its deploy/spdx documents
+  # go missing after release-time pruning ("Could not find a static SPDX
+  # document named ..."), so a release bake keeps it off.
+  spdx-off: |
+    INHERIT:remove = "create-spdx create-spdx-2.2 create-spdx-3.0"

@@ -53,6 +53,25 @@ pub enum GuardDecision {
         /// Human-readable `field：「before」→「after」` entries.
         changed: Vec<String>,
     },
+    /// Team-as-Agent review P1: the write would change `[capabilities]` in a
+    /// canonical `agent.toml` — the permission envelope every tool gate reads
+    /// (`allowed_tools` / `denied_tools`, the `computer_use` /
+    /// `browser_via_bash` / `os_native` / `git_credentials` master switches,
+    /// `db_sources`, the approval / irreversible / scoped tool lists,
+    /// `autonomy_level`, `wiki_visible_to`).
+    ///
+    /// Distinct from [`Self::BlockedOrgFieldChange`] only in the message: the
+    /// org fields answer "who may command whom", these answer "what may this
+    /// employee do at all". A role member of a team runs with the employee's
+    /// workspace as its cwd, so the file-guard hook reads it as the employee
+    /// itself — which made this file the one place a cheap third-party model
+    /// could widen the very envelope that is supposed to contain it.
+    BlockedProtectedField {
+        file_name: String,
+        attempted_path: PathBuf,
+        /// Human-readable `capabilities.<key>：「before」→「after」` entries.
+        changed: Vec<String>,
+    },
     /// WP21 欠帳 ②: the write would change a protected section of
     /// `<home>/config.toml` (`[delegation]` / `[acp]`) — the policy and trust
     /// switches the delegation gate itself consults.
@@ -127,6 +146,83 @@ pub enum GuardDecision {
         caller: String,
         attempted_path: PathBuf,
     },
+    /// Contract lock: an agent-identified caller tried to write `CONTRACT.toml`
+    /// inside its OWN agent directory via Write/Edit/MultiEdit/Bash. The
+    /// contract's `must_not` / `must_always` boundaries are the operator's
+    /// limits on the agent, so unlike SOUL.md there is no opt-in flag at all;
+    /// the only write path is the dashboard's admin-only `contract.update`
+    /// RPC, which never runs through this hook. Another agent's contract is
+    /// refused earlier by [`Self::BlockedForeignAgentDir`].
+    BlockedOwnContractWrite {
+        caller: String,
+        attempted_path: PathBuf,
+    },
+    /// Removed-name reservation (`crate::agent_trash`): an agent-identified
+    /// caller tried to write, move or delete something under
+    /// `<home>/agents/_trash/`, where removed employees are kept. Emptying an
+    /// entry would release the reserved name; moving one back would restore an
+    /// employee without the administrator. The path is deliberately not echoed
+    /// in the message.
+    BlockedRemovedAgentArea {
+        caller: String,
+        attempted_path: PathBuf,
+    },
+    /// Removed-name reservation, CLI lane: an agent-identified caller ran
+    /// `duduclaw agent create <name>` (via Bash) for a name that is reserved
+    /// because an employee of that name was removed, or the reservation could
+    /// not be checked.
+    BlockedReservedAgentName {
+        caller: String,
+        name: String,
+    },
+    /// G1 (2026-10): an agent-identified (or untrusted) caller tried to
+    /// write, move or delete something under `<home>` outside its own agent
+    /// directory and the shared `attachments/` fallback — the audit log
+    /// (`tool_calls.jsonl`, the evidence grounding, the judge digest and the
+    /// recent-actions feed read), the eval suites and held-out sets under
+    /// `evals/`, every SQLite store, breaker state, licences, the shared
+    /// wiki and global skills. See
+    /// [`crate::org_field_guard::check_caller_scope`].
+    BlockedHomeStateWrite {
+        caller: String,
+        attempted_path: PathBuf,
+    },
+    /// G1 / C (2026-10): the write would change a section or key of the
+    /// caller's own `agent.toml` that a security gate reads (`[permissions]`,
+    /// `[container]`, `[budget]`, `[runtime]`, `[evolution]`, …, `[prompt]
+    /// cli_bare_mode`, `[model] account_pool`, `[agent] role`). Agent
+    /// callers only; see `org_field_guard::rules::AGENT_SECURITY_SECTIONS`.
+    BlockedAgentSecuritySection {
+        file_name: String,
+        attempted_path: PathBuf,
+        changed: Vec<String>,
+    },
+    /// G1 round 3: where the write would really land could not be
+    /// established — a dangling or looping symbolic link, an unreadable
+    /// parent directory, a relative path with no known working directory, or
+    /// a hook that cannot tell which DuDuClaw home it guards. Fail closed.
+    BlockedUnresolvablePath {
+        attempted_path: PathBuf,
+        reason: String,
+    },
+    /// P2-B (C-1): an agent-identified (or untrusted) caller ran an
+    /// operator-only memory command through Bash — `duduclaw memory
+    /// forget-source …` or `duduclaw memory migrate-namespace …` (any
+    /// subcommand, `list` included), also as `duduclaw-pro`.
+    BlockedOperatorMemoryCommand {
+        caller: String,
+        command: String,
+    },
+    /// An AI employee (or an unverified caller) ran an operator-only
+    /// command from Bash, e.g. `duduclaw ops channel-ingress` or
+    /// `duduclaw ops computer-workspaces`. Same
+    /// level as [`Self::BlockedReservedAgentName`]: a speed bump on the Bash
+    /// lane; the command itself also refuses when DuDuClaw identity
+    /// variables are present.
+    BlockedOperatorCommand {
+        caller: String,
+        command: &'static str,
+    },
 }
 
 impl GuardDecision {
@@ -158,6 +254,15 @@ impl GuardDecision {
                 attempted_path.display(),
                 changed.join("；")
             )),
+            Self::BlockedProtectedField { attempted_path, changed, .. } => Some(format!(
+                "已封鎖：權限設定（agent.toml 的 [capabilities] 段）不可直接修改，請透過 agent_update 或儀表板調整。\n\
+                 檔案：{}\n\
+                 偵測到的變更：{}\n\
+                 原因：這一段定義了這位 AI 員工能用哪些工具、能不能操作電腦／瀏覽器／資料庫，\
+                 允許執行中的程序自行改寫等同自助提權。",
+                attempted_path.display(),
+                changed.join("；")
+            )),
             Self::BlockedProtectedSection { attempted_path, changed, .. } => Some(format!(
                 "已封鎖：委派設定（config.toml 的 [delegation] / [acp] 段）不可直接修改，請透過儀表板或由管理者調整。\n\
                  檔案：{}\n\
@@ -175,8 +280,8 @@ impl GuardDecision {
             )),
             Self::BlockedBashProtectedWrite { file_name, verb } => Some(format!(
                 "已封鎖：偵測到可能改寫 {} 的 shell 指令（含 `{}`）。\n\
-                 組織欄位（name/reports_to/department）、委派設定與身分設定不可直接修改，\
-                 請透過 agent_update 或儀表板調整。",
+                 組織欄位（name/reports_to/department）、權限設定（[capabilities]）、\
+                 委派設定與身分設定不可直接修改，請透過 agent_update 或儀表板調整。",
                 file_name, verb
             )),
             Self::BlockedIdentitySurface { file_name, attempted_path, reason } => Some(format!(
@@ -223,6 +328,71 @@ impl GuardDecision {
                  請改呼叫 agent_update_soul 這個 MCP 工具，而不是直接寫檔。",
                 attempted_path.display(),
                 caller
+            )),
+            Self::BlockedOwnContractWrite { caller, attempted_path } => Some(format!(
+                "已封鎖：CONTRACT.toml 是管理者為 AI 員工設定的行為界線，AI 員工不可直接改寫（即使是自己的）。\n\
+                 檔案：{}\n\
+                 你的身分：{}\n\
+                 如果需要調整界線，請告知管理者，由管理者在儀表板修改這份契約。",
+                attempted_path.display(),
+                caller
+            )),
+            Self::BlockedRemovedAgentArea { caller, .. } => Some(format!(
+                "已封鎖：已移除的 AI 員工由管理者保管，AI 員工不可改寫、移動或刪除。\n\
+                 你的身分：{caller}\n\
+                 需要復原或清除已移除的員工，請由管理者在儀表板處理。"
+            )),
+            Self::BlockedReservedAgentName { caller, name } => Some(format!(
+                "已封鎖：無法以「{name}」建立 AI 員工，先前有一位同名的員工已被移除，這個名稱目前保留中\
+                 （或目前無法確認）。\n\
+                 你的身分：{caller}\n\
+                 要重新使用這個名稱，請由管理者在儀表板處理；或改用其他名稱，透過 create_agent 建立。"
+            )),
+            Self::BlockedHomeStateWrite { caller, attempted_path } => Some(format!(
+                "已封鎖：DuDuClaw 資料目錄裡的稽核紀錄、評測集、資料庫與系統狀態不可由 AI 員工直接寫入、移動或刪除。\n\
+                 檔案：{}\n\
+                 你的身分：{caller}\n\
+                 你可以寫入自己的資料夾（agents/{caller}/）或共用附件資料夾（attachments/）；\
+                 其他資料請透過對應的 MCP 工具處理（例如 wiki_write、tasks_update），或請管理者從儀表板調整。",
+                attempted_path.display()
+            )),
+            Self::BlockedOperatorCommand { caller, command } => Some(format!(
+                "已封鎖：`{command}` 只能由管理者在自己的終端機執行，AI 員工不可使用。\n\
+                 你的身分：{caller}\n\
+                 {}",
+                match *command {
+                    "duduclaw ops channel-ingress" => {
+                        "需要結案或重新執行 LINE 收件事件，請由管理者在儀表板處理。"
+                    }
+                    "duduclaw ops computer-workspaces" => {
+                        "需要凍結、撤銷或刪除電腦操作工作區，請由管理者在儀表板處理。"
+                    }
+                    "duduclaw mcp init" | "duduclaw mcp issue-refresh-token" => {
+                        "MCP 金鑰只能由管理者簽發，AI 員工不可為自己簽發金鑰。"
+                    }
+                    _ => "這項操作請由管理者處理。",
+                }
+            )),
+            Self::BlockedUnresolvablePath { attempted_path, reason } => Some(format!(
+                "已封鎖：無法確認這次寫入實際會落在哪裡，為避免繞過資料夾保護一律拒絕。\n\
+                 檔案：{}\n\
+                 原因：{reason}",
+                attempted_path.display()
+            )),
+            Self::BlockedAgentSecuritySection { attempted_path, changed, .. } => Some(format!(
+                "已封鎖：agent.toml 中與權限、沙箱、預算、審核或身分有關的設定不可由 AI 員工直接修改，\
+                 請由管理者透過儀表板調整。\n\
+                 檔案：{}\n\
+                 偵測到的變更：{}\n\
+                 原因：這些設定由安全檢查讀取，允許執行中的程序自行改寫等同自助放寬限制。",
+                attempted_path.display(),
+                changed.join("；")
+            )),
+            Self::BlockedOperatorMemoryCommand { caller, command } => Some(format!(
+                "已封鎖：`duduclaw memory {command}` 只能由管理者在自己的終端機執行，\
+                 AI 員工不能執行（包含只列出內容的子指令）。\n\
+                 你的身分：{caller}\n\
+                 需要忘記或搬移記憶，請告訴管理者；刪除還需要管理員在儀表板核准。"
             )),
             _ => None,
         }

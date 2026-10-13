@@ -22,9 +22,8 @@
 //! - makes the customer-facing CLI (`duduclaw license activate / status / refresh / …`)
 //!   work without any closed-source dependency
 //!
-//! See `commercial/docs/spec-license-module.md` for the full design rationale.
+//! See `commercial/docs/specs/spec-license-module.md` for the full design rationale.
 
-pub mod bundle;
 pub mod crl;
 pub mod error;
 pub mod fingerprint;
@@ -35,13 +34,13 @@ pub mod storage;
 pub mod tier;
 
 // Re-export primary types for ergonomic use.
-pub use bundle::{
-    sign_bundle, verify_bundle, BrandingBundle, BrandingConfig, BUNDLE_KEY_ID, BUNDLE_SCHEMA,
-};
 pub use crl::SignedCrl;
 pub use error::{LicenseError, Result};
-pub use fingerprint::generate_fingerprint;
-pub use gate::FeatureGate;
+pub use fingerprint::{
+    FingerprintMatch, fingerprint_candidates, fingerprint_is_hostname_only, generate_fingerprint,
+    select_primary_mac,
+};
+pub use gate::{FeatureGate, SERVICE_COMMITMENTS, is_service_commitment};
 pub use key::{verify_license, PublicKeyRegistry};
 pub use license::{License, CURRENT_SCHEMA_VERSION};
 pub use storage::{
@@ -73,8 +72,11 @@ mod integration_tests {
         // Sanity checks against the v2 manifest
         assert!(!gate.check(LicenseTier::OpenSource, "premium_templates"));
         assert!(gate.check(LicenseTier::Studio, "premium_templates"));
-        assert!(gate.check(LicenseTier::SelfHostPro, "dashboard_enterprise"));
-        assert!(gate.check(LicenseTier::Business, "odoo_integration_supported"));
-        assert!(gate.check(LicenseTier::Oem, "white_label"));
+        assert!(!gate.check(LicenseTier::Oem, "white_label"));
+        // Service commitments are display-only — `check()` never gates on
+        // them, even where the manifest says `true`.
+        assert!(!gate.check(LicenseTier::SelfHostPro, "dashboard_enterprise"));
+        assert!(gate.service_commitment(LicenseTier::SelfHostPro, "dashboard_enterprise"));
+        assert!(gate.service_commitment(LicenseTier::Business, "odoo_integration_supported"));
     }
 }

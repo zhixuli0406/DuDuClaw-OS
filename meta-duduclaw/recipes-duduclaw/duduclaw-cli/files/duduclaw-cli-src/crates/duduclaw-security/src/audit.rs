@@ -266,6 +266,45 @@ pub fn log_git_credentials_granted(home_dir: &Path, agent_id: &str, env_names: &
     append_audit_event(home_dir, &event);
 }
 
+/// Log an AI caller's refused attempt to create an employee under a name that
+/// is reserved because an employee of that name was removed
+/// (`duduclaw_core::agent_trash`). `requested` must already be a validated
+/// agent id; `path_kind` / `reason` are fixed tokens chosen by the code, never
+/// caller text.
+pub fn log_agent_name_reserved(
+    home_dir: &Path,
+    caller: &str,
+    requested: &str,
+    path_kind: &str,
+    reason: &str,
+) {
+    let event = AuditEvent::new(
+        "agent_name_reserved",
+        caller,
+        Severity::Warning,
+        serde_json::json!({
+            "requested_name": requested,
+            "path_kind": path_kind,
+            "reason": reason,
+        }),
+    );
+    append_audit_event(home_dir, &event);
+}
+
+/// Log an employee removal performed by an AI caller (MCP `agent_remove`).
+pub fn log_agent_removed(home_dir: &Path, caller: &str, subject: &str) {
+    let event = AuditEvent::new(
+        "agent_removed",
+        caller,
+        Severity::Warning,
+        serde_json::json!({
+            "subject": subject,
+            "moved_to_trash": true,
+        }),
+    );
+    append_audit_event(home_dir, &event);
+}
+
 /// Log a skill quarantine event.
 pub fn log_skill_quarantined(home_dir: &Path, agent_id: &str, skill_name: &str, reason: &str) {
     let event = AuditEvent::new(
@@ -297,7 +336,7 @@ pub fn append_tool_call(
 }
 
 /// Variant of [`append_tool_call`] that attaches additional fields to the
-/// audit record. Used by `shared_wiki_write` to record `claimed_authors_in_content`
+/// audit record. Used by shared-wiki writes to record `claimed_authors_in_content`
 /// and `matches_caller` (RFC-22 Decision 4-D, Phase 3 W2) so post-hoc audit
 /// can detect when an agent wrote a wiki page that *claims* multi-agent
 /// authorship but only one caller actually invoked the tool — e.g. the
@@ -343,6 +382,14 @@ pub fn append_tool_call_with_extras(
             continue;
         }
         map.insert((*key).to_string(), value.clone());
+    }
+    // F5-D: a call made inside a goal round names the round's task (the
+    // gateway sets it at spawn), so readers can tell it apart from a
+    // conversation by the same employee.
+    if !map.contains_key("task_id") {
+        if let Some(task_id) = duduclaw_core::host_task_id() {
+            map.insert("task_id".into(), task_id.into());
+        }
     }
 
     // 0600 on create: since result_text landed, rows can carry business
@@ -1473,13 +1520,13 @@ mod tests {
     fn readonly_tool_names_by_verb_token() {
         assert!(is_readonly_tool_name("tasks_list"));
         assert!(is_readonly_tool_name("memory_search"));
-        assert!(is_readonly_tool_name("shared_wiki_read"));
+        assert!(is_readonly_tool_name("wiki_read"));
         assert!(is_readonly_tool_name("cost_summary"));
         assert!(is_readonly_tool_name("inference_status"));
         // State-changing (and unknown-verb) names capture input.
         assert!(!is_readonly_tool_name("agent_update_soul"));
         assert!(!is_readonly_tool_name("tasks_create"));
-        assert!(!is_readonly_tool_name("shared_wiki_write"));
+        assert!(!is_readonly_tool_name("wiki_write"));
         assert!(!is_readonly_tool_name("totally_new_tool"));
         // Token equality, not substring: `enlist` ≠ `list`.
         assert!(!is_readonly_tool_name("enlist_agent"));
@@ -1522,7 +1569,7 @@ mod tests {
         // > AUDIT_INPUT_MAX_CHARS of multi-byte content.
         let big = "繁體中文稽核".repeat(1500);
         let input = serde_json::json!({ "content": big });
-        append_tool_call_with_input(&home, "agnes", "shared_wiki_write", "ok", true, Some(&input), None);
+        append_tool_call_with_input(&home, "agnes", "wiki_write", "ok", true, Some(&input), None);
         let rec = read_last_record(&home);
         assert_eq!(rec["input_truncated"], true);
         assert!(rec["input"].as_str().unwrap().chars().count() <= AUDIT_INPUT_MAX_CHARS);

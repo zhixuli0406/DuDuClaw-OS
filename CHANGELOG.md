@@ -7,9 +7,13 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
-- Security: permit only `https://img.shields.io` as the additional image origin for existing public documentation badges; other CSP directives and OS image/platform versions are unchanged.
+## [0.3.0] - 2026-10-13 — 內嵌平台 v1.73.1×鎖定畫面免信箱解鎖（shell 1.65.3）×GCP builder
+
+內嵌的 DuDuClaw 平台從 v1.63.0 跳到 v1.73.1；鎖定畫面改用平台 v1.73.1 新增的本機擁有者驗證端點，換過信箱的擁有者也能解鎖（`duduclaw-shell` 1.65.3）。這一版第一次在 GCP 的 Linux builder 上建置，簽章仍只在維護者的 Mac 上進行。產物矩陣與 v0.2.0 相同：兩個機型各一份整碟映像 `.wic.zst`、基礎版與桌面版安裝 ISO。
 
 ### Added
+- **`scripts/release-os.sh package --no-sign` 與 `sign` 子命令**：遠端 builder 不放簽章金鑰。builder 上 `package --no-sign` 只做 smoke 閘門、壓縮、sha256 與 manifest；複製回持有金鑰的機器後 `sign` 先核對 `.sha256` 與 manifest 記錄的 sha256／大小，再 `minisign -S` 並以釘住的公鑰自驗。簽章與自驗邏輯與 `package` 共用同一個函式。
+- **`meta-duduclaw/kas/release-linux-builder.yml`**：給 16 vCPU／64 GB Linux builder 的 release overlay，和 `serial1.yml` 一樣關掉 SPDX，但不做 `-j1`（`BB_NUMBER_THREADS` 8、`PARALLEL_MAKE` `-j 8`）。以 `DUDUCLAW_OS_KAS_OVERLAY` 指定。
 - **殼 crate 搬入本 repo `crates/`**（2026-09-29，平台功能盤點 S16-B）：`duduclaw-comp`（smithay compositor）、`duduclaw-shell`（gpui 殼）、`duduclaw-native-gui`（shell 的 sibling path 依賴）整組自平台 repo 搬入，維持各自的 detached `Cargo.lock` 與版本（1.65.1，暫不隨 OS `VERSION` 改，版本政策待定），**不**合併成一個 workspace——bitbake recipe 就是照「兩個 destsuffix 同層」快照的。`duduclaw-comp`／`duduclaw-shell` 的 `refresh-src.sh` 改從本 repo `crates/` 取源（覆寫變數 `DUDUCLAW_OS_SRC_ROOT`，不再吃 `DUDUCLAW_CLI_SRC_ROOT`）；`duduclaw-cli` 的 `refresh-src.sh` 偵測改錨定 `crates/duduclaw-cli/Cargo.toml`，避免把本 repo 新的 `crates/` 誤認成平台 workspace；`scripts/sync-platform.sh` 拆成平台 recipe（cli／sysd，改名跟平台版本）與 OS 自有 recipe（comp／shell，只重新快照、PV 不動）兩組，`docs/guides/platform-sync.md` 同步。連帶搬入 `.github/workflows/native-gui-desktop-release.yml`（tag `native-gui-v*`，平台 repo 從未打過此 tag）與 `scripts/desktop/bundle-native-gui-macos.sh`／`sign-notarize-macos.sh`。`.gitignore` 加 `crates/*/target/`。**版本政策（2026-09-29 拍板）**：三個 crate 維持自己的版本線（目前 1.65.1），只在程式碼真的變動時手動 bump，`release-os.sh` 一律不 bump（與 `VERSION` 檔同一套教義）；`release-os.sh audit` 新增「OS-owned crates」區塊，列出三個 crate 的 manifest 版本並檢查 detached `Cargo.lock` 的自身／sibling 項是否與 manifest 一致（不一致會讓 `cargo build --frozen` 的 bake 死掉），平台 PV 漂移檢查則只剩 `duduclaw-cli`／`duduclaw-sysd` 兩個平台 recipe。已知殘留：`crates/duduclaw-native-gui/src/screens/governance.rs` 仍呼叫平台同日移除的 `governance.list` RPC、`screens/security.rs` 仍渲染已移除的 `credential_proxy`／`mount_guard` 欄位（缺欄位退成零值不 panic）；本機缺 Xcode Metal Toolchain 無法編譯驗證，未盲改，列為待辦。
 - **App 相容層文件搬入**：`docs/guides/app-compat.md`（en／zh-TW／ja-JP）自平台 repo 搬入。平台的 `duduclaw compat` 子命令族同日改為 Cargo feature `app-compat`（平台二進位預設不含），本 image 需要它：`duduclaw-shell` 會 spawn `duduclaw compat windows-vm app`，`compat.d/windows-vm.toml` 也以它為 `entrypoint`，所以 `duduclaw-cli_1.63.0.bb` 的 `CARGO_BUILD_FLAGS` 準備了 `--features app-compat` 的替換行（**先註解掉**：目前 vendored 的 cli 快照還沒有這個 feature，開了會死在 unknown feature；快照仍無條件編出 compat，image 不受影響）。**下次 `sync-platform.sh` 對齊到含此 feature 的平台版本時必須換成帶 `app-compat` 的那行**，否則對齊後的 image 會少掉 `duduclaw compat`。
 - **正式站部署到 Cloud Run**：`deploy/cloudrun/`（nginx 靜態容器：CSP、快取標頭、`mjs`／`avif`／`wasm` MIME）與
@@ -35,6 +39,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   網站主體維持零建置，只有文件站需要 Node。
 
 ### Security
+- **Static-site CSP (2026-10)**: permit only `https://img.shields.io` as the additional image origin for existing public documentation badges; other CSP directives and OS image/platform versions are unchanged.
 - **Static-site response headers (2026-10-11)**: preserve server-level CSP and security headers on cacheable assets; use relative redirects behind the Cloud Run proxy and hide nginx version details. Site bytes, OS images, and release metadata are unchanged.
 - **Website build dependencies (2026-10-11)**: refresh the documentation lockfile, pin the patched selector parser to 7.1.6, and update sharp to 0.35.5. This changes the static site build tooling only; OS images, embedded platform version, and release asset URLs remain unchanged.
 
@@ -42,8 +47,31 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **鎖定畫面不再需要知道擁有者信箱**（`duduclaw-shell` 1.65.3）：解鎖時先呼叫平台 v1.73.1 起提供的 `POST /api/owner/verify`（只收本機連線、只送密碼），所以非個人版或關掉自動登入、又換過信箱的擁有者也能解鎖。只有收到 200 且內容是 `{"ok":true}` 才算通過；舊版平台不認得這個路徑時退回原本的信箱登入流程，不會因為後備頁面而誤判解鎖。
 - **鎖定畫面改用擁有者目前的信箱驗證密碼**（`duduclaw-shell` 1.65.2）：平台 v1.73.0 起擁有者可以把預設的 `admin@local` 換成自己的信箱（首次設定表單、儀表板提示或帳號設定頁）。殼的鎖定畫面原本固定用 `admin@local` 呼叫 `/api/login`，換過信箱後正確密碼也會被拒。現在每次解鎖前先從本機 session（`/api/session/local` 回應的 `user.email`）讀出擁有者信箱再登入；拿不到本機 session 時（自動登入關閉、非個人版、舊版 gateway）退回 `admin@local`，原因寫到 stderr。代價是每次解鎖嘗試多一次本機往返和一筆 `login_local_auto` 稽核紀錄。已知限制：非個人版或關掉自動登入、又換過信箱的值班機，鎖定畫面仍會用 `admin@local`，需要平台另外提供不需信箱的擁有者驗證。
 - **Website links (2026-10-11)**: resolve raw HTML documentation links through the same public-page mapping as Markdown and correct stale localized section links. Keep the download navigation linked to an existing home section. No platform documents or OS release artifacts are modified.
+- **官網與文件站事實查核（2026-10）**：對照 GitHub Release、layer 原始碼與 `wiki/` 證據修正首頁與下載頁。
+  安裝器 ISO 不再標「QEMU 實開機驗證」（v0.2.0 只有整碟映像跑過開機測試）；Steam 不在離線倉庫，改說走 Flathub；
+  管理後台在 18789 埠（`duduclaw.local` 沒有任何元件提供）；防火牆開 18789 與 mDNS、映像內有 dropbear SSH
+  （桌面版被防火牆擋、基礎版可連），不再寫「所有連入埠關閉、SSH 出廠關閉」；`duduclaw-sysd` 是 15 個固定指令不是 6 個；
+  gateway 仍以 root 執行；自動回滾只在早期 Debian 線做過故障注入，這套映像實測的是套用與手動回滾；
+  首頁六張桌面截圖改用 v0.2.0 發布映像在 QEMU 上重拍（2026-10-07，映像核對過 Release 的 SHA-256 與 minisign 簽章；示範帳號「Demo」、未設定 AI 授權，原本深色首頁那張的示範任務卡因此拿掉，說明文字同步）；拿掉「安裝 8 分鐘」與硬體售價。
+  首頁與下載頁頁首、頁尾加上平台網站 <https://duduclaw.dudustudio.monster/> 連結，文件站頁首加上平台網站文字連結與 OS repo 的 GitHub 圖示按鈕（和主站頁首同一個單線圖示）。
+- **文件站 app 相容層連結斷掉**：指南 2026-09-29 搬進本 repo 後，`/docs/guides/app-compat/` 已無來源；
+  首頁、下載頁、三個語言的文件站首頁、入門側欄、`README*.md` 與 `docs/README.md` 改指 `/docs/os/guides/app-compat/`。
+  `sync-docs.mjs` 補上本 repo `docs/<dir>/zh-TW/`、`ja-JP/` 的語系對應（先前譯文被當成獨立頁面掛在 `os/guides/zh-TW/…`），
+  並保留 `SECURITY.md` 的 Security Advisories 連結（先前被轉成純文字，私下回報的首選管道在文件站上沒有網址）。
+- **README／指南內容**：`README.en.md` 誤寫 Steam 預載（中文版正確）、兩份 README「兩式產物」改為三個；
+  補上平台 Gemini CLI runtime 棄用（預定平台 v1.71.0 移除）的說明；app 相容層指南拿掉過時的 CP-1 註記並寫明各元件驗證程度，
+  日文版「ランダムに出荷」誤譯與中文版簡體字一併修正。本檔 0.2.0／0.1.0 段落內互相矛盾的「無頭」「Secure Boot 已有」敘述加註更正，
+  誤歸在 Removed 底下的發布產線變更移到 Changed。
+- **`SECURITY.md`「Release Artifact Security」敘述漏掉第三種發布產物、且誤植兩種 ISO 都有
+  `.manifest.json`**：改為正確描述每機型三種產物（wic 桌面版、installer 基礎版 ISO、
+  installer-desktop 桌面版 ISO），三者皆附 `.sha256`／`.minisig`，但 `.manifest.json` 只有
+  wic 才有（以 `artifacts/os/v0.2.0/` 下實際產物核對）。
 
 ### Changed
+- **內嵌平台同步到 v1.73.1（1.63.0→1.73.1，`scripts/sync-platform.sh`）**：`duduclaw-cli`／`duduclaw-sysd` 快照自平台 tag `v1.73.1` 重新 vendor（含依 `web/` 重建的 dashboard `dist/`），`duduclaw-comp`／`duduclaw-shell` 自本 repo `crates/` 重新快照；`duduclaw-platform-version.inc` 1.63.0→1.73.1（連動 `DISTRO_VERSION` `1.73.1-y1-bringup`、os-release `VERSION_ID`、UKI 檔名、A/B loader 項），兩個平台 recipe 改名 `_1.73.1.bb`。兩份平台快照的 crates.io 依賴集合都變了，`duduclaw-cli-crates.inc`（`bitbake -c update_crates`）與 `duduclaw-sysd-crates.inc`（`gen-crates-inc.py`）已重生。平台這段期間的變更（去識別化、Discovery、任務／腳本沙箱、`computer_*` 工具、授權修補、代理平台 P0～P2、擁有者信箱與本機擁有者驗證端點等）見平台 repo 的 `CHANGELOG.md`。
+- **`duduclaw-cli/refresh-src.sh` 對齊 v1.73.1 的 workspace**：成員閉包重新推導（平台移除 `duduclaw-cli-worker`、新增 `duduclaw-db`，`duduclaw-desktop` 已無成員引用而移出，現為 22 個）；快照多帶 repo 根目錄的 `fixtures/`（gateway 非測試程式碼以 `include_str!` 內嵌）與 `vendor/`（根 `Cargo.toml` 的 `[patch.crates-io] serenity` 指向它）。
+- **`duduclaw-cli` recipe 接上第一個 git 依賴 `ucci`**：v1.73.1 的 `duduclaw-inference` 以 git rev 無條件依賴 `ucci`（MIT，crate 在該 repo 的 `rust/` 子目錄）。`bitbake -c update_crates` 只產生 crates.io 項目，所以 recipe 另加 `git://…;name=ucci;subpath=rust;destsuffix=ucci` 與 `SRCREV_ucci`，由 oe-core `cargo_common.bbclass` 轉成 cargo `[patch]` 並從 lock 拿掉 git source 行；`CARGO_LOCK_PATH` 指到快照根目錄的 workspace lock。
+- **`duduclaw-cli` recipe 開啟 `app-compat` feature**：v1.73.1 的快照定義了這個 feature，不開的話映像會少掉殼與 `compat.d/windows-vm.toml` 會呼叫的 `duduclaw compat`。
 - **官網資訊呈現（2026-10-11）**：首頁改依用途 → pre-GA 狀態 → 內附 AI 工具 → 真實 QEMU 桌面 → 交辦與接手 → 核心能力 → 版本／硬體／入門 → 資料安全 → FAQ → 試用的閱讀路徑，移除「第一」與概括競品比較，合併重複技術說明。下載頁提前版本與安裝方式選擇、補閱讀結尾 CTA；資料說明區分本機儲存與雲端模型傳送，企業 DuDuClaw 導向既有總經銷。保留原有視覺與互動，FAQ 原生可展開，無 JS 時桌面六張圖集全部可讀。發布 metadata、資產 URL 與驗簽公鑰不變。
   （2026-09-09 補：Pages 尚未啟用時 `configure-pages` 會失敗，故改為僅 `workflow_dispatch` 手動觸發；正式站走 Cloud Run。啟用 Pages 後再恢復 push 觸發。）
 - **`README.md`／`README.en.md`／`docs/README.md`：連到平台 repo 使用者文件的連結，從 GitHub
@@ -64,27 +92,6 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
   改指向 `scripts/sync-platform.sh`；`release-os.sh audit` 納入已存在的 `duduclaw-shell` recipe，
   不再錯稱它尚無 Yocto recipe，且顯示已展開的完整 `DISTRO_VERSION`。
   OS `VERSION` 仍獨立於內嵌平台版號。
-
-### Fixed
-- **官網與文件站事實查核（2026-10）**：對照 GitHub Release、layer 原始碼與 `wiki/` 證據修正首頁與下載頁。
-  安裝器 ISO 不再標「QEMU 實開機驗證」（v0.2.0 只有整碟映像跑過開機測試）；Steam 不在離線倉庫，改說走 Flathub；
-  管理後台在 18789 埠（`duduclaw.local` 沒有任何元件提供）；防火牆開 18789 與 mDNS、映像內有 dropbear SSH
-  （桌面版被防火牆擋、基礎版可連），不再寫「所有連入埠關閉、SSH 出廠關閉」；`duduclaw-sysd` 是 15 個固定指令不是 6 個；
-  gateway 仍以 root 執行；自動回滾只在早期 Debian 線做過故障注入，這套映像實測的是套用與手動回滾；
-  首頁六張桌面截圖改用 v0.2.0 發布映像在 QEMU 上重拍（2026-10-07，映像核對過 Release 的 SHA-256 與 minisign 簽章；示範帳號「Demo」、未設定 AI 授權，原本深色首頁那張的示範任務卡因此拿掉，說明文字同步）；拿掉「安裝 8 分鐘」與硬體售價。
-  首頁與下載頁頁首、頁尾加上平台網站 <https://duduclaw.dudustudio.monster/> 連結，文件站頁首加上平台網站文字連結與 OS repo 的 GitHub 圖示按鈕（和主站頁首同一個單線圖示）。
-- **文件站 app 相容層連結斷掉**：指南 2026-09-29 搬進本 repo 後，`/docs/guides/app-compat/` 已無來源；
-  首頁、下載頁、三個語言的文件站首頁、入門側欄、`README*.md` 與 `docs/README.md` 改指 `/docs/os/guides/app-compat/`。
-  `sync-docs.mjs` 補上本 repo `docs/<dir>/zh-TW/`、`ja-JP/` 的語系對應（先前譯文被當成獨立頁面掛在 `os/guides/zh-TW/…`），
-  並保留 `SECURITY.md` 的 Security Advisories 連結（先前被轉成純文字，私下回報的首選管道在文件站上沒有網址）。
-- **README／指南內容**：`README.en.md` 誤寫 Steam 預載（中文版正確）、兩份 README「兩式產物」改為三個；
-  補上平台 Gemini CLI runtime 棄用（預定平台 v1.71.0 移除）的說明；app 相容層指南拿掉過時的 CP-1 註記並寫明各元件驗證程度，
-  日文版「ランダムに出荷」誤譯與中文版簡體字一併修正。本檔 0.2.0／0.1.0 段落內互相矛盾的「無頭」「Secure Boot 已有」敘述加註更正，
-  誤歸在 Removed 底下的發布產線變更移到 Changed。
-- **`SECURITY.md`「Release Artifact Security」敘述漏掉第三種發布產物、且誤植兩種 ISO 都有
-  `.manifest.json`**：改為正確描述每機型三種產物（wic 桌面版、installer 基礎版 ISO、
-  installer-desktop 桌面版 ISO），三者皆附 `.sha256`／`.minisig`，但 `.manifest.json` 只有
-  wic 才有（以 `artifacts/os/v0.2.0/` 下實際產物核對）。
 
 ## [0.2.0] - 2026-09-09 — 平台快照同步 v1.63.0×sync-platform 一鍵同步×release-os smoke 修復
 

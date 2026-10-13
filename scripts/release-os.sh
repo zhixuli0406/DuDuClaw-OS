@@ -71,7 +71,7 @@
 #                                                    to a login prompt, NOT
 #                                                    a full shell/kiosk
 #                                                    regression pass.
-#   ./scripts/release-os.sh package v<version> [--machine <name>] [--image <recipe>] [--dry-run] [--skip-smoke-test]
+#   ./scripts/release-os.sh package v<version> [--machine <name>] [--image <recipe>] [--dry-run] [--skip-smoke-test] [--no-sign]
 #                                                    collect the deploy
 #                                                    artifact from an
 #                                                    ALREADY-BUILT image,
@@ -80,7 +80,21 @@
 #                                                    compress + sha256 +
 #                                                    minisign, stage into a
 #                                                    versioned output
-#                                                    directory
+#                                                    directory. --no-sign
+#                                                    stops before minisign
+#                                                    (remote builder that
+#                                                    must not hold the key;
+#                                                    sign later with 'sign')
+#   ./scripts/release-os.sh sign v<version> [--machine <name>]
+#                                                    sign a set that
+#                                                    'package --no-sign'
+#                                                    staged on another host
+#                                                    and copied here: re-
+#                                                    checks .sha256 and the
+#                                                    manifest's sha256/size,
+#                                                    then minisign -S + -V
+#                                                    against the pinned
+#                                                    pubkey
 #   ./scripts/release-os.sh publish v<version> [--machine <name>] [--dry-run]
 #                                                    upload the four files
 #                                                    'package' staged (.wic.zst
@@ -133,7 +147,10 @@
 # with only the machine kas config and crashed on a pruned-SPDX error the
 # overlay exists specifically to avoid. Set DUDUCLAW_OS_KAS_OVERLAY= (empty)
 # to disable the overlay, or to another path to swap it; see
-# kas_cfg_chain() below for the exact chaining/fail-closed rules.
+# kas_cfg_chain() below for the exact chaining/fail-closed rules. A large
+# Linux builder (the GCP n2-standard-16, 2026-10) uses
+# DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml —
+# SPDX off like serial1.yml, but without the -j1 throttle.
 #
 # Design: commercial/docs/DESIGN-unified-release-2026-08.md (version
 # single-source + release.sh/release-os.sh split) and
@@ -683,7 +700,7 @@ run_smoke_test() {
 #                                            independent of the embedded
 #                                            platform version since the
 #                                            2026-09 split
-#     "platform_version": "<embedded CLI>", e.g. "1.63.0" — the vendored
+#     "platform_version": "<embedded CLI>", e.g. "1.73.1" — the vendored
 #                                            DuDuClaw gateway/CLI snapshot's
 #                                            version (duduclaw-platform-
 #                                            version.inc); provenance only
@@ -730,7 +747,7 @@ run_smoke_test() {
 # deliberately does not unify the two; both are documented on their own
 # terms so a future consumer doesn't have to reverse-engineer either.
 run_package() {
-    local version="$1" machine="$2" image="$3" dry_run="$4" skip_smoke="$5"
+    local version="$1" machine="$2" image="$3" dry_run="$4" skip_smoke="$5" no_sign="${6:-false}"
     local kas_cfg out_dir artifact_base artifact_wic
     if ! kas_cfg="$(kas_cfg_chain "$machine")"; then
         return 1
@@ -746,7 +763,11 @@ run_package() {
     echo "Packaging DuDuClaw OS artifacts: v$version / $machine / $image"
     echo "  Output directory: $out_dir"
     echo "  Artifact base:    $artifact_base"
-    echo "  Signing key:      $OS_SIGN_KEY"
+    if $no_sign; then
+        echo "  Signing:          SKIPPED (--no-sign) — run 'release-os.sh sign' on the key host"
+    else
+        echo "  Signing key:      $OS_SIGN_KEY"
+    fi
 
     if $dry_run; then
         echo ""
@@ -795,14 +816,17 @@ run_package() {
         echo "       Start it per meta-duduclaw/README.md \"Usage\" first." >&2
         return 1
     fi
-    if [[ ! -f "$OS_SIGN_KEY" ]]; then
-        echo "Error: OS signing key not found at $OS_SIGN_KEY" >&2
-        echo "       (set DUDUCLAW_OS_SIGN_KEY to override the path)." >&2
-        return 1
-    fi
-    if ! command -v minisign >/dev/null 2>&1; then
-        echo "Error: minisign not found in PATH." >&2
-        return 1
+    if ! $no_sign; then
+        if [[ ! -f "$OS_SIGN_KEY" ]]; then
+            echo "Error: OS signing key not found at $OS_SIGN_KEY" >&2
+            echo "       (set DUDUCLAW_OS_SIGN_KEY to override the path, or pass" >&2
+            echo "       --no-sign on a builder that must not hold the key)." >&2
+            return 1
+        fi
+        if ! command -v minisign >/dev/null 2>&1; then
+            echo "Error: minisign not found in PATH." >&2
+            return 1
+        fi
     fi
     if ! check_builder_idle; then
         return 1
@@ -898,14 +922,10 @@ run_package() {
     fi
 
     ( cd "$out_dir" && shasum -a 256 "$artifact_wic" > "$artifact_wic.sha256" )
-    if ! minisign -S -s "$OS_SIGN_KEY" -m "$out_dir/$artifact_wic" -t "DuDuClaw OS v$version ($machine, $image)"; then
-        echo "Error: minisign signing failed." >&2
-        return 1
-    fi
-    if ! minisign -V -m "$out_dir/$artifact_wic" -P "$OS_RELEASE_PUBKEY" >/dev/null; then
-        echo "Error: self-verification against OS_RELEASE_PUBKEY failed — a" >&2
-        echo "       payload that cannot verify itself must never ship." >&2
-        return 1
+    if ! $no_sign; then
+        if ! sign_artifact "$out_dir/$artifact_wic" "DuDuClaw OS v$version ($machine, $image)"; then
+            return 1
+        fi
     fi
 
     # RPM feed: auxiliary metadata only this round (see run_package()'s own
@@ -959,6 +979,17 @@ manifest = {
 pathlib.Path(out_dir, f"{artifact_base}.manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 PYEOF
     echo ""
+    if $no_sign; then
+        echo "Packaged (NOT signed, --no-sign): $out_dir"
+        echo "  $artifact_wic"
+        echo "  $artifact_wic.sha256"
+        echo "  $artifact_base.manifest.json"
+        echo ""
+        echo "Next: copy $out_dir to the host that holds $OS_SIGN_KEY (same"
+        echo "  relative path under the repo), then run there:"
+        echo "      ./scripts/release-os.sh sign v$version --machine $machine"
+        return 0
+    fi
     echo "Packaged + signed: $out_dir"
     echo "  $artifact_wic"
     echo "  $artifact_wic.sha256"
@@ -971,6 +1002,97 @@ PYEOF
     echo ""
     echo "Next: ./scripts/release-os.sh publish v$version --machine $machine"
     echo "  (uploads the four files above to a GitHub Release on $OS_GH_REPO)"
+}
+
+# sign_artifact <file> <trusted comment> — minisign -S with the OS key, then
+# minisign -V against the pinned OS_RELEASE_PUBKEY. Shared by 'package' and
+# 'sign' so the two paths cannot drift.
+sign_artifact() {
+    local file="$1" comment="$2"
+    if ! minisign -S -s "$OS_SIGN_KEY" -m "$file" -t "$comment"; then
+        echo "Error: minisign signing failed." >&2
+        return 1
+    fi
+    if ! minisign -V -m "$file" -P "$OS_RELEASE_PUBKEY" >/dev/null; then
+        echo "Error: self-verification against OS_RELEASE_PUBKEY failed — a" >&2
+        echo "       payload that cannot verify itself must never ship." >&2
+        return 1
+    fi
+}
+
+# --- sign: sign a set staged by 'package --no-sign' on another host ---------
+# Added 2026-10-13 for the GCP builder (wiki/impl/gcp-builder-2026-10.md):
+# the OS key never leaves the maintainer's Mac, so the builder packages with
+# --no-sign and the set is copied back into artifacts/os/v<version>/<machine>/
+# here. Fails closed: the artifact must match its own .sha256 AND the sha256
+# and size recorded in its manifest.json (both written on the builder) before
+# anything is signed; the trusted comment is the same one 'package' writes,
+# with the image name taken from the manifest.
+run_sign() {
+    local version="$1" machine="$2"
+    local out_dir artifact_base artifact_wic manifest image
+    out_dir="artifacts/os/v${version}/${machine}"
+    artifact_base="duduclaw-os-${machine}-v${version}"
+    artifact_wic="${artifact_base}.wic.zst"
+    manifest="$out_dir/$artifact_base.manifest.json"
+
+    echo "Signing DuDuClaw OS artifact: v$version / $machine"
+    echo "  Local artifact dir: $out_dir"
+    local f
+    for f in "$out_dir/$artifact_wic" "$out_dir/$artifact_wic.sha256" "$manifest"; do
+        if [[ ! -s "$f" ]]; then
+            echo "Error: missing/empty: $f (copy the 'package --no-sign' output here first)" >&2
+            return 1
+        fi
+    done
+    if [[ ! -f "$OS_SIGN_KEY" ]]; then
+        echo "Error: OS signing key not found at $OS_SIGN_KEY" >&2
+        return 1
+    fi
+    if ! command -v minisign >/dev/null 2>&1; then
+        echo "Error: minisign not found in PATH." >&2
+        return 1
+    fi
+    if ! ( cd "$out_dir" && shasum -a 256 -c "$artifact_wic.sha256" >/dev/null 2>&1 ); then
+        echo "Error: $artifact_wic does not match its .sha256 — refusing to sign." >&2
+        return 1
+    fi
+    local check
+    check="$(python3 - "$manifest" "$out_dir/$artifact_wic" "$version" "$machine" <<'PYEOF'
+import hashlib, json, os, sys
+manifest, wic, version, machine = sys.argv[1:5]
+m = json.load(open(manifest))
+problems = []
+if m.get("version") != version: problems.append(f"version {m.get('version')!r} != {version!r}")
+if m.get("machine") != machine: problems.append(f"machine {m.get('machine')!r} != {machine!r}")
+art = m.get("artifact") or {}
+if art.get("name") != os.path.basename(wic): problems.append(f"artifact.name {art.get('name')!r}")
+if art.get("size") != os.path.getsize(wic): problems.append(f"artifact.size {art.get('size')} != {os.path.getsize(wic)}")
+h = hashlib.sha256()
+with open(wic, "rb") as fh:
+    for chunk in iter(lambda: fh.read(1 << 20), b""):
+        h.update(chunk)
+if art.get("sha256") != h.hexdigest(): problems.append("artifact.sha256 mismatch")
+if not m.get("image"): problems.append("no image name")
+print(("FAIL " + "; ".join(problems)) if problems else ("OK " + m["image"]))
+PYEOF
+)"
+    if [[ "$check" != OK\ * ]]; then
+        echo "Error: manifest check failed: ${check#FAIL }" >&2
+        return 1
+    fi
+    image="${check#OK }"
+    local wic_bytes
+    wic_bytes="$(stat -f%z "$out_dir/$artifact_wic" 2>/dev/null || stat -c%s "$out_dir/$artifact_wic" 2>/dev/null)"
+    if [[ -n "$wic_bytes" ]] && (( wic_bytes >= GH_ASSET_MAX_BYTES )) && [[ "${DUDUCLAW_OS_ALLOW_OVERSIZE:-0}" != "1" ]]; then
+        echo "Error: $artifact_wic is $wic_bytes bytes, >= GitHub's 2 GiB per-asset limit." >&2
+        return 1
+    fi
+    if ! sign_artifact "$out_dir/$artifact_wic" "DuDuClaw OS v$version ($machine, $image)"; then
+        return 1
+    fi
+    echo "Signed: $out_dir/$artifact_wic.minisig"
+    echo "Next: ./scripts/release-os.sh publish v$version --machine $machine"
 }
 
 # --- publish: upload the packaged artifact set as a GitHub Release ----------
@@ -1207,6 +1329,7 @@ case "$1" in
         IMAGE="$DEFAULT_IMAGE"
         DRY_RUN=false
         SKIP_SMOKE=false
+        NO_SIGN=false
         if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
         while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -1214,12 +1337,29 @@ case "$1" in
                 --image) shift; IMAGE="${1:-}" ;;
                 --dry-run) DRY_RUN=true ;;
                 --skip-smoke-test) SKIP_SMOKE=true ;;
+                --no-sign) NO_SIGN=true ;;
                 *) echo "Error: unknown option '$1'" >&2; exit 1 ;;
             esac
             shift
         done
         if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
-        run_package "${VERSION#v}" "$MACHINE" "$IMAGE" "$DRY_RUN" "$SKIP_SMOKE"
+        run_package "${VERSION#v}" "$MACHINE" "$IMAGE" "$DRY_RUN" "$SKIP_SMOKE" "$NO_SIGN"
+        exit $?
+        ;;
+    sign)
+        shift
+        VERSION=""
+        MACHINE="${DEFAULT_MACHINES[0]}"
+        if [[ $# -gt 0 && "$1" != --* ]]; then VERSION="$1"; shift; fi
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --machine) shift; MACHINE="${1:-}" ;;
+                *) echo "Error: unknown option '$1'" >&2; exit 1 ;;
+            esac
+            shift
+        done
+        if [[ -z "$VERSION" ]]; then VERSION="$(read_os_version)" || exit 1; fi
+        run_sign "${VERSION#v}" "$MACHINE"
         exit $?
         ;;
     publish)

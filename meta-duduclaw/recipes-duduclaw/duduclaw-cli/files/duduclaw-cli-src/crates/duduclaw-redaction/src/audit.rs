@@ -26,6 +26,22 @@ pub enum AuditEvent {
         rule_id: String,
         category: String,
         token: String,
+        /// RFC-6901 pointer of the node a structured (field) rule tokenised.
+        /// `None` for text-pattern hits — and absent from the wire form, so
+        /// pre-2026-09 JSONL lines still deserialise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// Which detection engine found this span: `"rule"` for the
+        /// deterministic matchers, `"ner"` for the local model. Defaulted so
+        /// pre-2026-09 JSONL lines (which have no such field) still
+        /// deserialise, and always written so a new line states it outright.
+        #[serde(default = "default_engine")]
+        engine: String,
+        /// Model revision when `engine == "ner"` — the answer to "which
+        /// version of the model decided this was a person's name?". Absent
+        /// from the wire form for rule hits.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_revision: Option<String>,
     },
     /// A token was successfully restored.
     RestoreOk {
@@ -76,6 +92,12 @@ pub enum AuditEvent {
         channel: String,
         severity: String,
     },
+}
+
+/// Serde default for [`AuditEvent::Redact::engine`] — every audit line
+/// written before 2026-09 came from a deterministic rule.
+fn default_engine() -> String {
+    "rule".to_string()
 }
 
 impl AuditEvent {
@@ -210,6 +232,9 @@ mod tests {
             rule_id: "email".into(),
             category: "EMAIL".into(),
             token: "<REDACT:EMAIL:abcdef01abcdef01abcdef01abcdef01>".into(),
+            path: None,
+            engine: "rule".into(),
+            model_revision: None,
         });
         sink.emit(AuditEvent::VaultGc {
             expired_marked: 3,
@@ -245,5 +270,111 @@ mod tests {
     fn null_sink_does_nothing() {
         let sink = NullAuditSink;
         sink.emit(AuditEvent::VaultGc { expired_marked: 0, purged: 0 });
+    }
+
+    #[test]
+    fn redact_path_is_omitted_when_absent_and_legacy_lines_still_parse() {
+        // Text-pass hit: no `path` key on the wire at all.
+        let text_hit = AuditEvent::Redact {
+            agent_id: "agnes".into(),
+            session_id: None,
+            source_category: "tool_result".into(),
+            source_detail: Some("odoo_search".into()),
+            rule_id: "email".into(),
+            category: "EMAIL".into(),
+            token: "<REDACT:EMAIL:abcdef01abcdef01abcdef01abcdef01>".into(),
+            path: None,
+            engine: "rule".into(),
+            model_revision: None,
+        };
+        let wire = serde_json::to_string(&text_hit.to_record()).unwrap();
+        assert!(!wire.contains("\"path\""), "{wire}");
+
+        // Structured hit: the pointer rides along.
+        let field_hit = AuditEvent::Redact {
+            agent_id: "agnes".into(),
+            session_id: None,
+            source_category: "tool_result".into(),
+            source_detail: Some("odoo_search".into()),
+            rule_id: "customers".into(),
+            category: "DB_FIELD".into(),
+            token: "<REDACT:DB_FIELD:abcdef01abcdef01abcdef01abcdef01>".into(),
+            path: Some("/0/name".into()),
+            engine: "rule".into(),
+            model_revision: None,
+        };
+        let wire = serde_json::to_string(&field_hit.to_record()).unwrap();
+        assert!(wire.contains("\"path\":\"/0/name\""), "{wire}");
+
+        // A pre-2026-09 line (no `path` key) still deserialises.
+        let legacy = r#"{"event":"redact","agent_id":"agnes","session_id":null,
+            "source_category":"tool_result","source_detail":"odoo_search",
+            "rule_id":"email","category":"EMAIL",
+            "token":"<REDACT:EMAIL:abcdef01abcdef01abcdef01abcdef01>"}"#;
+        let parsed: AuditEvent = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            AuditEvent::Redact { path, rule_id, .. } => {
+                assert!(path.is_none());
+                assert_eq!(rule_id, "email");
+            }
+            other => panic!("expected Redact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redact_wire_always_states_the_engine_and_omits_an_absent_revision() {
+        let hit = AuditEvent::Redact {
+            agent_id: "a".into(),
+            session_id: None,
+            source_category: "tool_result".into(),
+            source_detail: None,
+            rule_id: "email".into(),
+            category: "EMAIL".into(),
+            token: "<REDACT:EMAIL:abcdef01abcdef01abcdef01abcdef01>".into(),
+            path: None,
+            engine: "rule".into(),
+            model_revision: None,
+        };
+        let wire = serde_json::to_string(&hit.to_record()).unwrap();
+        assert!(wire.contains("\"engine\":\"rule\""), "{wire}");
+        assert!(!wire.contains("model_revision"), "{wire}");
+    }
+
+    #[test]
+    fn ner_hits_carry_the_model_revision() {
+        let hit = AuditEvent::Redact {
+            agent_id: "a".into(),
+            session_id: None,
+            source_category: "tool_result".into(),
+            source_detail: None,
+            rule_id: "ai_pii".into(),
+            category: "PERSON".into(),
+            token: "<REDACT:PERSON:abcdef01abcdef01abcdef01abcdef01>".into(),
+            path: None,
+            engine: "ner".into(),
+            model_revision: Some("7ffa9a04".into()),
+        };
+        let wire = serde_json::to_string(&hit.to_record()).unwrap();
+        assert!(wire.contains("\"engine\":\"ner\""), "{wire}");
+        assert!(wire.contains("7ffa9a04"), "{wire}");
+    }
+
+    #[test]
+    fn a_pre_2026_09_audit_line_still_deserialises() {
+        // Lines written before the engine field existed must keep parsing —
+        // the dashboard tails this file and a parse failure would blank the
+        // audit view.
+        let legacy = r#"{"event":"redact","agent_id":"a","session_id":null,
+            "source_category":"tool_result","source_detail":null,
+            "rule_id":"email","category":"EMAIL",
+            "token":"<REDACT:EMAIL:abcdef01abcdef01abcdef01abcdef01>"}"#;
+        let parsed: AuditEvent = serde_json::from_str(legacy).expect("legacy line must parse");
+        match parsed {
+            AuditEvent::Redact { engine, model_revision, .. } => {
+                assert_eq!(engine, "rule", "legacy lines default to the rule engine");
+                assert!(model_revision.is_none());
+            }
+            other => panic!("expected Redact, got {other:?}"),
+        }
     }
 }

@@ -40,34 +40,23 @@ mod tests;
 /// UI locale for display-name resolution.
 const UI_LOCALE: &str = "zh-TW";
 
+// ── Seams used by the unified `duduclaw pack` front door (T5/O2) ──
+//
+// `pack_cmd::install_pack` is the single entry point every pack install goes
+// through; it resolves + classifies a source and then hands roster-shaped
+// packs back to the pipeline below. These three re-exports are that handoff —
+// the pipeline itself is unchanged, which is what keeps "the installed result
+// is byte-identical to the old path" true rather than merely hoped for.
+pub(crate) use install::cmd_install as install_via_expert_pipeline;
+pub(crate) use install::resolve_source as resolve_pack_source;
+pub(crate) use detect::resolve_root as resolve_pack_root;
+
 #[derive(Subcommand)]
 pub enum ExpertCommands {
-    /// Install an expert pack from a directory, `.zip`, or URL.
-    ///
-    /// Format is auto-detected (native `expert.toml` → Claude Code plugin →
-    /// single Agent Skill); an unrecognised layout is rejected. Foreign
-    /// personas/skills are scanned before landing; imported hooks are disabled.
-    Install {
-        /// Path to a pack directory, a `.zip`, or an `http(s)://…zip` URL.
-        source: String,
-        /// Preview the plan without writing anything.
-        #[arg(long)]
-        dry_run: bool,
-        /// Import under a `-imported` suffix on agent-id clashes instead of
-        /// reporting a conflict.
-        #[arg(long)]
-        rename: bool,
-        /// Explicitly trust and enable the pack's hooks (the codex / claude
-        /// plugin `--trust` convention). Without this flag hooks are imported
-        /// disabled and an ApprovalBroker request is filed (fail-closed).
-        #[arg(long)]
-        trust_hooks: bool,
-        /// Attach the pack's root agents (empty `reports_to`) under an
-        /// existing agent — e.g. your CEO / front-desk supervisor. The target
-        /// must already exist; a typo aborts before anything installs.
-        #[arg(long)]
-        attach_under: Option<String>,
-    },
+    /// Removed in v1.69.0 (use `duduclaw pack install`): prints the
+    /// replacement and exits 2.
+    #[command(hide = true, disable_help_flag = true)]
+    Install(crate::removed_spelling::RemovedArgs),
 
     /// Validate and package a pack directory into a distributable `.zip`.
     Pack {
@@ -147,17 +136,13 @@ pub enum ExpertCommands {
 pub async fn run(cmd: ExpertCommands) -> Result<()> {
     let home = crate::duduclaw_home();
     match cmd {
-        ExpertCommands::Install {
-            source,
-            dry_run,
-            rename,
-            trust_hooks,
-            attach_under,
-        } => install::cmd_install(&home, &source, dry_run, rename, trust_hooks, attach_under).await,
+        ExpertCommands::Install(_) => crate::removed_spelling::RemovedSpelling::ExpertInstall.exit(),
         ExpertCommands::Pack { dir, out } => cmd_pack(&dir, out.as_deref()),
-        ExpertCommands::Publish { dir, archive_url, publisher } => {
-            cmd_publish(&dir, archive_url.as_deref(), publisher.as_deref())
-        }
+        ExpertCommands::Publish {
+            dir,
+            archive_url,
+            publisher,
+        } => cmd_publish(&dir, archive_url.as_deref(), publisher.as_deref()),
         ExpertCommands::List { json } => cmd_list(&home, json),
         ExpertCommands::Remove { slug } => cmd_remove(&home, &slug).await,
         ExpertCommands::Export { slug, format, out } => {
@@ -437,19 +422,32 @@ pub(super) fn merge_agent_mcp(
     extra: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<usize> {
     let path = home.join("agents").join(agent_id).join(".mcp.json");
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| {
-            json5::from_str(&c)
+    // Same lock as every other `.mcp.json` writer (gateway repair, approved
+    // MCP installs), so a concurrent read–modify–write cannot drop entries.
+    duduclaw_agent::mcp_template::with_mcp_config_lock(&path, || {
+        // N11: a missing file starts empty; an existing file that cannot be
+        // read or parsed is an error (starting from an empty document would
+        // silently drop every entry it has, the duduclaw one included).
+        let mut doc: serde_json::Value = match std::fs::read_to_string(&path) {
+            Ok(c) => json5::from_str(&c)
                 .or_else(|_| serde_json::from_str(&c))
-                .ok()
-        })
-        .unwrap_or_else(|| serde_json::json!({ "mcpServers": {} }));
-    let written = merge_mcp_servers(&mut doc, extra);
-    let out = serde_json::to_string_pretty(&doc)
-        .map_err(|e| cfg_err(format!("序列化 .mcp.json 失敗: {e}")))?;
-    std::fs::write(&path, out).map_err(|e| io_err(format!("寫入 .mcp.json 失敗: {e}")))?;
-    Ok(written)
+                .map_err(|e| format!("{} 不是合法的 JSON，未合併：{e}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                serde_json::json!({ "mcpServers": {} })
+            }
+            Err(e) => return Err(format!("無法讀取 {}：{e}", path.display())),
+        };
+        if !doc.is_object() {
+            return Err(format!("{} 不是 JSON 物件，未合併", path.display()));
+        }
+        let written = merge_mcp_servers(&mut doc, extra);
+        let out = serde_json::to_string_pretty(&doc)
+            .map_err(|e| format!("序列化 .mcp.json 失敗: {e}"))?;
+        duduclaw_agent::mcp_template::write_mcp_config_atomic(&path, out.as_bytes())
+            .map_err(|e| format!("寫入 .mcp.json 失敗: {e}"))?;
+        Ok(written)
+    })
+    .map_err(io_err)
 }
 
 fn io_err(msg: String) -> DuDuClawError {
@@ -461,19 +459,22 @@ fn cfg_err(msg: String) -> DuDuClawError {
 
 // ─────────────────────────── pack / list / remove ───────────────────────────
 
-
 /// WP2.2 R2 — `expert publish`: pack + hash + emit the registry entry JSON.
 /// The zip itself is NOT uploaded anywhere (registry stores metadata only);
 /// the printed steps walk the publisher through release upload + PR.
 fn cmd_publish(dir: &Path, archive_url: Option<&str>, publisher: Option<&str>) -> Result<()> {
     let m = manifest::read(dir).map_err(cfg_err)?;
     let slug = m.expert.name.clone();
-    let version = if m.expert.version.is_empty() { "0.0.0".into() } else { m.expert.version.clone() };
+    let version = if m.expert.version.is_empty() {
+        "0.0.0".into()
+    } else {
+        m.expert.version.clone()
+    };
     let zip_path = PathBuf::from(format!("{slug}-{version}.zip"));
     cmd_pack(dir, Some(&zip_path))?;
 
-    let bytes = std::fs::read(&zip_path)
-        .map_err(|e| cfg_err(format!("讀取剛打包的 zip 失敗: {e}")))?;
+    let bytes =
+        std::fs::read(&zip_path).map_err(|e| cfg_err(format!("讀取剛打包的 zip 失敗: {e}")))?;
     let sha = registry::sha256_hex(&bytes);
 
     let has = |sub: &str| dir.join(sub).is_dir();
@@ -503,26 +504,41 @@ fn cmd_publish(dir: &Path, archive_url: Option<&str>, publisher: Option<&str>) -
         "eval_attached": has("evals"),
     });
     let entry_path = PathBuf::from(format!("{slug}.registry.json"));
-    std::fs::write(&entry_path, serde_json::to_string_pretty(&entry).unwrap_or_default())
-        .map_err(|e| cfg_err(format!("寫入 entry JSON 失敗: {e}")))?;
+    std::fs::write(
+        &entry_path,
+        serde_json::to_string_pretty(&entry).unwrap_or_default(),
+    )
+    .map_err(|e| cfg_err(format!("寫入 entry JSON 失敗: {e}")))?;
 
     // WP2.5: advisory quality tier — never blocks, tells the publisher
     // exactly what would raise it.
     let (tier, score_missing) = registry::compute_score(dir);
-    println!("\n  {} 品質分級：{}", style("★").yellow(), style(tier).bold());
+    println!(
+        "\n  {} 品質分級：{}",
+        style("★").yellow(),
+        style(tier).bold()
+    );
     for m in &score_missing {
         println!("    · 還差：{m}");
     }
 
-    println!("
-  {} {}", style("✓").green(), style("registry entry 已產出").bold());
+    println!(
+        "
+  {} {}",
+        style("✓").green(),
+        style("registry entry 已產出").bold()
+    );
     println!("    zip:   {}", zip_path.display());
     println!("    entry: {}", entry_path.display());
-    println!("
-  發佈三步：");
+    println!(
+        "
+  發佈三步："
+    );
     println!("  1. 把 zip 上傳到你的 GitHub Release，將 entry 的 archive_url 換成資產網址");
     if code_lane {
-        println!("  2. 此包含 hooks/skills（code lane）：需以 minisign 簽章 zip 並提供 minisig_url，");
+        println!(
+            "  2. 此包含 hooks/skills（code lane）：需以 minisign 簽章 zip 並提供 minisig_url，"
+        );
         println!("     且先在 registry 的 publishers/<你的帳號>/minisign.pub 註冊公鑰：");
         println!("       minisign -Sm {}", zip_path.display());
     } else {
@@ -582,7 +598,7 @@ fn cmd_list(home: &Path, json: bool) -> Result<()> {
         return Ok(());
     }
     if records.is_empty() {
-        println!("\n  尚未安裝任何專家包。用 `duduclaw expert install <path|zip|url>` 安裝。\n");
+        println!("\n  尚未安裝任何專家包。用 `duduclaw pack install <path|zip|url>` 安裝。\n");
         return Ok(());
     }
     println!("\n  {}\n", style("已安裝的專家包").bold());
@@ -734,5 +750,29 @@ mod unit_tests {
         extra.insert("x".into(), serde_json::json!({ "command": "x" }));
         assert_eq!(merge_mcp_servers(&mut doc, &extra), 1);
         assert!(doc["mcpServers"]["x"].is_object());
+    }
+
+    /// N11: an existing `.mcp.json` that is not valid JSON is not replaced by
+    /// an empty document (that would drop the duduclaw entry); a valid one is
+    /// merged and written atomically.
+    #[test]
+    fn merge_agent_mcp_refuses_an_unparseable_file_and_keeps_existing_entries() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("agents/agnes");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".mcp.json");
+        let mut extra = serde_json::Map::new();
+        extra.insert("pw".into(), serde_json::json!({ "command": "npx" }));
+
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(merge_agent_mcp(home.path(), "agnes", &extra).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json");
+
+        std::fs::write(&path, r#"{"mcpServers":{"duduclaw":{"command":"/x/duduclaw"}}}"#).unwrap();
+        assert_eq!(merge_agent_mcp(home.path(), "agnes", &extra).unwrap(), 1);
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(doc["mcpServers"]["duduclaw"].is_object());
+        assert!(doc["mcpServers"]["pw"].is_object());
     }
 }

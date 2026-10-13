@@ -7,6 +7,7 @@ pub mod contract;
 pub mod credential_probe;
 pub mod heartbeat;
 pub mod ipc;
+pub mod mcp_spawn_gate;
 pub mod mcp_template;
 pub mod proactive;
 pub mod proactive_timing;
@@ -25,6 +26,7 @@ pub use budget::{BudgetManager, BudgetStatus};
 pub use heartbeat::{
     HeartbeatScheduler,
     HeartbeatStatus,
+    HostRunNotice,
     SilenceBreakerEvent,
     start_heartbeat_scheduler,
     start_heartbeat_scheduler_with,

@@ -25,9 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{
-    extract::State, http::HeaderMap, http::StatusCode, response::IntoResponse, Json,
-};
+use axum::{Json, extract::State, http::HeaderMap, http::StatusCode, response::IntoResponse};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -65,7 +63,9 @@ impl FederationConfig {
             .and_then(|v| v.as_table())
             .and_then(|t| t.get("federation"))
             .and_then(|v| v.as_table());
-        let Some(s) = section else { return cfg; };
+        let Some(s) = section else {
+            return cfg;
+        };
 
         cfg.enabled = s.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
         if let Some(v) = s.get("interval_hours").and_then(|v| v.as_integer()) {
@@ -174,8 +174,7 @@ impl FederationState {
     }
 
     fn set(&mut self, peer: &str, ts: DateTime<Utc>) {
-        self.last_pushed
-            .insert(peer.to_string(), ts.to_rfc3339());
+        self.last_pushed.insert(peer.to_string(), ts.to_rfc3339());
     }
 }
 
@@ -196,8 +195,7 @@ pub fn spawn_federation_pusher(store: Arc<WikiTrustStore>, cfg: FederationConfig
         "wiki trust federation pusher enabled"
     );
     tokio::spawn(async move {
-        let mut ticker =
-            tokio::time::interval(Duration::from_secs(cfg.interval_hours * 3600));
+        let mut ticker = tokio::time::interval(Duration::from_secs(cfg.interval_hours * 3600));
         // Skip the immediate first tick so the first sync waits one full
         // interval — gives the gateway time to settle and avoids a flood
         // of inbound traffic on rolling deploys.
@@ -314,10 +312,7 @@ pub struct FederationServerState {
 /// scope (mitigations there belong to the HTTP client / firewall layer).
 fn is_internal_url(url: &str) -> bool {
     // Strip scheme.
-    let after_scheme = url
-        .splitn(2, "://")
-        .nth(1)
-        .unwrap_or(url);
+    let after_scheme = url.splitn(2, "://").nth(1).unwrap_or(url);
     // Authority section ends at first '/', '?', or '#'.
     let auth_end = after_scheme
         .find(|c: char| c == '/' || c == '?' || c == '#')
@@ -350,6 +345,15 @@ fn is_internal_url(url: &str) -> bool {
     if host_lower.contains('%') {
         return true;
     }
+    // An IP literal is classified by the workspace-wide public-address check
+    // (documentation, benchmarking, multicast, reserved, NAT64/6to4 forms…);
+    // the string patterns below stay as the fallback for shorthand spellings
+    // that do not parse as an `IpAddr`.
+    if let Ok(ip) = host_lower.parse::<std::net::IpAddr>() {
+        if !duduclaw_core::net_addr::is_public_ip(&ip) {
+            return true;
+        }
+    }
     if host_lower == "localhost"
         || host_lower == "0.0.0.0"
         || host_lower.ends_with(".localhost")
@@ -371,7 +375,11 @@ fn is_internal_url(url: &str) -> bool {
     }
     // 172.16.0.0/12 — match 172.16.* through 172.31.*
     if host_lower.starts_with("172.") {
-        if let Some(octet) = host_lower.split('.').nth(1).and_then(|o| o.parse::<u8>().ok()) {
+        if let Some(octet) = host_lower
+            .split('.')
+            .nth(1)
+            .and_then(|o| o.parse::<u8>().ok())
+        {
             if (16..=31).contains(&octet) {
                 return true;
             }
@@ -379,7 +387,11 @@ fn is_internal_url(url: &str) -> bool {
     }
     // 100.64.0.0/10 — RFC6598 CGNAT shared address space (some VPNs).
     if host_lower.starts_with("100.") {
-        if let Some(octet) = host_lower.split('.').nth(1).and_then(|o| o.parse::<u8>().ok()) {
+        if let Some(octet) = host_lower
+            .split('.')
+            .nth(1)
+            .and_then(|o| o.parse::<u8>().ok())
+        {
             if (64..=127).contains(&octet) {
                 return true;
             }
@@ -443,9 +455,13 @@ pub async fn handle_federation_push(
             None => false,
         };
         if !ok {
-            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({
-                "error": "invalid or missing bearer token"
-            }))).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "invalid or missing bearer token"
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -487,9 +503,13 @@ pub async fn handle_federation_push(
         Ok(n) => n,
         Err(e) => {
             warn!(error = %e, from = ?body.from, "federation import failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": format!("import failed: {e}")
-            }))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("import failed: {e}")
+                })),
+            )
+                .into_response();
         }
     };
 

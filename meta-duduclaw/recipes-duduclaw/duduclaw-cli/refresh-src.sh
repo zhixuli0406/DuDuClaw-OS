@@ -15,14 +15,14 @@
 # crates (duduclaw-core, duduclaw-gateway, duduclaw-memory, ...), so there's
 # no way to inline everything into one Cargo.toml the way sysd's ~10 purely
 # EXTERNAL deps allowed. Instead this reconstructs a trimmed COPY of the
-# real workspace: same root Cargo.toml (just `members` narrowed to the 21
+# real workspace: same root Cargo.toml (just `members` narrowed to the
 # crates actually needed -- verified by walking `cargo metadata`'s resolve
 # graph from duduclaw-cli with the exact --no-default-features/--features
 # flags the appliance build uses, not guessed), each member's real Cargo.toml
 # UNCHANGED (workspace = true shorthand keeps working because this snapshot
 # has its own real [workspace] root, same mechanism the real monorepo uses).
 #
-# Re-run whenever any of the 21 member crates' deps change, or after
+# Re-run whenever any of the member crates' deps change, or after
 # `cd web && npm run build` produces a new crates/duduclaw-dashboard/dist/
 # (rust-embed reads that folder at COMPILE time -- see that crate's
 # `#[folder = "dist/"]` -- so a stale/missing dist/ silently ships an old or
@@ -65,37 +65,28 @@ if [[ ! -f "$REPO_ROOT/crates/duduclaw-cli/Cargo.toml" ]]; then
 fi
 OUT_DIR="$_SCRIPT_DIR/files/duduclaw-cli-src"
 
-# The 21-member closure -- computed 2026-08-25 via `cargo metadata
-# --no-default-features --features duduclaw-gateway/dashboard` + a BFS from
-# the duduclaw-cli resolve node (scratchpad gen_cli_closure.py), NOT
-# hand-guessed. Re-derive with the same command if this list ever goes
-# stale (a missing member shows up immediately as a cargo "failed to load
-# source for dependency" error, so silent staleness isn't a real risk here).
+# The member closure -- every workspace crate duduclaw-cli reaches through a
+# declared path dependency (normal, dev, build and target-specific tables,
+# optional ones included, because cargo loads the manifest of every declared
+# path dependency), computed by a BFS over the platform's Cargo.toml files.
+# First derived 2026-08-25 (21 members + duduclaw-desktop + duduclaw-relay);
+# re-derived 2026-10-13 for platform v1.73.1: duduclaw-cli-worker is gone
+# from the platform, duduclaw-db is new (duduclaw-gateway depends on it), and
+# duduclaw-desktop dropped out (the gateway's `desktop` feature is now empty
+# and no member references the crate). Re-derive whenever the platform adds
+# or removes a crate: a missing member fails `cp` here or cargo's "failed to
+# read .../Cargo.toml" right away, so staleness is loud, not silent.
 MEMBERS=(
     duduclaw-agent duduclaw-auth duduclaw-cli duduclaw-cli-runtime
-    duduclaw-cli-worker duduclaw-container duduclaw-core duduclaw-dashboard
+    duduclaw-container duduclaw-core duduclaw-dashboard duduclaw-db
     duduclaw-fork duduclaw-gateway duduclaw-identity duduclaw-inference
     duduclaw-license duduclaw-llm duduclaw-memory duduclaw-odoo duduclaw-os
     duduclaw-redaction duduclaw-sandbox duduclaw-security duduclaw-sysd
-    # duduclaw-desktop is NOT in the 21-member closure (its `optional = true`
-    # feature stays off -- see CARGO_BUILD_FLAGS in the .bb). Included anyway
-    # (verified by hitting the alternative): cargo still needs to LOAD the
-    # manifest of every declared path-dependency, active or not, to build
-    # its initial workspace graph -- `cargo build` failed with "failed to
-    # read .../crates/duduclaw-desktop/Cargo.toml: No such file or
-    # directory" when it was left out. Its own transitive deps (enigo/xcap)
-    # are never pulled into the resolve graph because the feature gating it
-    # stays inactive -- confirmed absent from the crates.io closure below.
-    duduclaw-desktop
-    # Same reasoning as duduclaw-desktop above: duduclaw-gateway declares an
-    # optional `duduclaw-relay = { workspace = true }` path dependency that
-    # stays inactive under the dashboard-only feature set, but cargo still
-    # needs its manifest present to load the workspace graph (hit the same
-    # "failed to read .../duduclaw-relay/Cargo.toml" error without this).
-    # Cross-checked against the FULL duduclaw-*-path set in the real root
-    # Cargo.toml's [workspace.dependencies] afterward -- duduclaw-pets is
-    # the only entry not referenced by any of these 23 crates' manifests,
-    # so it's correctly left out.
+    # duduclaw-gateway declares an optional `duduclaw-relay = { workspace =
+    # true }` path dependency that stays inactive under the dashboard-only
+    # feature set, but cargo still needs its manifest present to load the
+    # workspace graph ("failed to read .../duduclaw-relay/Cargo.toml"
+    # without it).
     duduclaw-relay
 )
 
@@ -111,7 +102,7 @@ cp "$REPO_ROOT/LICENSE" "$OUT_DIR/LICENSE"
 
 # Repo-root assets several crates embed at COMPILE time via `include_str!`
 # with a `../../../<path>` traversal from crates/X/src/ -- found by grepping
-# all 23 members for `include_str!`/`include_bytes!` string literals
+# all members for `include_str!`/`include_bytes!` string literals
 # (`grep -rn 'include_str!\|include_bytes!' ... | grep -oE '"\.\./[^"]+"'`),
 # not guessed. Without these, `cargo build` fails at duduclaw-core's own
 # compile step with "couldn't read .../templates/presets/system-operator/
@@ -122,9 +113,27 @@ cp "$REPO_ROOT/LICENSE" "$OUT_DIR/LICENSE"
 mkdir -p "$OUT_DIR/templates" "$OUT_DIR/docs"
 cp -R "$REPO_ROOT/templates/." "$OUT_DIR/templates/"
 cp "$REPO_ROOT/docs/README.md" "$OUT_DIR/docs/README.md"
+# fixtures/ (2026-10-13, platform v1.73.1): duduclaw-gateway's
+# handle_causal_extraction_eval (non-test code in src/server.rs) embeds
+# `../../../fixtures/causal-extraction-synthetic.json`; the other fixture
+# references are inside #[cfg(test)] modules but the directory is small, so
+# it is copied whole.
+if [[ -d "$REPO_ROOT/fixtures" ]]; then
+    mkdir -p "$OUT_DIR/fixtures"
+    cp -R "$REPO_ROOT/fixtures/." "$OUT_DIR/fixtures/"
+fi
+# vendor/ (2026-10-13, platform v1.73.1): the root Cargo.toml copied below
+# carries `[patch.crates-io] serenity = { path = "vendor/serenity" }` (the
+# rustls 0.23 security patch of Songbird's Serenity bridge). cargo resolves
+# every [patch] path even when the crate is not in the active feature set
+# (discord-voice is off here), so the patched copy must be present.
+if [[ -d "$REPO_ROOT/vendor" ]]; then
+    mkdir -p "$OUT_DIR/vendor"
+    cp -R "$REPO_ROOT/vendor/." "$OUT_DIR/vendor/"
+fi
 
 # Root Cargo.toml: copy the REAL one verbatim, then narrow `members = [...]`
-# to just our 21 -- [workspace.package]/[workspace.dependencies]/
+# to just our members -- [workspace.package]/[workspace.dependencies]/
 # [workspace.lints] stay byte-identical to the real workspace (same version
 # pins, same edition, same lint config), only the member LIST differs.
 python3 - "$REPO_ROOT/Cargo.toml" "$OUT_DIR/Cargo.toml" "${MEMBERS[@]}" <<'PYEOF'

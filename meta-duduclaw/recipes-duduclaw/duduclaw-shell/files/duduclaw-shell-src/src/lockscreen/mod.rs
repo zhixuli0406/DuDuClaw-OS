@@ -33,7 +33,7 @@
 // key/click after locking now only REVEALS a password field (clock/summary
 // card stay exactly where they were, per the original spec's own "read-only
 // surface" framing — see `render.rs`'s header comment); actually unlocking
-// requires the operator to type the `admin@local` password and press Enter,
+// requires the operator to type the owner account's password and press Enter,
 // verified against the real gateway's `POST /api/login`
 // (`gateway_client::verify_password` — see that module's own header
 // comment). The `LockPrivacy`/idle-lock machinery below is UNCHANGED by

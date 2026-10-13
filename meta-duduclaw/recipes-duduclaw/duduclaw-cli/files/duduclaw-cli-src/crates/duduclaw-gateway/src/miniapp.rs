@@ -417,10 +417,7 @@ pub fn verify_init_data(
         .as_deref()
         .and_then(parse_user_id)
         .ok_or(InitDataError::NoUser)?;
-    Ok(VerifiedInitData {
-        user_id,
-        auth_date,
-    })
+    Ok(VerifiedInitData { user_id, auth_date })
 }
 
 /// Pull the numeric `id` out of the `user` JSON object. Non-numeric or absent
@@ -513,8 +510,11 @@ async fn page_handler(
     if !enabled(&state.home_dir) {
         return not_found();
     }
-    if !crate::license_serve::within_rate_limit(&MINIAPP_RATE_LIMITER, addr.ip(), RATE_LIMIT_PER_MIN)
-    {
+    if !crate::license_serve::within_rate_limit(
+        &MINIAPP_RATE_LIMITER,
+        addr.ip(),
+        RATE_LIMIT_PER_MIN,
+    ) {
         return (StatusCode::TOO_MANY_REQUESTS, "").into_response();
     }
     let nonce = uuid::Uuid::new_v4().simple().to_string();
@@ -557,15 +557,19 @@ async fn page_handler(
 async fn candidate_tokens(home_dir: &Path, rec: Option<&ApprovalRecord>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if let Some(r) = rec {
-        if let Some(t) = crate::goal_notify::channel_token(home_dir, &r.agent_id, "telegram").await {
+        if let Some(t) = crate::goal_notify::channel_token(home_dir, &r.agent_id, "telegram").await
+        {
             if !t.is_empty() {
                 out.push(t);
             }
         }
     }
-    if let Some(t) =
-        crate::config_crypto::read_encrypted_config_field(home_dir, "channels", "telegram_bot_token")
-            .await
+    if let Some(t) = crate::config_crypto::read_encrypted_config_field(
+        home_dir,
+        "channels",
+        "telegram_bot_token",
+    )
+    .await
     {
         if !t.is_empty() && !out.contains(&t) {
             out.push(t);
@@ -599,8 +603,11 @@ async fn verified_context(
     if !enabled(&state.home_dir) {
         return Err(not_found());
     }
-    if !crate::license_serve::within_rate_limit(&MINIAPP_RATE_LIMITER, addr.ip(), RATE_LIMIT_PER_MIN)
-    {
+    if !crate::license_serve::within_rate_limit(
+        &MINIAPP_RATE_LIMITER,
+        addr.ip(),
+        RATE_LIMIT_PER_MIN,
+    ) {
         return Err(refused(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -697,14 +704,31 @@ async fn detail_handler(
         reason_prefix: crate::decision_notify::reason_prefix(DecisionSource::Approval).to_string(),
         agent: rec.agent_id.clone(),
         action: crate::approval_notify::zh_action_kind(&rec.action_kind).to_string(),
-        summary: duduclaw_core::truncate_chars(&rec.summary, SUMMARY_MAX_CHARS),
-        trajectory,
+        // R-L2: a dashboard-only kind carries a claim and a protected value
+        // in its summary; the Mini App shows only the plain notice.
+        summary: detail_summary(&rec),
+        trajectory: if crate::approval_notify::is_dashboard_only_kind(&rec.action_kind) {
+            None
+        } else {
+            trajectory
+        },
         status: rec.status.as_str().to_string(),
         settled: rec.status.is_terminal(),
         expires_at_epoch: rec.expires_at_epoch(),
         ttl_seconds: rec.ttl_seconds,
     };
     (StatusCode::OK, Json(json!({ "approval": detail }))).into_response()
+}
+
+/// The summary the Mini App shows. R-L2: a dashboard-only kind carries a
+/// claim and a protected value in its summary, so only the plain notice (the
+/// same text the channel gets) is returned for it.
+fn detail_summary(rec: &crate::approval::ApprovalRecord) -> String {
+    if crate::approval_notify::is_dashboard_only_kind(&rec.action_kind) {
+        crate::approval_notify::dashboard_only_notice_body(rec, false)
+    } else {
+        duduclaw_core::truncate_chars(&rec.summary, SUMMARY_MAX_CHARS)
+    }
 }
 
 /// `POST /miniapp/api/approval/decide` — verify, then hand off to the unified
@@ -735,7 +759,9 @@ async fn decide_handler(
     )
     .await
     {
-        Some(Ok(msg)) => (StatusCode::OK, Json(json!({ "ok": true, "message": msg }))).into_response(),
+        Some(Ok(msg)) => {
+            (StatusCode::OK, Json(json!({ "ok": true, "message": msg }))).into_response()
+        }
         Some(Err(msg)) => refused(StatusCode::FORBIDDEN, "refused", &msg),
         // `route_press` only returns `None` for an action id it cannot decode,
         // which this handler composed itself — treat as a bug, not a refusal.
@@ -1024,8 +1050,7 @@ mod tests {
         let (dcs, hash) = data_check_string(raw).expect("parses");
         assert_eq!(hash, "deadbeef");
         assert_eq!(
-            dcs,
-            "auth_date=1700000000\nquery_id=AAA\nuser={\"id\":7}",
+            dcs, "auth_date=1700000000\nquery_id=AAA\nuser={\"id\":7}",
             "fields sorted alphabetically, joined by \\n, `hash` excluded"
         );
     }
@@ -1060,7 +1085,10 @@ mod tests {
         let secret = k.finalize().into_bytes();
         let mut m = <HmacSha256 as Mac>::new_from_slice(&secret).unwrap();
         m.update(dcs.as_bytes());
-        assert_eq!(expected_hash(TEST_TOKEN, dcs), hex::encode(m.finalize().into_bytes()));
+        assert_eq!(
+            expected_hash(TEST_TOKEN, dcs),
+            hex::encode(m.finalize().into_bytes())
+        );
     }
 
     // ── round trip + rejections ────────────────────────────
@@ -1076,7 +1104,8 @@ mod tests {
             ],
             TEST_TOKEN,
         );
-        let v = verify_init_data(&raw, TEST_TOKEN, now(), INIT_DATA_MAX_AGE_SECS).expect("verifies");
+        let v =
+            verify_init_data(&raw, TEST_TOKEN, now(), INIT_DATA_MAX_AGE_SECS).expect("verifies");
         assert_eq!(v.user_id, "555");
     }
 
@@ -1128,14 +1157,20 @@ mod tests {
         // Just inside the window still passes — the boundary is not a cliff
         // one second early.
         let fresh = (now() - INIT_DATA_MAX_AGE_SECS + 30).to_string();
-        let ok = sign(&[("user", &user_field(1)), ("auth_date", &fresh)], TEST_TOKEN);
+        let ok = sign(
+            &[("user", &user_field(1)), ("auth_date", &fresh)],
+            TEST_TOKEN,
+        );
         assert!(verify_init_data(&ok, TEST_TOKEN, now(), INIT_DATA_MAX_AGE_SECS).is_ok());
     }
 
     #[test]
     fn far_future_auth_date_is_refused() {
         let ahead = (now() + INIT_DATA_FUTURE_SKEW_SECS + 60).to_string();
-        let raw = sign(&[("user", &user_field(1)), ("auth_date", &ahead)], TEST_TOKEN);
+        let raw = sign(
+            &[("user", &user_field(1)), ("auth_date", &ahead)],
+            TEST_TOKEN,
+        );
         assert_eq!(
             verify_init_data(&raw, TEST_TOKEN, now(), INIT_DATA_MAX_AGE_SECS),
             Err(InitDataError::Expired)
@@ -1187,7 +1222,10 @@ mod tests {
     #[test]
     fn candidate_tokens_try_every_bot_before_refusing() {
         let ts = now().to_string();
-        let raw = sign(&[("user", &user_field(77)), ("auth_date", &ts)], "second:bot");
+        let raw = sign(
+            &[("user", &user_field(77)), ("auth_date", &ts)],
+            "second:bot",
+        );
         let tokens = vec![TEST_TOKEN.to_string(), "second:bot".to_string()];
         let v = verify_against_any(&raw, &tokens, now()).expect("second candidate matches");
         assert_eq!(v.user_id, "77");
@@ -1195,7 +1233,10 @@ mod tests {
             verify_against_any(&raw, &[TEST_TOKEN.to_string()], now()),
             Err(InitDataError::BadHash)
         );
-        assert_eq!(verify_against_any(&raw, &[], now()), Err(InitDataError::BadHash));
+        assert_eq!(
+            verify_against_any(&raw, &[], now()),
+            Err(InitDataError::BadHash)
+        );
     }
 
     // ── config / URL gates ─────────────────────────────────
@@ -1265,7 +1306,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            approval_web_app_url(dir.path(), DecisionSource::Approval, "telegram", "555", "ap-1"),
+            approval_web_app_url(
+                dir.path(),
+                DecisionSource::Approval,
+                "telegram",
+                "555",
+                "ap-1"
+            ),
             Some("https://ai.example.com/miniapp/approval?id=ap-1".to_string())
         );
 
@@ -1296,7 +1343,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            approval_web_app_url(dir.path(), DecisionSource::Approval, "telegram", "555", "ap-1"),
+            approval_web_app_url(
+                dir.path(),
+                DecisionSource::Approval,
+                "telegram",
+                "555",
+                "ap-1"
+            ),
             None
         );
 
@@ -1307,7 +1360,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            approval_web_app_url(dir.path(), DecisionSource::Approval, "telegram", "555", "ap-1"),
+            approval_web_app_url(
+                dir.path(),
+                DecisionSource::Approval,
+                "telegram",
+                "555",
+                "ap-1"
+            ),
             None
         );
     }
@@ -1318,7 +1377,10 @@ mod tests {
     fn page_is_self_contained_and_nonce_substituted() {
         let nonce = "abc123";
         let html = APPROVAL_PAGE_HTML.replace("__CSP_NONCE__", nonce);
-        assert!(!html.contains("__CSP_NONCE__"), "every nonce slot substituted");
+        assert!(
+            !html.contains("__CSP_NONCE__"),
+            "every nonce slot substituted"
+        );
         assert!(html.contains("nonce=\"abc123\""));
         // The only external origin is telegram.org (the platform SDK).
         for (i, _) in html.match_indices("src=\"http") {
@@ -1328,7 +1390,10 @@ mod tests {
             );
         }
         assert!(!html.contains("href=\"http"), "no external stylesheets");
-        assert!(!html.contains("innerHTML"), "server text is written with textContent only");
+        assert!(
+            !html.contains("innerHTML"),
+            "server text is written with textContent only"
+        );
     }
 
     #[test]
@@ -1341,9 +1406,41 @@ mod tests {
             "bot_token",
             "HMAC",
         ] {
-            assert!(!html.contains(leaked), "internal term leaked to the page: {leaked}");
+            assert!(
+                !html.contains(leaked),
+                "internal term leaked to the page: {leaked}"
+            );
         }
         assert!(html.contains("同意這個動作"));
         assert!(html.contains("拒絕這個動作"));
+    }
+
+    #[test]
+    fn dashboard_only_kind_summary_is_redacted() {
+        let mut rec = crate::approval::ApprovalRecord {
+            id: crate::approval::ApprovalId::from("ap-1".to_string()),
+            agent_id: "support".into(),
+            action_kind: "knowledge_quarantine".into(),
+            summary: "對話中有一則新說法 目前內容：「七天」 內容摘要：永久退款".into(),
+            payload: serde_json::json!({ "disposition": "trust_held" }),
+            status: crate::approval::ApprovalStatus::Pending,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            decided_at: None,
+            decided_by: None,
+            ttl_seconds: 300,
+            notify_channel: None,
+            notify_chat_id: None,
+            reminded_at: None,
+            simulation: None,
+            request_kind: crate::approval::RequestKind::Approval,
+            binding: None,
+            answer: None,
+            invalidated_reason: None,
+        };
+        let s = detail_summary(&rec);
+        assert!(!s.contains("永久退款") && !s.contains("七天"), "{s}");
+        assert!(s.contains("儀表板"));
+        rec.action_kind = "mcp_install".into();
+        assert!(detail_summary(&rec).contains("永久退款"));
     }
 }

@@ -67,7 +67,8 @@ meta-duduclaw/
 │   ├── duduclaw-os-genericx86-64.yml        # real-hardware machine config
 │   ├── sb-signing.yml                       # Secure Boot signing overlay (mounts repo-root sb-keys/)
 │   ├── tpm-luks.yml                         # TPM2 + LUKS overlay (pins meta-security / meta-tpm)
-│   └── serial1.yml                          # release overlay: -j1 serial build (OOM guard), SPDX off
+│   ├── serial1.yml                          # release overlay: -j1 serial build (OOM guard), SPDX off
+│   └── release-linux-builder.yml            # release overlay for a 16 vCPU / 64 GB Linux builder: SPDX off, 8 threads
 ├── docker/Dockerfile.yocto-builder          # Linux build container for macOS hosts
 └── scripts/sb-keygen.sh                     # self-signed PK/KEK/db generation
 ```

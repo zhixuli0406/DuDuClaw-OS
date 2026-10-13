@@ -1,7 +1,7 @@
 //! `duduclaw-sysd` — the DuDuClaw appliance image's privilege-separated
 //! root system service.
 //!
-//! See `commercial/docs/DESIGN-agent-os-native-apps-2026-08.md` §2 L1 for
+//! See `commercial/docs/specs/DESIGN-agent-os-native-apps-2026-08.md` §2 L1 for
 //! the design context (internal doc, not part of this public crate — this
 //! crate's own docs are self-contained). In short: the DuDuClaw gateway
 //! process runs as an unprivileged `duduclaw` user and has no business
@@ -54,7 +54,11 @@ pub mod server {
     /// Never constructible — [`bind`] always errors on non-unix targets.
     pub struct SysdListener(());
 
-    pub fn bind(_socket_path: &Path) -> io::Result<SysdListener> {
+    /// Signature mirrors the unix `server::bind(socket_path, allowed_uid)`
+    /// exactly — `main.rs` calls it unconditionally, so a drift here is a
+    /// Windows-only compile error the unix CI legs never see (the v1.63.0
+    /// / v1.64.0 windows CI leg broke on exactly that).
+    pub fn bind(_socket_path: &Path, _allowed_uid: Option<u32>) -> io::Result<SysdListener> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "duduclaw-sysd requires Unix domain sockets — it only runs on the Linux appliance image",

@@ -1,0 +1,1 @@
+import"./chunk-Bh1tDfsg.js";import{i as e}from"./utils-BhomWwm6.js";var t=`https://www.futurecorp.tw/`,n={zh:`未來企業`,en:`Future Corp`};function r(e=`zh`){return{url:t,name:n[e]}}function i(){return r(e().locale.toLowerCase().startsWith(`en`)?`en`:`zh`)}export{i as t};

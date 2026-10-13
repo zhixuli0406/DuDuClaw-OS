@@ -1,6 +1,6 @@
 //! Per-agent "自主研究" (self-study) — Belief Loop × Goal Contract gap 2.
 //!
-//! See `commercial/docs/DESIGN-market-belief-loop-2026-08.md` §3:
+//! See `commercial/docs/specs/DESIGN-market-belief-loop-2026-08.md` §3:
 //!
 //! ```text
 //! ┌─ 自主研究（做功課）───────────────────────────────────────
@@ -68,7 +68,10 @@ pub struct ResearchConfig {
 
 impl Default for ResearchConfig {
     fn default() -> Self {
-        Self { self_study: false, self_study_hour: DEFAULT_SELF_STUDY_HOUR }
+        Self {
+            self_study: false,
+            self_study_hour: DEFAULT_SELF_STUDY_HOUR,
+        }
     }
 }
 
@@ -99,7 +102,10 @@ impl ResearchConfig {
             .filter(|h| (0..=23).contains(h))
             .map(|h| h as u32)
             .unwrap_or(DEFAULT_SELF_STUDY_HOUR);
-        Self { self_study, self_study_hour }
+        Self {
+            self_study,
+            self_study_hour,
+        }
     }
 }
 
@@ -126,6 +132,12 @@ pub fn should_run_now(now_local_hour: u32, cfg_hour: u32, already_ran_today: boo
     now_local_hour >= cfg_hour
 }
 
+/// NOTE (settle_source): this deliberately does NOT filter on verified
+/// settlements. It only picks a subject for a research/review goal, never
+/// reports a calibration figure, and in production every settlement is
+/// currently a self-report, so a verified-only filter would switch the
+/// feature off entirely. A self-reported miss is still a reason to look.
+///
 /// Filter `rows` (as returned by [`belief::recent`]) down to those settled
 /// **today** (UTC calendar day — matches `belief::unsettled_today`'s own
 /// date convention, since every `belief_log` timestamp is UTC) with
@@ -281,8 +293,8 @@ impl SelfStudyScheduler {
             }
 
             let meta_key = format!("self_study_last:{agent_id}");
-            let already_ran =
-                belief::get_meta(&prediction_db, &meta_key).as_deref() == Some(today_local.as_str());
+            let already_ran = belief::get_meta(&prediction_db, &meta_key).as_deref()
+                == Some(today_local.as_str());
             if !should_run_now(local_now.hour(), cfg.self_study_hour, already_ran) {
                 continue;
             }
@@ -313,7 +325,9 @@ impl SelfStudyScheduler {
                     info!(agent = %agent_id, subject = %subject, "self_study: 已建立晚間自主研究目標");
                     created += 1;
                 }
-                Err(e) => warn!(agent = %agent_id, subject = %subject, error = %e, "self_study: 建立研究任務失敗"),
+                Err(e) => {
+                    warn!(agent = %agent_id, subject = %subject, error = %e, "self_study: 建立研究任務失敗")
+                }
             }
         }
         created
@@ -663,7 +677,11 @@ mod tests {
         let created_again = sched.tick().await;
         assert_eq!(created_again, 0);
         let tasks_after = store.list_tasks(None, Some("trader"), None).await.unwrap();
-        assert_eq!(tasks_after.len(), 1, "must not double-create on a second tick");
+        assert_eq!(
+            tasks_after.len(),
+            1,
+            "must not double-create on a second tick"
+        );
     }
 
     #[tokio::test]

@@ -1,39 +1,58 @@
 pub mod agent_guard;
 pub mod agent_rename;
+pub mod agent_trash;
 pub mod agent_toml;
 pub mod appliance;
 pub mod autostart;
+// S15 (2026-09-29): OS-only. Only DuDuClaw OS ships `compat.d` and the shell
+// that launches its runners, so the platform binary leaves this out. Turned on
+// by `duduclaw-cli`'s `app-compat` feature, which the OS recipe passes.
+#[cfg(feature = "app-compat")]
 pub mod compat_runners;
 pub mod concurrency_gate;
+pub mod gateway_instance;
 pub mod config;
 pub mod cron_tz;
+// H10 (2026-09 feature audit): the RFC-23 §14.4 data-file guard's decision
+// half, shared by `duduclaw hook data-file-guard` and the gateway installer.
+pub mod data_file_guard;
 pub mod data_migrations;
 pub mod delegation_policy;
 pub mod department;
 pub mod dispatch_guard;
+pub mod docker_probe;
 pub mod error;
 pub mod fs_lock;
 pub mod grounding;
 pub mod identity_token;
 pub mod keychain;
 pub mod lenient;
+pub mod llm_contract;
 pub mod match_utils;
+pub mod net_addr;
 pub mod mcp_scopes;
 pub mod org;
 pub mod org_field_guard;
 pub mod org_store;
+pub mod pack;
 pub mod platform;
 pub mod preset;
+pub mod protected_section;
 pub mod provider_env;
+pub mod product_profile;
 pub mod relay_protocol;
 pub mod runtime_catalog;
-pub mod secaudit_config;
+pub mod sandbox_image;
 pub mod sensitivity;
 pub mod spawn_admission;
 pub mod spawn_env;
 pub mod takeover_state;
+pub mod task_packet;
+pub mod team_gate;
 pub mod text_utils;
 pub mod tool_catalog;
+pub mod tool_effect;
+pub mod mcp_proxy_rewrite;
 pub mod toml_merge;
 pub mod traits;
 pub mod types;
@@ -56,11 +75,12 @@ pub use cron_tz::{parse_timezone, should_fire_in_tz};
 pub use delegation_policy::{
     can_delegate, can_delegate_ext, can_delegate_rules, can_delegate_rules_ext,
     delegation_rules_from_home, is_ancestor as is_org_ancestor, is_reserved_agent_id,
-    is_system_sender,
+    is_reserved_queue_sender, is_system_sender,
     policy_from_home as delegation_policy_from_home, require_identity_token_from_home,
     resolve_allow_pairs, DelegationConfig,
     DelegationDenied, DelegationPolicy, DelegationRules, DenyReason as DelegationDenyReason,
-    MapOrgView, OrgNode, OrgView, ACP_CLIENT_SENDER, MAX_ANCESTOR_HOPS, SYSTEM_SENDERS,
+    MapOrgView, OrgNode, OrgView, ACP_CLIENT_SENDER, MAX_ANCESTOR_HOPS, RESERVED_QUEUE_SENDERS,
+    STANDALONE_CLIENT_PREFIX, SYSTEM_SENDERS,
 };
 pub use department::{
     department_of_page, department_page_visible, is_valid_department,
@@ -69,6 +89,7 @@ pub use department::{
 };
 pub use dispatch_guard::{
     check_and_record as dispatch_guard_check, DispatchGuardConfig, DispatchGuardDecision,
+    DEFAULT_ROLE_TEAM_MAX_IN_WINDOW, PATH_KIND_ROLE_TEAM,
 };
 pub use error::{DuDuClawError, Result};
 pub use fs_lock::with_file_lock;
@@ -79,17 +100,23 @@ pub use grounding::{
 };
 pub use identity_token::{
     agent_identity_env_vars, agent_identity_env_vars_default, ensure_key as ensure_identity_key,
-    identity_key_path, load_key as load_identity_key, mint_token as mint_identity_token,
+    identity_key_path, internal_request_signature, load_key as load_identity_key,
+    mint_token as mint_identity_token, verify_internal_request_signature,
     verify_claim as verify_identity_claim, verify_env_identity, verify_token as verify_identity_token,
     IdentityVerdict, ENV_AGENT_TOKEN, IDENTITY_KEY_FILE, UNTRUSTED_AGENT_ID,
 };
 pub use keychain::{resolve_master_key, KeychainError, MasterKeySource};
 pub use match_utils::{is_valid_discord_snowflake, is_valid_egress_host, origin_host_matches, word_contains_ci};
 pub use org_field_guard::{
-    check_bash_protected_write, check_caller_scope, check_identity_surface_write,
-    check_own_soul_write, check_protected_toml_write, classify_identity_surface,
-    classify_protected_toml, HookCaller, ProtectedSurface, ProtectedTomlKind, AGENT_ORG_FIELDS,
-    CONFIG_PROTECTED_SECTIONS,
+    check_bash_protected_write, check_bash_protected_write_in, check_caller_scope,
+    check_identity_surface_write, check_identity_surface_write_as, resolve_real_path,
+    bash_invokes_operator_command, bash_operator_command_decision, OperatorCommand,
+    MCP_KEY_COMMANDS, check_own_contract_write, check_own_soul_write, check_protected_toml_write,
+    check_protected_toml_write_as, classify_identity_surface,
+    classify_protected_toml, HookCaller, ProtectedSurface, ProtectedTomlKind,
+    AGENT_CAPABILITY_SECTION, AGENT_EDITABLE_SECTIONS, AGENT_ORG_FIELDS, AGENT_SECURITY_KEYS,
+    AGENT_SECURITY_SECTIONS,
+    CONFIG_PROTECTED_SECTIONS, HOME_WRITABLE_DIRS,
 };
 pub use org_store::{
     OrgDrift, OrgEntry, OrgStore, OrgSyncChange, ORG_SEEDED_FILE, ORG_STORE_FILE, ORG_STORE_SCHEMA,
@@ -98,15 +125,19 @@ pub use platform::{duduclaw_home, duduclaw_instance, expand_tilde, home_dir, mcp
 pub use provider_env::{
     provider_env_key_names, resolve_env_key as resolve_provider_env_key, KNOWN_PROVIDER_IDS,
 };
-pub use secaudit_config::SecauditConfig;
 pub use sensitivity::{is_private_session, perception_source_sensitivity, Sensitivity};
+// `try_admit_role_member` is `#[deprecated]` (no production caller, superseded
+// by `ephemeral::admit_role_member`); re-exported so the deprecation is visible
+// at the workspace-facing name too, hence the allow on the whole tree.
+#[allow(deprecated)]
 pub use spawn_admission::{
     clamp_min_one as spawn_admission_clamp_min_one, dequeue_next as spawn_admission_dequeue_next,
     enqueue as spawn_admission_enqueue, invalidate_owner as spawn_admission_invalidate_owner,
     queue_depth as spawn_admission_queue_depth, sweep_expired as spawn_admission_sweep_expired,
+    role_team_capacity_check, try_admit_role_member,
     AdmissionConfig as SpawnAdmissionConfig, AdmissionMode as SpawnAdmissionMode,
     DequeueResult as SpawnDequeueResult, EnqueueOutcome as SpawnEnqueueOutcome,
-    QueuedSpawn,
+    QueuedSpawn, RoleMemberAdmission, ROLE_TEAM_ADMISSION_CLASS,
 };
 pub use spawn_env::{
     agent_cli_spawn_env_pairs, agent_cli_spawn_env_pairs_for, apply_agent_cli_env_allowlist,
@@ -119,6 +150,12 @@ pub use takeover_state::{
 };
 pub use text_utils::{truncate_bytes, truncate_chars};
 pub use tool_catalog::{builtin_tool_catalog, ToolCatalogEntry};
+pub use tool_effect::{
+    effect_from_annotations, effect_of, effect_of_builtin, effect_of_cli_builtin,
+    third_party_tool_ref, ActionRule, CLAUDE_CLI_BUILTIN_TOOLS,
+    ActionRules, ActionTarget, ActionVerdict, ProcessLane, ThirdPartyBlock, ThirdPartyDecision,
+    ThirdPartyPolicy, ToolAnnotations, ToolEffect, ENV_LANE, LANE_EXPLORE,
+};
 pub use traits::{Channel, ContainerRuntime, MemoryEngine};
 pub use types::*;
 pub use zh_variant::{contains_simplified, dominant_variant, to_traditional, ChineseVariant};
@@ -249,9 +286,69 @@ pub const ENV_REPLY_CHANNEL: &str = "DUDUCLAW_REPLY_CHANNEL";
 pub const ENV_TRUST_TURN_ID: &str = "DUDUCLAW_TURN_ID";
 pub const ENV_TRUST_SESSION_ID: &str = "DUDUCLAW_SESSION_ID";
 
+/// The task a goal-loop round runs for (F5-D). Set by the gateway when it
+/// spawns the CLI for that round, from its own dispatch record (never from
+/// anything the model wrote); read by the MCP server to stamp the approval
+/// cards that round raises, so the dashboard can apply the task's audience.
+pub const ENV_TASK_ID: &str = "DUDUCLAW_TASK_ID";
+
+/// [`ENV_TASK_ID`] of this process, when present and well-formed.
+pub fn host_task_id() -> Option<String> {
+    std::env::var(ENV_TASK_ID)
+        .ok()
+        .filter(|t| is_valid_agent_id(t))
+}
+
+/// Stamp `payload` (an approval card's payload) with the host task id under
+/// `task_id`. Only object payloads are stamped; a host value always replaces
+/// one already there.
+pub fn with_host_task_id(payload: serde_json::Value, task_id: Option<&str>) -> serde_json::Value {
+    match (payload, task_id) {
+        (serde_json::Value::Object(mut map), Some(t)) => {
+            map.insert("task_id".into(), serde_json::Value::String(t.to_string()));
+            serde_json::Value::Object(map)
+        }
+        (other, _) => other,
+    }
+}
+
+/// P2-B: the channel message that triggered this turn — its
+/// `session_messages.id` and the RFC3339 time it was stored. Set by the
+/// gateway next to [`ENV_TRUST_TURN_ID`] when spawning a CLI for a channel
+/// turn; the MCP memory tools add it as a source of what they store, so
+/// forgetting that message also forgets what was stored during its turn.
+pub const ENV_TURN_USER_MESSAGE_SEQ: &str = "DUDUCLAW_TURN_USER_MESSAGE_SEQ";
+pub const ENV_TURN_USER_MESSAGE_AT: &str = "DUDUCLAW_TURN_USER_MESSAGE_AT";
+
+/// P2-B: the dispatch / cron / goal run a CLI spawn belongs to. The gateway
+/// mints the run id before the spawn; MCP memory writes made during the run
+/// carry it as their source, and the run's own post-run distillation uses the
+/// same id, so forgetting the run reaches both. `SESSION` is the run's
+/// session (`"<request type>:<agent>"`), `ID` the run key without `run:`.
+pub const ENV_DISPATCH_SESSION: &str = "DUDUCLAW_DISPATCH_SESSION";
+pub const ENV_DISPATCH_RUN_ID: &str = "DUDUCLAW_DISPATCH_RUN_ID";
+/// Set (to `1`) on a dispatched run whose bus message said its upstream
+/// turn identity was incomplete and dropped by the sender (P2-B): the run's
+/// memory writes record the upstream as unknown.
+pub const ENV_UPSTREAM_UNKNOWN: &str = "DUDUCLAW_UPSTREAM_UNKNOWN";
+
+/// RFC-23 §14.4 data-file guard mode: `"on"` / `"read_only"` / `"off"`.
+///
+/// Written by the gateway at each Claude-CLI spawn site, but ONLY when
+/// redaction is actually active for that spawn
+/// (`redaction_proxy::data_file_guard_env_for_spawn`); read by the
+/// `duduclaw hook data-file-guard` PreToolUse hook registered in each agent's
+/// `.claude/settings.json` (a Rust subcommand since H10 — it was a shell
+/// script, which silently did nothing on Windows). Absent ⇒ the hook exits 0
+/// immediately, which is the pre-§14.4 behavior. Named here rather than as a
+/// literal in two crates because the writer (gateway) and the readers
+/// ([`crate::data_file_guard`] plus `spawn_env`'s allowlist in this crate)
+/// must never drift apart.
+pub const ENV_DATA_FILE_GUARD: &str = "DUDUCLAW_DATA_FILE_GUARD";
+
 /// `working_state` key used for the agent-body update vertical slice's
 /// cross-restart result report handshake (Y8-3, T1 —
-/// `commercial/docs/DESIGN-agent-body-update-2026-08.md` §13). Shared here
+/// `commercial/docs/specs/DESIGN-agent-body-update-2026-08.md` §13). Shared here
 /// (rather than hardcoded as the same string literal in two crates) because
 /// both the writer (`duduclaw-cli`'s `mcp_os_ops.rs`, inside the per-session
 /// `duduclaw mcp-server` subprocess) and the reader (`duduclaw-gateway`'s
@@ -1310,3 +1407,18 @@ mod mcp_forward_env_tests {
         );
     }
 }
+
+// P1/WP-3 (effort plumbing): per-call reasoning effort — appended last to keep
+// this module list conflict-free with concurrent edits above.
+pub mod effort;
+
+// Team-as-Agent P2: the static role→model capability matrix persisted as
+// `role_model_matrix.toml` (written by `duduclaw eval --matrix`, read by the
+// team composer in P5). Appended last to stay conflict-free with the module
+// list above.
+pub mod role_model_matrix;
+
+pub mod workflow_mcp;
+
+/// Shared hash of computer-use workspace paths (gateway and MCP audits).
+pub mod workspace_path;

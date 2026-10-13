@@ -13,12 +13,19 @@
 //!
 //! ## Experiment status
 //!
-//! READ-ONLY EXPERIMENT (TODO-feature-gaps-2026-07-11 §2.2 M2). This module
-//! reads the engine through its public API and writes nothing anywhere. No
-//! production path consumes it yet; behavior of the running system is
-//! unchanged. Everything here is deterministic — no LLM calls, no clock-free
-//! randomness, no fallback guessing (ties are surfaced as [`Conflict`]s and
-//! unparseable rows are counted in `unparsed_count`, never force-fitted).
+//! READ-ONLY (TODO-feature-gaps-2026-07-11 §2.2 M2). This module reads the
+//! engine through its public API and writes nothing anywhere. Everything here
+//! is deterministic — no LLM calls, no clock-free randomness, no fallback
+//! guessing (ties are surfaced as [`Conflict`]s and unparseable rows are
+//! counted in `unparsed_count`, never force-fitted).
+//!
+//! Correction (2026-09-29 feature audit, G8): this note used to say "no
+//! production path consumes it yet". That is wrong — the **`user_code_profile`
+//! MCP tool is live** (`mcp.rs` `ToolDef`, dispatched to
+//! `mcp_memory_handlers::handle_user_code_profile`, scoped `memory:read` in
+//! `mcp_auth`), so any agent can compile its own profile on demand. What is
+//! still true is that nothing in the gateway consumes [`UserProfile::check`]
+//! automatically — the compile is agent-initiated, never a gate on a send.
 //!
 //! ## What would graduate this to production
 //!
@@ -890,7 +897,7 @@ mod tests {
                     valid_from,
                     confidence,
                     ..Default::default()
-                },
+                }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap()
@@ -1288,7 +1295,7 @@ mod tests {
             .store_temporal(
                 "a",
                 entry("a", "總之他人很好", vec!["user-profile"]),
-                TemporalMeta::default(),
+                TemporalMeta::default(), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -1297,7 +1304,7 @@ mod tests {
             .store_temporal(
                 "a",
                 entry("a", "timezone: Asia/Taipei", vec!["user-profile"]),
-                TemporalMeta::default(),
+                TemporalMeta::default(), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -1306,7 +1313,7 @@ mod tests {
             .store_temporal(
                 "a",
                 entry("a", "勿在深夜打擾", vec!["user-profile"]),
-                TemporalMeta::default(),
+                TemporalMeta::default(), crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -1321,7 +1328,7 @@ mod tests {
                     predicate: Some("empty_pred".to_string()),
                     object: Some("   ".to_string()),
                     ..Default::default()
-                },
+                }, crate::lineage::Provenance::test_only(),
             )
             .await
             .unwrap();
@@ -1342,13 +1349,13 @@ mod tests {
     #[tokio::test]
     async fn profile_summary_row_is_excluded() {
         let engine = SqliteMemoryEngine::in_memory().unwrap();
-        crate::user_profile::record_trait(&engine, "a", "u1", "prefers", "tea", 1.0)
+        crate::user_profile::record_trait(&engine, "a", "u1", "prefers", "tea", 1.0, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
-        crate::user_profile::record_trait(&engine, "a", "u1", "timezone", "Asia/Taipei", 1.0)
+        crate::user_profile::record_trait(&engine, "a", "u1", "timezone", "Asia/Taipei", 1.0, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
-        crate::user_profile::record_trait(&engine, "a", "u1", "language", "zh-TW", 1.0)
+        crate::user_profile::record_trait(&engine, "a", "u1", "language", "zh-TW", 1.0, crate::lineage::Provenance::test_only())
             .await
             .unwrap();
         crate::user_profile::consolidate_profile(&engine, "a", "u1", 3)

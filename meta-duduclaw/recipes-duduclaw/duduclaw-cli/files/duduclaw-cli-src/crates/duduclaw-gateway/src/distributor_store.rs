@@ -8,19 +8,19 @@
 //!
 //! `DistributorStats` is **computed** from the two tables, never stored.
 //!
-//! Mirrors [`crate::partner_store`]: rusqlite, per-call connection, WAL +
+//! Uses rusqlite, per-call connection, WAL +
 //! `busy_timeout`, `CREATE TABLE IF NOT EXISTS` on first open, owner-only file
 //! permissions on unix (via `duduclaw_core::platform::set_owner_only`).
 //!
-//! Signing lives here too (`issue_signed_oem_license`) because it is the
+//! Signing lives here too (`issue_signed_distributor_license`) because it is the
 //! distributor domain and needs to be a pure, unit-testable function that the
 //! handler layer calls with the real issuer seed + the production verify key.
 
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use duduclaw_license::{License, LicenseTier, PublicKeyRegistry};
@@ -97,7 +97,7 @@ pub struct DistributorStats {
 // ── Store ───────────────────────────────────────────────────
 
 /// Per-request opened SQLite store — same "open a fresh store per RPC" pattern
-/// as [`crate::partner_store::PartnerStore`] (low-traffic admin surface).
+/// for the low-traffic distributor administration surface.
 pub struct DistributorStore {
     db_path: PathBuf,
 }
@@ -182,11 +182,8 @@ impl DistributorStore {
         let migrations: &[(&str, &str)] = &[("last_refresh_at", "last_refresh_at TEXT")];
         for (col, ddl) in migrations {
             if !existing.contains(*col) {
-                conn.execute(
-                    &format!("ALTER TABLE issued_licenses ADD COLUMN {ddl}"),
-                    [],
-                )
-                .map_err(|e| format!("add column {col}: {e}"))?;
+                conn.execute(&format!("ALTER TABLE issued_licenses ADD COLUMN {ddl}"), [])
+                    .map_err(|e| format!("add column {col}: {e}"))?;
             }
         }
         Ok(())
@@ -566,7 +563,7 @@ pub fn load_issuer_signing_seed(path: &Path) -> Result<[u8; 32], String> {
     Ok(seed)
 }
 
-/// Sign an OEM (`tier=Oem`) license with `signing_seed`, then **self-verify** it
+/// Sign a distributor (`tier=Oem`) license with `signing_seed`, then **self-verify** it
 /// against `verify_registry` before returning. The self-verify is the
 /// "先驗證再套用" guard: if the issuer private key does not pair with the
 /// trusted public key (`public_key_id` = `key_id`), no blob is produced.
@@ -577,7 +574,7 @@ pub fn load_issuer_signing_seed(path: &Path) -> Result<[u8; 32], String> {
 /// Pure and side-effect-free (no disk, no audit) so the sign→verify round-trip
 /// is unit-testable with a throwaway keypair.
 #[allow(clippy::too_many_arguments)]
-pub fn issue_signed_oem_license(
+pub fn issue_signed_distributor_license(
     signing_seed: &[u8; 32],
     verify_registry: &PublicKeyRegistry,
     key_id: &str,
@@ -586,7 +583,6 @@ pub fn issue_signed_oem_license(
     machine_fingerprint: &str,
     expires_days: i64,
     control_url: Option<&str>,
-    branding_editable: Option<Vec<String>>,
     max_agents: Option<u32>,
 ) -> Result<(License, String), String> {
     let mut license = License::new(
@@ -600,19 +596,14 @@ pub fn issue_signed_oem_license(
     // §10.5: bake the owner-gateway URL into the key so the client phones home
     // without needing DUDUCLAW_CONTROL_URL. Not part of the signed payload.
     license.control_url = control_url.map(str::to_string);
-    // WP8: the field-level white-label edit claim. `None` = no restriction (the
-    // consumer resolves it to the full vendor set — a reseller token); `Some`
-    // narrows the editable range (a customer token). It IS part of the signed
-    // payload, so the claim cannot be widened locally.
-    license.branding_editable = branding_editable;
     // P-License: the signed per-license agent-count quota. `None` = no override
-    // (tier default applies); `Some(n)` = sell exactly N (`Some(0)` = unlimited).
+    // (tier default applies); `Some(n)` = grant exactly N (`Some(0)` = unlimited).
     // It IS part of the signed payload, so the count cannot be raised locally.
     license.max_agents = max_agents;
     sign_and_self_verify(signing_seed, verify_registry, key_id, license)
 }
 
-/// Re-sign an already-issued OEM license for a phone-home `refresh` (P2).
+/// Re-sign an already-issued distributor license for a phone-home `refresh` (P2).
 ///
 /// Preserves every economically-meaningful field of the original record —
 /// `issued_at`, `expires_at`, `subscription_id`, `customer_id`,
@@ -621,7 +612,7 @@ pub fn issue_signed_oem_license(
 /// signature is required). **Refresh never extends validity**: a lapsed key is
 /// re-subscribed by re-issuing, not by refreshing. `public_key_id` is pinned to
 /// `"v2"` (the current issuer key). Shares the sign + self-verify kernel with
-/// [`issue_signed_oem_license`], so a mismatched issuer/verify pair fails closed
+/// [`issue_signed_distributor_license`], so a mismatched issuer/verify pair fails closed
 /// with no blob produced.
 ///
 /// Pure and side-effect-free (no disk, no ledger write) — the caller persists
@@ -635,13 +626,13 @@ pub fn resign_license_for_refresh(
     resign_license_preserving(signing_seed, verify_registry, rec, None)
 }
 
-/// Re-sign an already-issued OEM license with a **new** `max_agents` (P-License
+/// Re-sign an already-issued distributor license with a **new** `max_agents` (P-License
 /// upgrade / add-on, plan §12.1 gateway offline path).
 ///
 /// Preserves every other economically-meaningful field — `subscription_id`,
 /// `customer_id`, `machine_fingerprint`, `issued_at`, `expires_at`,
-/// `control_url`, and the `branding_editable` claim — and only swaps the signed
-/// agent-count quota. `new_max_agents`: `Some(n)` sells exactly N (`Some(0)` =
+/// `control_url` — and only swaps the signed
+/// agent-count quota. `new_max_agents`: `Some(n)` grants exactly N (`Some(0)` =
 /// unlimited); `None` clears the override back to the tier default. Shares the
 /// [`resign_license_preserving`] kernel + sign/self-verify guard with
 /// [`resign_license_for_refresh`] (a mismatched issuer/verify pair fails closed).
@@ -682,20 +673,12 @@ fn resign_license_preserving(
         .map_err(|e| format!("parse expires_at: {e}"))?
         .with_timezone(&Utc);
 
-    // §10.5 / WP8: preserve the original self-carried `control_url` AND the
-    // signed `branding_editable` claim so a re-signed key keeps phoning home to
-    // the same owner gateway and keeps the exact same field-level edit range. A
-    // re-sign must never widen the claim (that would let a customer escalate to
-    // full vendor editing by triggering a re-sign), so we copy it verbatim from
-    // the previously-issued blob. The ledger has no dedicated columns for these,
-    // but the stored `license_blob` is the signed License JSON. A blob that does
-    // not decode (legacy "blob" placeholders in tests) yields None for both.
+    // Preserve the distributor control-plane URL from the signed license blob.
     let prev = BASE64
         .decode(rec.license_blob.trim())
         .ok()
         .and_then(|bytes| serde_json::from_slice::<License>(&bytes).ok());
     let control_url = prev.as_ref().and_then(|l| l.control_url.clone());
-    let branding_editable = prev.as_ref().and_then(|l| l.branding_editable.clone());
     // P-License: an upgrade sets `max_agents` explicitly; a refresh preserves the
     // signed quota verbatim (never widen or silently drop to the tier default).
     let max_agents = match max_agents_override {
@@ -715,7 +698,6 @@ fn resign_license_preserving(
         public_key_id: "v2".to_string(),
         signature: Vec::new(),
         control_url,
-        branding_editable,
         max_agents,
         // NFR marker survives refresh/upgrade — a re-signed test license must
         // never come back clean.
@@ -724,35 +706,8 @@ fn resign_license_preserving(
     sign_and_self_verify(signing_seed, verify_registry, "v2", license)
 }
 
-/// Whether `signing_seed` is a genuine, ecosystem-trusted issuer key — i.e. it
-/// can mint licenses that verify against `verify_registry`'s trusted public
-/// keys. **Non-forgeable** (WP8): a random 32-byte seed (e.g. a customer-admin
-/// pointing `[distributor] issuer_key_path` at an attacker-controlled file)
-/// derives a public key that is NOT in the trusted registry, so it fails. This
-/// gates System-scope branding rights so mere config presence cannot escalate a
-/// restricted customer token to full editing. Signs a throwaway probe license
-/// and requires it to verify — proving the private seed pairs with a trusted
-/// public key. No disk / audit side effects.
-pub fn issuer_seed_is_trusted(
-    signing_seed: &[u8; 32],
-    verify_registry: &PublicKeyRegistry,
-) -> bool {
-    let probe = License::new(
-        "issuer-probe",
-        "issuer-probe",
-        LicenseTier::Oem,
-        "issuer-probe",
-        chrono::Duration::days(1),
-        "v2",
-    );
-    sign_and_self_verify(signing_seed, verify_registry, "v2", probe).is_ok()
-}
-
-/// Shared sign + self-verify + blob-encode kernel. Signs `license`'s canonical
-/// payload with `signing_seed`, then self-verifies against `verify_registry`
-/// (the "先驗證再套用" guard — no blob is produced if the issuer private key
-/// does not pair with the trusted `key_id` public key). Returns
-/// `(license, base64(JSON(license)))`.
+/// Sign the canonical payload and self-verify against the trusted issuer key
+/// before returning the license and encoded delivery blob.
 fn sign_and_self_verify(
     signing_seed: &[u8; 32],
     verify_registry: &PublicKeyRegistry,
@@ -907,9 +862,18 @@ mod tests {
         let registry = PublicKeyRegistry::new().with_key("v2", pubkey);
 
         let fp = duduclaw_license::generate_fingerprint();
-        let (license, blob) =
-            issue_signed_oem_license(&seed, &registry, "v2", "dist-abc-001", "dist-abc", &fp, 365, None, None, None)
-                .expect("sign+verify should succeed for a paired key");
+        let (license, blob) = issue_signed_distributor_license(
+            &seed,
+            &registry,
+            "v2",
+            "dist-abc-001",
+            "dist-abc",
+            &fp,
+            365,
+            None,
+            None,
+        )
+        .expect("sign+verify should succeed for a paired key");
 
         assert_eq!(license.tier, LicenseTier::Oem);
         assert_eq!(license.public_key_id, "v2");
@@ -924,86 +888,6 @@ mod tests {
     }
 
     #[test]
-    fn branding_editable_claim_round_trips_through_signed_blob() {
-        // WP8: issue with a restricted field-level claim; the signed blob must
-        // carry it verbatim, survive verification, and still verify after parse.
-        let signing = SigningKey::generate(&mut OsRng);
-        let seed: [u8; 32] = signing.to_bytes();
-        let registry =
-            PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
-        let fp = duduclaw_license::generate_fingerprint();
-
-        let claim = vec!["logo_data_uri".to_string(), "accent_color".to_string()];
-        let (license, blob) = issue_signed_oem_license(
-            &seed,
-            &registry,
-            "v2",
-            "dist-claim-1",
-            "dist-claim",
-            &fp,
-            365,
-            None,
-            Some(claim.clone()),
-            None,
-        )
-        .expect("issue with claim");
-        assert_eq!(license.branding_editable.as_ref(), Some(&claim));
-
-        let decoded = BASE64.decode(blob.trim()).unwrap();
-        let parsed: License = serde_json::from_slice(&decoded).unwrap();
-        assert_eq!(parsed.branding_editable.as_ref(), Some(&claim));
-        assert!(registry.verify(&parsed).is_ok());
-    }
-
-    #[test]
-    fn resign_preserves_branding_editable_claim() {
-        // A refresh must NOT widen (or drop) the claim — a customer token stays a
-        // customer token across phone-home re-signs.
-        let signing = SigningKey::generate(&mut OsRng);
-        let seed: [u8; 32] = signing.to_bytes();
-        let registry =
-            PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
-        let fp = duduclaw_license::generate_fingerprint();
-
-        let claim = vec!["logo_data_uri".to_string()];
-        let (original, blob) = issue_signed_oem_license(
-            &seed,
-            &registry,
-            "v2",
-            "dist-c-1",
-            "dist-c",
-            &fp,
-            365,
-            None,
-            Some(claim.clone()),
-            None,
-        )
-        .expect("initial issue");
-
-        let rec = IssuedLicense {
-            id: "lic-c".into(),
-            distributor_id: "d".into(),
-            subscription_id: "dist-c-1".into(),
-            customer_id: "dist-c".into(),
-            tier: "oem".into(),
-            machine_fingerprint: fp.clone(),
-            issued_at: original.issued_at.to_rfc3339(),
-            expires_at: original.expires_at.to_rfc3339(),
-            status: "active".into(),
-            revoked_at: None,
-            license_blob: blob,
-            last_refresh_at: None,
-        };
-        let (resigned, new_blob) =
-            resign_license_for_refresh(&seed, &registry, &rec).expect("resign");
-        assert_eq!(resigned.branding_editable.as_ref(), Some(&claim));
-        let decoded = BASE64.decode(new_blob.trim()).unwrap();
-        let parsed: License = serde_json::from_slice(&decoded).unwrap();
-        assert_eq!(parsed.branding_editable.as_ref(), Some(&claim));
-        assert!(registry.verify(&parsed).is_ok());
-    }
-
-    #[test]
     fn issue_and_resign_preserve_max_agents_quota() {
         // P-License: a "sell 5 agents" OEM key must (a) carry a verifiable signed
         // quota of 5, and (b) still be 5 after a phone-home refresh re-sign — the
@@ -1014,7 +898,7 @@ mod tests {
             PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
         let fp = duduclaw_license::generate_fingerprint();
 
-        let (original, blob) = issue_signed_oem_license(
+        let (original, blob) = issue_signed_distributor_license(
             &seed,
             &registry,
             "v2",
@@ -1022,7 +906,6 @@ mod tests {
             "dist-q",
             &fp,
             365,
-            None,
             None,
             Some(5),
         )
@@ -1046,7 +929,11 @@ mod tests {
         };
         let (resigned, new_blob) =
             resign_license_for_refresh(&seed, &registry, &rec).expect("resign");
-        assert_eq!(resigned.max_agents, Some(5), "quota preserved across refresh");
+        assert_eq!(
+            resigned.max_agents,
+            Some(5),
+            "quota preserved across refresh"
+        );
         let decoded = BASE64.decode(new_blob.trim()).unwrap();
         let parsed: License = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(parsed.max_agents, Some(5));
@@ -1063,8 +950,16 @@ mod tests {
             PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
         let fp = duduclaw_license::generate_fingerprint();
 
-        let (original, blob) = issue_signed_oem_license(
-            &seed, &registry, "v2", "dist-up-1", "dist-up", &fp, 365, None, None, Some(5),
+        let (original, blob) = issue_signed_distributor_license(
+            &seed,
+            &registry,
+            "v2",
+            "dist-up-1",
+            "dist-up",
+            &fp,
+            365,
+            None,
+            Some(5),
         )
         .expect("initial issue with quota 5");
         assert_eq!(original.max_agents, Some(5));
@@ -1105,7 +1000,11 @@ mod tests {
         };
         let (refreshed, _) =
             resign_license_for_refresh(&seed, &registry, &rec_after).expect("refresh");
-        assert_eq!(refreshed.max_agents, Some(8), "refresh keeps the upgraded quota");
+        assert_eq!(
+            refreshed.max_agents,
+            Some(8),
+            "refresh keeps the upgraded quota"
+        );
     }
 
     #[test]
@@ -1117,14 +1016,26 @@ mod tests {
         let registry =
             PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
         let fp = duduclaw_license::generate_fingerprint();
-        let (_orig, blob) = issue_signed_oem_license(
-            &seed, &registry, "v2", "dist-sb-1", "dist-sb", &fp, 365, None, None, Some(5),
+        let (_orig, blob) = issue_signed_distributor_license(
+            &seed,
+            &registry,
+            "v2",
+            "dist-sb-1",
+            "dist-sb",
+            &fp,
+            365,
+            None,
+            Some(5),
         )
         .unwrap();
 
         let (_dir, store) = make_store();
         let did = store
-            .add_distributor(&DistributorInput { name: "D".into(), contact: None, note: None })
+            .add_distributor(&DistributorInput {
+                name: "D".into(),
+                contact: None,
+                note: None,
+            })
             .unwrap();
         store
             .add_license(&IssuedLicense {
@@ -1170,7 +1081,9 @@ mod tests {
             PublicKeyRegistry::new().with_key("v2", other.verifying_key().to_bytes().to_vec());
 
         let fp = duduclaw_license::generate_fingerprint();
-        let res = issue_signed_oem_license(&seed, &registry, "v2", "dist-x-1", "dist-x", &fp, 365, None, None, None);
+        let res = issue_signed_distributor_license(
+            &seed, &registry, "v2", "dist-x-1", "dist-x", &fp, 365, None, None,
+        );
         assert!(
             res.is_err(),
             "mismatched issuer/verify key must fail self-verify"
@@ -1239,9 +1152,21 @@ mod tests {
                 last_refresh_at: None,
             })
             .unwrap();
-        assert!(store.get_license("lic-tr").unwrap().last_refresh_at.is_none());
+        assert!(
+            store
+                .get_license("lic-tr")
+                .unwrap()
+                .last_refresh_at
+                .is_none()
+        );
         store.touch_refresh("lic-tr").unwrap();
-        assert!(store.get_license("lic-tr").unwrap().last_refresh_at.is_some());
+        assert!(
+            store
+                .get_license("lic-tr")
+                .unwrap()
+                .last_refresh_at
+                .is_some()
+        );
     }
 
     #[test]
@@ -1249,13 +1174,14 @@ mod tests {
         // Throwaway issuer keypair trusted under "v2".
         let signing = SigningKey::generate(&mut OsRng);
         let seed: [u8; 32] = signing.to_bytes();
-        let registry = PublicKeyRegistry::new()
-            .with_key("v2", signing.verifying_key().to_bytes().to_vec());
+        let registry =
+            PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
 
         let fp = duduclaw_license::generate_fingerprint();
-        let (original, _blob) =
-            issue_signed_oem_license(&seed, &registry, "v2", "dist-r-1", "dist-r", &fp, 365, None, None, None)
-                .expect("initial issue");
+        let (original, _blob) = issue_signed_distributor_license(
+            &seed, &registry, "v2", "dist-r-1", "dist-r", &fp, 365, None, None,
+        )
+        .expect("initial issue");
 
         // Build the ledger record from the issued license (as the store would).
         let rec = IssuedLicense {
@@ -1273,8 +1199,7 @@ mod tests {
             last_refresh_at: None,
         };
 
-        let (resigned, blob) =
-            resign_license_for_refresh(&seed, &registry, &rec).expect("resign");
+        let (resigned, blob) = resign_license_for_refresh(&seed, &registry, &rec).expect("resign");
 
         // Validity window + identity preserved to the second — NO extension.
         assert_eq!(resigned.issued_at, original.issued_at);
@@ -1297,8 +1222,8 @@ mod tests {
         let signing = SigningKey::generate(&mut OsRng);
         let seed: [u8; 32] = signing.to_bytes();
         let other = SigningKey::generate(&mut OsRng);
-        let registry = PublicKeyRegistry::new()
-            .with_key("v2", other.verifying_key().to_bytes().to_vec());
+        let registry =
+            PublicKeyRegistry::new().with_key("v2", other.verifying_key().to_bytes().to_vec());
 
         let rec = IssuedLicense {
             id: "lic-m".into(),
@@ -1317,23 +1242,6 @@ mod tests {
         assert!(resign_license_for_refresh(&seed, &registry, &rec).is_err());
     }
 
-    #[test]
-    fn issuer_seed_is_trusted_only_for_paired_key() {
-        // The genuine issuer seed (its pubkey is trusted under "v2") is trusted.
-        let signing = SigningKey::generate(&mut OsRng);
-        let seed: [u8; 32] = signing.to_bytes();
-        let registry =
-            PublicKeyRegistry::new().with_key("v2", signing.verifying_key().to_bytes().to_vec());
-        assert!(issuer_seed_is_trusted(&seed, &registry));
-
-        // A random/attacker-controlled seed (customer faking issuer_key_path)
-        // derives an untrusted pubkey → NOT a system instance (fail-closed).
-        let attacker: [u8; 32] = SigningKey::generate(&mut OsRng).to_bytes();
-        assert!(!issuer_seed_is_trusted(&attacker, &registry));
-
-        // Empty registry (no baked key) → never trusted.
-        assert!(!issuer_seed_is_trusted(&seed, &PublicKeyRegistry::new()));
-    }
 
     #[test]
     fn load_seed_rejects_bad_format() {

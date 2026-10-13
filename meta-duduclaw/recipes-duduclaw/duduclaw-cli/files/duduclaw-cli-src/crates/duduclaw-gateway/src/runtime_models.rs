@@ -100,7 +100,11 @@ pub struct RuntimeModelsCache {
 // ── Static fallbacks ─────────────────────────────────────────────────────
 
 fn m(id: &str, label: &str, provider: &str) -> RuntimeModel {
-    RuntimeModel { id: id.into(), label: label.into(), provider: provider.into() }
+    RuntimeModel {
+        id: id.into(),
+        label: label.into(),
+        provider: provider.into(),
+    }
 }
 
 /// Claude static fallback — the three ids the old hard-coded list carried.
@@ -146,6 +150,13 @@ fn now_rfc3339() -> String {
 /// provider that can't be probed live falls back to a marked static list.
 pub async fn discover_all(home_dir: &Path) -> RuntimeModelsCache {
     let mut providers = BTreeMap::new();
+    let policy = match crate::product_policy::load(home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "Product policy refused model discovery");
+            return RuntimeModelsCache { providers, fetched_at: now_rfc3339() };
+        }
+    };
 
     // Claude keeps its own path: it is the only provider with a live models
     // API (`api.anthropic.com/v1/models`), so discovery is API-first with a
@@ -161,8 +172,8 @@ pub async fn discover_all(home_dir: &Path) -> RuntimeModelsCache {
     // home — a HOME-rooted probe against it alone would look in
     // `~/.duduclaw/.local/bin/<cli>` and never find anything.
     // `detect_runtime` does PATH/real-HOME first, then this dir.
-    for spec in duduclaw_core::runtime_catalog::cli_specs() {
-        if spec.id == "claude" {
+    for spec in duduclaw_core::runtime_catalog::cli_specs_for_profile(policy) {
+        if spec.id == "claude" || policy.require_runtime(spec.id).is_err() {
             continue;
         }
         let Some(bin) = duduclaw_core::detect_runtime(spec.id, home_dir) else {
@@ -186,7 +197,10 @@ pub async fn discover_all(home_dir: &Path) -> RuntimeModelsCache {
         );
     }
 
-    RuntimeModelsCache { providers, fetched_at: now_rfc3339() }
+    RuntimeModelsCache {
+        providers,
+        fetched_at: now_rfc3339(),
+    }
 }
 
 /// Load the cached discovery result. Returns `None` when there's no cache yet.
@@ -238,8 +252,7 @@ pub fn spawn_periodic_refresh(home_dir: std::path::PathBuf) {
     tokio::spawn(async move {
         // Startup refresh — populate/refresh the cache once the gateway is up.
         refresh_and_save(&home_dir).await;
-        let mut interval =
-            tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
+        let mut interval = tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
         interval.tick().await; // discard the immediate first tick
         loop {
             interval.tick().await;
@@ -257,7 +270,11 @@ async fn discover_claude(home_dir: &Path) -> ProviderModels {
     if let Some(key) = resolve_anthropic_key(home_dir).await {
         match probe_anthropic_api(&key).await {
             Some(models) if !models.is_empty() => {
-                return ProviderModels { models, source: DiscoverySource::LiveApi, fetched_at };
+                return ProviderModels {
+                    models,
+                    source: DiscoverySource::LiveApi,
+                    fetched_at,
+                };
             }
             _ => debug!("runtime_models: anthropic /v1/models probe yielded nothing"),
         }
@@ -269,7 +286,11 @@ async fn discover_claude(home_dir: &Path) -> ProviderModels {
     if pty_probe_enabled(home_dir).await {
         match probe_claude_pty(home_dir).await {
             Some(models) if !models.is_empty() => {
-                return ProviderModels { models, source: DiscoverySource::PtyProbe, fetched_at };
+                return ProviderModels {
+                    models,
+                    source: DiscoverySource::PtyProbe,
+                    fetched_at,
+                };
             }
             _ => debug!("runtime_models: pty /model probe yielded nothing"),
         }
@@ -278,13 +299,17 @@ async fn discover_claude(home_dir: &Path) -> ProviderModels {
     // ② Parse `claude --help` for the --model aliases.
     // Version-aware resolution: which_claude() probes every install and
     // prefers the newest (a stale /usr/local/bin copy must not win).
-    if let Some(bin) = duduclaw_core::which_claude()
-        .or_else(|| duduclaw_core::which_claude_in_home(home_dir))
+    if let Some(bin) =
+        duduclaw_core::which_claude().or_else(|| duduclaw_core::which_claude_in_home(home_dir))
     {
         if let Some(out) = run_probe(&bin, &["--help"], HELP_TIMEOUT).await {
             let models = parse_claude_help_models(&out);
             if !models.is_empty() {
-                return ProviderModels { models, source: DiscoverySource::HelpParse, fetched_at };
+                return ProviderModels {
+                    models,
+                    source: DiscoverySource::HelpParse,
+                    fetched_at,
+                };
             }
         }
     }
@@ -298,7 +323,11 @@ async fn discover_claude(home_dir: &Path) -> ProviderModels {
 }
 
 /// Generic codex/gemini/agy discovery: best-effort CLI probe, else fallback.
-async fn discover_generic(provider: &str, bin: &str, fallback: Vec<RuntimeModel>) -> ProviderModels {
+async fn discover_generic(
+    provider: &str,
+    bin: &str,
+    fallback: Vec<RuntimeModel>,
+) -> ProviderModels {
     let fetched_at = now_rfc3339();
 
     if let Some(help) = run_probe(bin, &["--help"], HELP_TIMEOUT).await {
@@ -320,7 +349,11 @@ async fn discover_generic(provider: &str, bin: &str, fallback: Vec<RuntimeModel>
         }
     }
 
-    ProviderModels { models: fallback, source: DiscoverySource::Fallback, fetched_at }
+    ProviderModels {
+        models: fallback,
+        source: DiscoverySource::Fallback,
+        fetched_at,
+    }
 }
 
 /// agy discovery: `agy models` is an official subcommand (antigravity.google
@@ -332,7 +365,11 @@ async fn discover_agy(bin: &str) -> ProviderModels {
     if let Some(out) = run_probe(bin, &["models"], HELP_TIMEOUT).await {
         let models = parse_agy_model_lines(&out);
         if !models.is_empty() {
-            return ProviderModels { models, source: DiscoverySource::CliProbe, fetched_at };
+            return ProviderModels {
+                models,
+                source: DiscoverySource::CliProbe,
+                fetched_at,
+            };
         }
     }
     ProviderModels {
@@ -392,7 +429,10 @@ async fn run_probe(program: &str, args: &[&str], timeout: Duration) -> Option<St
 }
 
 async fn probe_anthropic_api(api_key: &str) -> Option<Vec<RuntimeModel>> {
-    let client = reqwest::Client::builder().timeout(API_TIMEOUT).build().ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(API_TIMEOUT)
+        .build()
+        .ok()?;
     let resp = client
         .get(ANTHROPIC_MODELS_URL)
         .header("x-api-key", api_key)
@@ -401,7 +441,10 @@ async fn probe_anthropic_api(api_key: &str) -> Option<Vec<RuntimeModel>> {
         .await
         .ok()?;
     if !resp.status().is_success() {
-        debug!("runtime_models: anthropic /v1/models returned {}", resp.status());
+        debug!(
+            "runtime_models: anthropic /v1/models returned {}",
+            resp.status()
+        );
         return None;
     }
     let json: serde_json::Value = resp.json().await.ok()?;
@@ -465,16 +508,18 @@ pub fn parse_claude_help_models(help: &str) -> Vec<RuntimeModel> {
         }
         // A full-name *example* whose id embeds a family word (claude-fable-5,
         // claude-3-5-sonnet-…) duplicates that family's alias — skip it.
-        if is_full
-            && t.split('-').any(|seg| CLAUDE_MODEL_ALIASES.contains(&seg))
-        {
+        if is_full && t.split('-').any(|seg| CLAUDE_MODEL_ALIASES.contains(&seg)) {
             continue;
         }
         if !seen.insert(t.to_string()) {
             continue;
         }
         alias_found |= is_alias;
-        let label = if is_alias { alias_label(t) } else { t.to_string() };
+        let label = if is_alias {
+            alias_label(t)
+        } else {
+            t.to_string()
+        };
         out.push(m(t, &label, "claude"));
     }
     // Supplement the aliases help didn't happen to mention — but only when the
@@ -640,7 +685,9 @@ fn looks_like_model_id(t: &str) -> bool {
     }
     let has_sep = t.contains('-') || t.contains('.');
     let has_digit = t.chars().any(|c| c.is_ascii_digit());
-    let ok_chars = t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    let ok_chars = t
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
     has_sep && has_digit && ok_chars && t.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
 }
 
@@ -722,8 +769,8 @@ fn strip_ansi_lossy(s: &str) -> String {
 /// Drive an interactive `claude` REPL, send `/model`, capture the menu, kill.
 /// Fully bounded (≤20s) and always kills the child. Returns raw PTY output.
 async fn probe_claude_pty(home_dir: &Path) -> Option<Vec<RuntimeModel>> {
-    let program = duduclaw_core::which_claude()
-        .or_else(|| duduclaw_core::which_claude_in_home(home_dir))?;
+    let program =
+        duduclaw_core::which_claude().or_else(|| duduclaw_core::which_claude_in_home(home_dir))?;
     let raw = tokio::task::spawn_blocking(move || pty_capture_model_menu(&program))
         .await
         .ok()??;
@@ -745,7 +792,12 @@ fn pty_capture_model_menu(program: &str) -> Option<String> {
 
     let pty = native_pty_system();
     let pair = pty
-        .openpty(PtySize { rows: 40, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .ok()?;
     let mut cmd = CommandBuilder::new(program);
     cmd.env("NO_COLOR", "1");
@@ -937,7 +989,10 @@ mod tests {
         assert!(ids.contains(&"Claude Sonnet 4.6 (Thinking)"));
         assert!(ids.contains(&"GPT-OSS 120B (Medium)"));
         // id == label (display name IS the id for agy).
-        let flash = models.iter().find(|m| m.id == "Gemini 3.5 Flash (Low)").unwrap();
+        let flash = models
+            .iter()
+            .find(|m| m.id == "Gemini 3.5 Flash (Low)")
+            .unwrap();
         assert_eq!(flash.label, flash.id);
         assert_eq!(flash.provider, "gemini");
     }
@@ -978,7 +1033,10 @@ mod tests {
                 fetched_at: "2026-07-11T00:00:00Z".into(),
             },
         );
-        let cache = RuntimeModelsCache { providers, fetched_at: "2026-07-11T00:00:00Z".into() };
+        let cache = RuntimeModelsCache {
+            providers,
+            fetched_at: "2026-07-11T00:00:00Z".into(),
+        };
         let merged = merged_models(&cache);
         assert_eq!(merged.len(), 3, "one dup dropped: {merged:?}");
         // Source label rides each entry.

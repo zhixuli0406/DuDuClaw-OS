@@ -35,6 +35,13 @@
 // Cost: one extra loopback round trip and one `login_local_auto` audit row
 // per unlock attempt, which is rare (an operator typing a password).
 //
+// Since platform v1.73.1 the shell first asks `POST /api/owner/verify`,
+// which checks the owner's password without any email (loopback only,
+// shares /api/login's rate limit), so a non-Personal or auto-login-off
+// owner who changed their email can still unlock. Older gateways answer
+// that route with something other than `200 {"ok":true}`, and the shell
+// then falls back to the email-based `/api/login` path above.
+//
 // ── Why the gateway's OWN 429 does not replace this surface's throttle ───
 // `handle_login`'s `check_login_rate_limit` is a 15-MINUTE, IP+email-scoped
 // lockout — the right guard against a sustained brute-force campaign, but
@@ -107,8 +114,47 @@ struct HttpResponse {
 /// fallback, as every other client in this module tree).
 pub(crate) fn verify_password(password: &str) -> Result<(), LoginError> {
     let base = gateway_base_url();
-    let email = lock_account_email(&base);
-    verify_password_at(&base, &email, password)
+    match owner_verify_at(&base, password)? {
+        OwnerVerify::Verified => Ok(()),
+        OwnerVerify::Invalid => Err(LoginError::InvalidCredentials),
+        OwnerVerify::RateLimited => Err(LoginError::RateLimited),
+        OwnerVerify::Unsupported => {
+            let email = lock_account_email(&base);
+            verify_password_at(&base, &email, password)
+        }
+    }
+}
+
+/// Outcome of `POST /api/owner/verify` (platform v1.73.1+), which checks the
+/// owner's password without needing the owner's email.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnerVerify {
+    Verified,
+    Invalid,
+    RateLimited,
+    /// Anything else: an older gateway without the endpoint (404/405, or a
+    /// catch-all page), or a refusal. The caller falls back to `/api/login`.
+    Unsupported,
+}
+
+/// Only a 200 whose body is exactly `{"ok": true}` counts as verified: an
+/// older gateway's catch-all route must never be mistaken for a match.
+pub(crate) fn owner_verify_at(base_url: &str, password: &str) -> Result<OwnerVerify, LoginError> {
+    let (host, port) = parse_loopback_base_url(base_url)?;
+    let body = serde_json::to_vec(&serde_json::json!({ "password": password }))
+        .map_err(|e| LoginError::Malformed(format!("could not encode verify request body: {e}")))?;
+    let (status, resp_body) = http_post_json_with_body(&host, port, "/api/owner/verify", &body)?;
+    Ok(match status {
+        200 => {
+            let ok = serde_json::from_slice::<serde_json::Value>(&resp_body)
+                .ok()
+                .and_then(|v| v.get("ok").and_then(serde_json::Value::as_bool));
+            if ok == Some(true) { OwnerVerify::Verified } else { OwnerVerify::Unsupported }
+        }
+        401 => OwnerVerify::Invalid,
+        429 => OwnerVerify::RateLimited,
+        _ => OwnerVerify::Unsupported,
+    })
 }
 
 /// The owner's current email, or the placeholder when the gateway can't say.
@@ -204,6 +250,24 @@ fn http_post_json(host: &str, port: u16, path: &str, body: &[u8]) -> Result<Http
     parse_response(&raw)
 }
 
+/// Like `http_post_json`, but also returns the response body (after the
+/// header terminator); used only where the body decides the outcome.
+fn http_post_json_with_body(host: &str, port: u16, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), LoginError> {
+    let mut stream = connect(host, port)?;
+    let mut request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
+    stream.write_all(&request).map_err(|e| LoginError::Unreachable(e.to_string()))?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).map_err(|e| LoginError::Unreachable(e.to_string()))?;
+    let status = parse_response(&raw)?.status;
+    let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4).unwrap_or(raw.len());
+    Ok((status, raw[body_start..].to_vec()))
+}
+
 /// Only the status LINE is parsed — see `HttpResponse`'s own doc comment on
 /// why this module never needs the body at all, unlike every other client
 /// in this tree.
@@ -258,6 +322,37 @@ mod tests {
             }
         });
         (format!("http://{addr}"), rx)
+    }
+
+    #[test]
+    fn owner_verify_accepts_only_ok_true_bodies() {
+        let base = start_mock_server("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Verified);
+        // An older gateway's catch-all page must never unlock.
+        let base = start_mock_server("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html><html></html>");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Unsupported);
+        let base = start_mock_server("HTTP/1.1 200 OK\r\n\r\n{\"ok\":false}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Unsupported);
+    }
+
+    #[test]
+    fn owner_verify_maps_statuses() {
+        let base = start_mock_server("HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Invalid);
+        let base = start_mock_server("HTTP/1.1 429 Too Many Requests\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::RateLimited);
+        let base = start_mock_server("HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\n{}");
+        assert_eq!(owner_verify_at(&base, "pw").unwrap(), OwnerVerify::Unsupported);
+    }
+
+    #[test]
+    fn owner_verify_sends_only_the_password() {
+        let (base, rx) = start_capturing_mock_server("HTTP/1.1 200 OK\r\n\r\n{\"ok\":true}");
+        assert_eq!(owner_verify_at(&base, "pw-123456").unwrap(), OwnerVerify::Verified);
+        let request = rx.recv_timeout(Duration::from_secs(2)).expect("request captured");
+        assert!(request.starts_with("POST /api/owner/verify "), "{request}");
+        assert!(request.contains(r#"{"password":"pw-123456"}"#), "{request}");
+        assert!(!request.contains("email"), "{request}");
     }
 
     #[test]

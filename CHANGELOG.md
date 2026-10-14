@@ -9,7 +9,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ### Security
 - **SSH 預設關閉，基礎版也有防火牆**：dropbear 原本在每個映像開機就在 22 埠監聽；基礎版（`duduclaw-image-ab`，一般 `installer` ISO）沒有防火牆，所以區網上連得到。現在 dropbear 預設不啟用（`recipes-core/dropbear/dropbear_%.bbappend`），防火牆從桌面版移到兩版共用的 `duduclaw-image-ab.bb`。
-- **維護模式的 SSH 開關可以用了**：防火牆新增空的 `maintenance_tcp_ports` 集合，只放行這個集合裡的埠。維護模式開啟時由 `duduclaw-sysd` 啟動 `dropbear.socket` 並把 22 加入集合，視窗關閉時停掉 dropbear、結束連線並移除 22。這段平台程式從平台 v1.73.3 起提供；舊版平台操作的是映像裡不存在的 `ssh.service`，開關不會有作用。
+- **維護模式的 SSH 開關可以開關連接埠了**：防火牆新增空的 `maintenance_tcp_ports` 集合，只放行這個集合裡的埠。維護模式開啟時由 `duduclaw-sysd` 啟動 `dropbear.socket` 並把 22 加入集合，視窗關閉時停掉 dropbear、結束連線並移除 22。這段平台程式從平台 v1.73.3 起提供；舊版平台操作的是映像裡不存在的 `ssh.service`，開關不會有作用。
 - **關閉 SSH 時結束整個連線**：上游 `dropbear@.service` 是 `KillMode=process`，停掉連線單元只會結束 dropbear 本身，shell 的背景程式、`nohup`、tmux 都會留下。新增 drop-in 改成 `KillMode=control-group`（平台 sysd 關閉時也會清掉 `system-dropbear.slice` 底下所有行程）。
 - 目前映像上沒有能透過 SSH 登入的帳號（root 已鎖定，dropbear 預設 `-w` 禁止 root 登入），所以維護模式的 SSH 目前只能控制連接埠；用什麼帳號登入還沒決定。以上尚未在建好的映像上開機驗證。
 

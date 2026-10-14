@@ -54,14 +54,32 @@ do_install:append() {
     # Rootless-gateway caller check + rollback floor (2026-10-15). Off while
     # DUDUCLAW_MIN_ROLLBACK_VERSION is empty (conf/distro/include/
     # duduclaw-rollback-floor.inc explains why and when to set it). When it
-    # is set, refuse to build unless the vendored sysd actually has both
-    # flags: clap rejects an unknown argument, and a sysd that does not
-    # start takes reboot, update apply and maintenance mode with it.
+    # is set, refuse to build unless the sysd we just built actually has
+    # both flags: clap rejects an unknown argument, and a sysd that does
+    # not start takes reboot, update apply and maintenance mode with it.
+    # Two checks, both required, neither satisfiable by a comment:
+    #  1. the clap field itself, `<name>: Option<...>` as a declaration at
+    #     the start of a line in src/main.rs, directly under an
+    #     `#[arg(long` attribute (a `//` comment line cannot match);
+    #  2. the long option name in the compiled binary: clap's derive emits
+    #     `.long("require-main-pid-of")` as a string literal. (Doc comments
+    #     also become help text, which is why check 1 is needed too.)
+    # Running the target binary's `--help` would need qemu-user here.
+    # Verified against the platform branch's sysd: both flags present in
+    # the binary and in `--help`.
     floor="${DUDUCLAW_MIN_ROLLBACK_VERSION}"
     if [ -n "$floor" ]; then
-        for flag in require_main_pid_of min_rollback_version; do
-            grep -q "$flag" ${S}/src/main.rs || \
-                bbfatal "DUDUCLAW_MIN_ROLLBACK_VERSION is set but the vendored duduclaw-sysd has no --$(echo $flag | tr _ -); refresh the platform snapshot first"
+        sysd_bin=${D}${bindir}/duduclaw-sysd
+        [ -f "$sysd_bin" ] || bbfatal "duduclaw-sysd binary not installed at $sysd_bin"
+        for field in require_main_pid_of min_rollback_version; do
+            flag=$(echo "$field" | tr _ -)
+            awk -v f="$field" '
+                /^[[:space:]]*#\[arg\(long/ { attr = NR }
+                $0 ~ "^[[:space:]]*(pub[[:space:]]+)?" f "[[:space:]]*:[[:space:]]*Option<" { if (attr && NR - attr <= 2) found = 1 }
+                END { exit found ? 0 : 1 }' ${S}/src/main.rs || \
+                bbfatal "DUDUCLAW_MIN_ROLLBACK_VERSION is set but the vendored duduclaw-sysd declares no --$flag argument; refresh the platform snapshot first"
+            LC_ALL=C grep -a -q -e "$flag" "$sysd_bin" || \
+                bbfatal "DUDUCLAW_MIN_ROLLBACK_VERSION is set but the built duduclaw-sysd has no --$flag; refresh the platform snapshot first"
         done
         sed -i -e "s|^ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 1000\$|ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 1000 --require-main-pid-of duduclaw-gateway.service --min-rollback-version $floor|" \
             ${D}${systemd_system_unitdir}/duduclaw-sysd.service

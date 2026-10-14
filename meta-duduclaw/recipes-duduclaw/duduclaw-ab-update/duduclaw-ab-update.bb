@@ -30,6 +30,7 @@ SRC_URI = " \
     file://10-ab-home.conf \
     file://duduclaw-rollback-prune.service \
     file://duduclaw-rollback-prune.sh \
+    file://duduclaw-updates.conf \
 "
 
 S = "${UNPACKDIR}"
@@ -66,6 +67,22 @@ do_install() {
         chmod 0644 ${D}${nonarch_libdir}/duduclaw/min-rollback-version
     fi
 
+    # Rootless staging (2026-10-15): sysupdate installs only from the
+    # root-owned /data/system/updates that duduclaw-sysd fills after
+    # verifying signatures; gated on the same variable as the sysd flags,
+    # since the vendored v1.73.1 sysd does not stage there. See the
+    # "Rootless staging" note in each .transfer file.
+    if [ -n "${DUDUCLAW_MIN_ROLLBACK_VERSION}" ]; then
+        for t in ${D}${sysconfdir}/sysupdate.d/*.transfer; do
+            sed -i -e 's#^Path=/data/duduclaw/updates$#Path=/data/system/updates#' "$t"
+            if grep -q '^Path=/data/duduclaw' "$t"; then
+                bbfatal "$t still stages from the gateway home"
+            fi
+        done
+        install -d ${D}${nonarch_libdir}/tmpfiles.d
+        install -m 0644 ${UNPACKDIR}/duduclaw-updates.conf ${D}${nonarch_libdir}/tmpfiles.d/duduclaw-updates.conf
+    fi
+
     install -d ${D}/usr/local/sbin
     install -m 0755 ${UNPACKDIR}/duduclaw-health-check.sh ${D}/usr/local/sbin/duduclaw-health-check.sh
 
@@ -93,7 +110,7 @@ FILES:${PN} += " \
 "
 # The rollback floor file exists only when DUDUCLAW_MIN_ROLLBACK_VERSION is
 # set (same conditional-FILES pattern as the verity transfer below).
-FILES:${PN} += "${@ ' ${nonarch_libdir}/duduclaw/min-rollback-version' if d.getVar('DUDUCLAW_MIN_ROLLBACK_VERSION') else ''}"
+FILES:${PN} += "${@ ' ${nonarch_libdir}/duduclaw/min-rollback-version ${nonarch_libdir}/tmpfiles.d/duduclaw-updates.conf' if d.getVar('DUDUCLAW_MIN_ROLLBACK_VERSION') else ''}"
 
 # VER-V (2026-09-02): FILES var, not do_install's own install path,
 # because a file listed by do_install but omitted from every package's

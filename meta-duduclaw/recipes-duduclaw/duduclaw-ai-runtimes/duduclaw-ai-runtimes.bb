@@ -223,3 +223,6 @@ FILES:${PN} += " \
 # all `curl -fsSL <url> | bash`; an install hint the image cannot actually
 # execute would be no better than the command-not-found it replaces.
 RDEPENDS:${PN} += "nodejs python3-core python3-modules bash ca-certificates curl"
+# setpriv: duduclaw-runtime-exec drops a root caller to the gateway account
+# before running a vendor CLI against the uid-1000 home (2026-10-15).
+RDEPENDS:${PN} += "util-linux-setpriv"

@@ -54,6 +54,19 @@ if [ "${HOME:-}" = "" ] || [ "${HOME}" = "/root" ]; then
     fi
 fi
 
+# Rootless gateway (2026-10-15): /data/duduclaw belongs to uid 1000, the
+# uid every AI employee runs as. A vendor CLI started as root with that
+# HOME would load settings, hooks and plugins uid 1000 can write (Claude
+# Code's settings.json hooks run shell commands), i.e. root code execution
+# for anyone who controls the gateway's uid. So a root caller is re-executed
+# as the gateway account; credentials still land in the same home. Root
+# with its own HOME (not /data/duduclaw) is left alone.
+if [ "$(id -u)" = 0 ] && [ "${HOME:-}" = /data/duduclaw ] && [ -z "${DUDUCLAW_RUNTIME_EXEC_DROPPED:-}" ]; then
+    DUDUCLAW_RUNTIME_EXEC_DROPPED=1
+    export DUDUCLAW_RUNTIME_EXEC_DROPPED
+    exec setpriv --reuid=duduclaw --regid=duduclaw --init-groups -- "$0" "$@"
+fi
+
 NODE_PATH="$RT/node_modules${NODE_PATH:+:$NODE_PATH}"
 export NODE_PATH
 PATH="$RT/bin:$PATH"

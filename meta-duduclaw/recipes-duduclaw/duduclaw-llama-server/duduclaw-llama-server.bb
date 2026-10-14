@@ -21,6 +21,9 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 SRC_URI = "file://duduclaw-llama-server.service"
+# Wrapper that reads the gateway's settings file as uid 1000 (the unit no
+# longer uses EnvironmentFile=; see the unit header, rootless 2026-10-15).
+SRC_URI += "file://llama-server-run"
 
 S = "${UNPACKDIR}"
 
@@ -29,6 +32,8 @@ inherit systemd
 do_install() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${UNPACKDIR}/duduclaw-llama-server.service ${D}${systemd_system_unitdir}/duduclaw-llama-server.service
+    install -d ${D}${libexecdir}/duduclaw
+    install -m 0755 ${UNPACKDIR}/llama-server-run ${D}${libexecdir}/duduclaw/llama-server-run
 }
 
 # Enabled, but see the DESCRIPTION and the unit header: "enabled" here means
@@ -40,7 +45,7 @@ do_install() {
 SYSTEMD_SERVICE:${PN} = "duduclaw-llama-server.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-FILES:${PN} += "${systemd_system_unitdir}/duduclaw-llama-server.service"
+FILES:${PN} += "${systemd_system_unitdir}/duduclaw-llama-server.service ${libexecdir}/duduclaw/llama-server-run"
 
 # llama-cpp, not "llama.cpp": the recipe's PN. This is a hard RDEPENDS and
 # not merely an image-level co-install, because the unit's ExecStart names
@@ -50,6 +55,8 @@ FILES:${PN} += "${systemd_system_unitdir}/duduclaw-llama-server.service"
 # whole design rests on.
 #
 RDEPENDS:${PN} = "llama-cpp"
+# bash: the wrapper; duduclaw-cli: the `duduclaw` account it runs as.
+RDEPENDS:${PN} += "bash duduclaw-cli"
 
 # NOT `inherit allarch`, even though the only shipped file is a text unit:
 # an allarch package that RDEPENDS on a MACHINE_ARCH one (llama-cpp, which

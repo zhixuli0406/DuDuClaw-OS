@@ -9,15 +9,23 @@
 # agree on one home. profile.d reaches login shells only; the services keep
 # their own explicit Environment= lines and do not depend on this file.
 #
-# Since 2026-10-15 the gateway runs as uid 1000 (`duduclaw`). A `duduclaw`
-# command an operator runs from a root shell still writes into this home as
-# root; the gateway can rename or delete such a file but not rewrite it
-# until the next boot, when duduclaw-home-owner.service hands everything
-# under /data/duduclaw back to uid 1000. To act as the gateway instead:
-#   setpriv --reuid=duduclaw --regid=duduclaw --init-groups duduclaw <args>
-# (runuser is not available: util-linux builds it only with PAM, and this
-# distro has no PAM.)
+# Since 2026-10-15 the gateway runs as uid 1000 (`duduclaw`), and its home
+# is writable by every AI employee. A root shell must therefore never run
+# `duduclaw` as root against this home: the CLI would read config, skills
+# and plugin files that uid 1000 controls, with root's rights. The function
+# below makes a plain `duduclaw` typed in a root login shell run as the
+# gateway account through setpriv (runuser is not available: util-linux
+# builds it only with PAM, and this distro has no PAM). Typing the full
+# path, /usr/bin/duduclaw, still runs it as root, deliberately and visibly.
 export DUDUCLAW_HOME=/data/duduclaw
+duduclaw() {
+    if [ "$(id -u)" = 0 ]; then
+        setpriv --reuid=duduclaw --regid=duduclaw --init-groups -- \
+            env HOME=/data/duduclaw DUDUCLAW_HOME=/data/duduclaw /usr/bin/duduclaw "$@"
+    else
+        command duduclaw "$@"
+    fi
+}
 # Same value duduclaw-firstboot's 20-home.conf gives the gateway unit: the
 # Windows RemoteApp registry lives outside the 0700 gateway home so the
 # kiosk shell can read it (see that drop-in's own comment). Without this an

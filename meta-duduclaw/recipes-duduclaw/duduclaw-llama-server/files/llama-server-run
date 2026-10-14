@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Start llama-server from the gateway's settings file (rootless gateway,
+# 2026-10-15). Runs as `duduclaw` (duduclaw-llama-server.service User=).
+#
+# The settings file, /data/duduclaw/llama-server.env, is written by the
+# gateway (inference.local.serve) and is therefore writable by uid 1000,
+# i.e. by any AI employee. It used to be loaded with EnvironmentFile= by a
+# unit running as root, so a line like LD_PRELOAD=/data/duduclaw/x.so was a
+# root shell. Now nothing privileged reads it: PID 1 no longer parses it,
+# and this script, already running as uid 1000, reads only the four keys
+# below and ignores everything else. Even an arbitrary entry here only ever
+# runs with uid 1000's own rights.
+#
+# Format (what the gateway writes): KEY=VALUE lines, `#` comments.
+#   LLAMA_MODEL       path of the GGUF file (required, must be under
+#                     /data/duduclaw/models)
+#   LLAMA_CTX         context size, digits (default 8192)
+#   LLAMA_PORT        TCP port, digits (default 8080)
+#   LLAMA_EXTRA_ARGS  extra flags, split on whitespace; --host / --port in
+#                     it are refused so the server stays on 127.0.0.1
+set -euo pipefail
+
+ENV_FILE=${DUDUCLAW_LLAMA_ENV:-/data/duduclaw/llama-server.env}
+MODELS_DIR=/data/duduclaw/models
+
+die() { echo "llama-server-run: $*" >&2; exit 1; }
+
+LLAMA_MODEL=""
+LLAMA_CTX=8192
+LLAMA_PORT=8080
+LLAMA_EXTRA_ARGS=""
+
+if [[ -r $ENV_FILE ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        [[ -z $line || $line == \#* ]] && continue
+        key=${line%%=*}
+        [[ $key == "$line" ]] && continue
+        value=${line#*=}
+        # Strip one level of matching surrounding quotes.
+        if [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]]; then
+            value=${BASH_REMATCH[1]}
+        fi
+        case $key in
+            LLAMA_MODEL) LLAMA_MODEL=$value ;;
+            LLAMA_CTX) LLAMA_CTX=$value ;;
+            LLAMA_PORT) LLAMA_PORT=$value ;;
+            LLAMA_EXTRA_ARGS) LLAMA_EXTRA_ARGS=$value ;;
+            *) ;; # anything else is ignored on purpose
+        esac
+    done < "$ENV_FILE"
+fi
+
+[[ -n $LLAMA_MODEL ]] || die "LLAMA_MODEL is not set in $ENV_FILE"
+[[ $LLAMA_MODEL == "$MODELS_DIR"/* && $LLAMA_MODEL != *..* ]] || die "LLAMA_MODEL must be a file under $MODELS_DIR"
+[[ -f $LLAMA_MODEL ]] || die "model file $LLAMA_MODEL does not exist"
+[[ $LLAMA_CTX =~ ^[0-9]{1,7}$ ]] || die "LLAMA_CTX must be a number"
+[[ $LLAMA_PORT =~ ^[0-9]{1,5}$ ]] && (( LLAMA_PORT >= 1 && LLAMA_PORT <= 65535 )) || die "LLAMA_PORT must be a port number"
+
+read -r -a extra <<< "$LLAMA_EXTRA_ARGS"
+for a in "${extra[@]}"; do
+    case $a in
+        --host|--host=*|--port|--port=*) die "LLAMA_EXTRA_ARGS may not set --host or --port" ;;
+    esac
+done
+
+exec /usr/bin/llama-server -m "$LLAMA_MODEL" -c "$LLAMA_CTX" --port "$LLAMA_PORT" --host 127.0.0.1 "${extra[@]}"

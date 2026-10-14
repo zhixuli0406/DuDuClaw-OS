@@ -9,7 +9,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ### Security
 - **SSH 預設關閉，基礎版也有防火牆**：dropbear 原本在每個映像開機就在 22 埠監聽；基礎版（`duduclaw-image-ab`，一般 `installer` ISO）沒有防火牆，所以區網上連得到。現在 dropbear 預設不啟用（`recipes-core/dropbear/dropbear_%.bbappend`），防火牆從桌面版移到兩版共用的 `duduclaw-image-ab.bb`。
-- **維護模式的 SSH 開關可以用了**：防火牆新增空的 `maintenance_tcp_ports` 集合，只放行這個集合裡的埠。維護模式開啟時由 `duduclaw-sysd` 啟動 `dropbear.socket` 並把 22 加入集合，視窗關閉時停掉 dropbear、結束連線並移除 22。這段平台程式從平台 v1.73.3 起提供；舊版平台操作的是映像裡不存在的 `ssh.service`，開關不會有作用。以上尚未在建好的映像上開機驗證。
+- **維護模式的 SSH 開關可以用了**：防火牆新增空的 `maintenance_tcp_ports` 集合，只放行這個集合裡的埠。維護模式開啟時由 `duduclaw-sysd` 啟動 `dropbear.socket` 並把 22 加入集合，視窗關閉時停掉 dropbear、結束連線並移除 22。這段平台程式從平台 v1.73.3 起提供；舊版平台操作的是映像裡不存在的 `ssh.service`，開關不會有作用。
+- **關閉 SSH 時結束整個連線**：上游 `dropbear@.service` 是 `KillMode=process`，停掉連線單元只會結束 dropbear 本身，shell 的背景程式、`nohup`、tmux 都會留下。新增 drop-in 改成 `KillMode=control-group`（平台 sysd 關閉時也會清掉 `system-dropbear.slice` 底下所有行程）。
+- 目前映像上沒有能透過 SSH 登入的帳號（root 已鎖定，dropbear 預設 `-w` 禁止 root 登入），所以維護模式的 SSH 目前只能控制連接埠；用什麼帳號登入還沒決定。以上尚未在建好的映像上開機驗證。
 
 ### Changed
 - **文件與官網改成 v0.3.0 的事實**（`README.md`、`README.en.md`、`meta-duduclaw/README.md`、`SECURITY.md`、`docs/README.md`）：版本徽章、狀態列、信任鏈與測試範圍從 v0.2.0 改到 v0.3.0。測試範圍照 Release 與 `wiki/impl/gcp-builder-2026-10.md` 寫：qemux86-64 整碟映像在無頭 QEMU（TCG、無 KVM）開到登入畫面，同機型兩個安裝器 ISO 開到 live 環境的自動登入；安裝精靈沒有跑；genericx86-64 只建置、沒有開機；沒有真機。Secure Boot／dm-verity／TPM 在 v0.3.0 仍未啟用：建置用的是 `kas/release-linux-builder.yml`，沒有疊加 `sb-signing.yml`／`tpm-luks.yml`；2026-10-14 拆開兩個發布 wic 查證，兩槽 UKI、rescue UKI 與 systemd-boot 的 PE 簽章表都是空的、ESP 沒有 enroll 金鑰、GPT 沒有 verity 分割、UKI initrd 沒有 tpm2／cryptsetup。`meta-duduclaw/README.md` 原本寫「QEMU 機型三種產物都開機驗證過」，與 v0.2.0 的實際紀錄不符，一併改正。

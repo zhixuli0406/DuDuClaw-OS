@@ -10,3 +10,17 @@
 # 22 to the firewall's maintenance_tcp_ports set, and takes both back when
 # the window closes (platform crates/duduclaw-sysd, from platform v1.73.3).
 SYSTEMD_AUTO_ENABLE:${PN} = "disable"
+
+# Stopping a session unit ends the whole session (see the drop-in's header).
+# duduclaw-sysd also kills everything under system-dropbear.slice when a
+# maintenance window closes, so images without this drop-in are covered too.
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+SRC_URI += "file://duduclaw-session-killmode.conf"
+
+do_install:append() {
+	install -d ${D}${systemd_system_unitdir}/dropbear@.service.d
+	install -m 0644 ${UNPACKDIR}/duduclaw-session-killmode.conf \
+		${D}${systemd_system_unitdir}/dropbear@.service.d/duduclaw-session-killmode.conf
+}
+
+FILES:${PN} += "${systemd_system_unitdir}/dropbear@.service.d"

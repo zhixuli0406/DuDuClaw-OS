@@ -50,6 +50,24 @@ do_install:append() {
     # "install: cannot stat '.../duduclaw-sysd.service': No such file or
     # directory" with the WORKDIR-relative path.
     install -m 0644 ${UNPACKDIR}/duduclaw-sysd.service ${D}${systemd_system_unitdir}/duduclaw-sysd.service
+
+    # Rootless-gateway caller check + rollback floor (2026-10-15). Off while
+    # DUDUCLAW_MIN_ROLLBACK_VERSION is empty (conf/distro/include/
+    # duduclaw-rollback-floor.inc explains why and when to set it). When it
+    # is set, refuse to build unless the vendored sysd actually has both
+    # flags: clap rejects an unknown argument, and a sysd that does not
+    # start takes reboot, update apply and maintenance mode with it.
+    floor="${DUDUCLAW_MIN_ROLLBACK_VERSION}"
+    if [ -n "$floor" ]; then
+        for flag in require_main_pid_of min_rollback_version; do
+            grep -q "$flag" ${S}/src/main.rs || \
+                bbfatal "DUDUCLAW_MIN_ROLLBACK_VERSION is set but the vendored duduclaw-sysd has no --$(echo $flag | tr _ -); refresh the platform snapshot first"
+        done
+        sed -i -e "s|^ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 1000\$|ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 1000 --require-main-pid-of duduclaw-gateway.service --min-rollback-version $floor|" \
+            ${D}${systemd_system_unitdir}/duduclaw-sysd.service
+        grep -q -- "--min-rollback-version $floor" ${D}${systemd_system_unitdir}/duduclaw-sysd.service || \
+            bbfatal "could not add the rootless flags to duduclaw-sysd.service (ExecStart line changed?)"
+    fi
 }
 
 inherit systemd

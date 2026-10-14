@@ -36,6 +36,29 @@
 - **A/B rounds.** V13 needs two images: v0.3.0 (root gateway) installed
   first, then the new image through the normal update path.
 
+- **Already checked off-image (2026-10-15, Mac Docker, not Yocto).**
+  systemd 257 (Fedora 42 container as PID 1): a `User=` unit with the
+  podman unit's `CapabilityBoundingSet`/`RestrictSUIDSGID`/
+  `ProtectKernelModules`/`ProtectKernelTunables`/`ProtectSystem=strict`
+  runs with `NoNewPrivs: 0` and `CapBnd: 00000000000000c0`; with
+  `DelegateSubgroup=supervisor` the main process sits in
+  `system.slice/<unit>/supervisor` and `ExecStartPre=+` in
+  `system.slice/<unit>/.control`, so the unit cgroup exists when the
+  loopback guard resolves it. nft 1.1.6 loads `nftables.conf` and parses
+  the guard; it refuses the guard with `cgroupv2 path fails` while the
+  cgroup is missing (why the rule is not static), and the linuxkit kernel
+  (no `CONFIG_NFT_SOCKET`) rejects it at the kernel step, which makes the
+  unit fail as intended. systemd 259 `systemd-tmpfiles` applies the three
+  private tmpfiles files as expected (symlinks in the home not followed).
+  The factory-reset and relocation scripts pass their scenario tests under
+  Alpine's busybox (later rounds: factory reset 21 cases incl. marker
+  owner/mode, relocation 8, rollback prune 16). A rootless `podman run` in
+  a unit with and without `ProtectKernelTunables=yes` (raised in review as
+  likely to block crun's /proc mount) got past namespace and mount setup in
+  both cases and failed identically at exec with EINVAL, also in a unit
+  with no hardening at all, so that environment could not settle the
+  question: V8 must. All of this needs repeating on the real image.
+
 ## 1. Design checks V1–V25
 
 | # | Command(s) on the guest | Pass when |
@@ -74,7 +97,7 @@
 | Kernel config | `zcat /proc/config.gz \| grep -E 'CONFIG_(NFT_SOCKET\|CGROUP_BPF\|SOCK_CGROUP_DATA\|TUN\|NFT_NAT\|NFT_MASQ\|NFT_FIB_INET\|NFT_COMPAT\|SECURITY_YAMA)='`; the kernel-cache audit warnings in the bake log | all present as requested in `duduclaw-rootless.cfg`; no "did not make it into the final configuration" warnings for them |
 | Podman unit has no NNP | `grep NoNewPrivs /proc/$(systemctl show -p MainPID --value duduclaw-podman)/status` | `NoNewPrivs: 0` (if 1, a seccomp-based option implied it and newuidmap breaks; V5 would fail too) |
 | Loopback guard fails closed | `systemctl stop duduclaw-podman`; temporarily move the guard aside (`mount --bind /bin/false /usr/libexec/duduclaw/podman-egress-guard`); `systemctl start duduclaw-podman`; undo | the unit refuses to start |
-| Guard survives a firewall reload | `systemctl restart nftables`; `nft list chain inet filter duduclaw_podman_egress` | rules present again (PartOf restarted podman) |
+| Guard survives a firewall reload | with a container running: `systemctl reload nftables`, then `systemctl restart nftables`; `nft list chain inet filter duduclaw_podman_egress` after each; `systemctl cat nftables` | rules present again after both (re-added by the `50-duduclaw-podman-guard.conf` drop-in); the drop-in is listed |
 | sysctl | `sysctl fs.protected_hardlinks fs.protected_symlinks kernel.yama.ptrace_scope` | `1 1 1` |
 | Ordering | `systemd-analyze critical-chain duduclaw-gateway.service`; `systemctl show -p After duduclaw-podman.service` | home-owner before podman/gateway; no ordering-cycle messages in `journalctl -b \| grep -i cycle` |
 | Relocation | first boot of the new image over v0.3.0: `journalctl -b -u duduclaw-home-owner \| grep relocate`; `dmesg \| grep duduclaw-persist` | seed, machine-id and rescue audit moved to `/data/system`; machine-id unchanged across the update |
@@ -83,4 +106,7 @@
 | AI CLI sandbox | run a Claude Code task with its bubblewrap sandbox enabled (if the platform enables it) | record: expected to fail under `RestrictNamespaces=yes`; decide whether to keep the setting |
 | Root shell | in a login shell: `echo $CONTAINER_HOST`; `podman images` | points at the gateway socket; lists the gateway's images |
 | setuid strip side effects | in a Flatpak app (Chromium), open a file through the file chooser; `ls -l /run/duduclaw-kiosk/doc 2>&1`; `journalctl -b \| grep -iE 'fusermount\|launch-helper'` | portal file access works, or the failure is recorded and fusermount3 goes on the allowlist with a reason in duduclaw-image-compat.inc |
+| sysd flags (after the snapshot refresh) | `systemctl cat duduclaw-sysd \| grep ExecStart`; from an agent shell (uid 1000, not the gateway's MainPID) `curl -sS --http0.9 --unix-socket /run/duduclaw/sysd.sock http://localhost/` and a real verb request | ExecStart carries `--require-main-pid-of duduclaw-gateway.service --min-rollback-version <floor>`; the agent-shell request is refused, the dashboard's own reboot still works |
+| Rollback floor prune | with `DUDUCLAW_MIN_ROLLBACK_VERSION` set to this image's DISTRO_VERSION, update from v0.3.0 and let the new entry get blessed; `ls /boot/EFI/Linux`; `journalctl -b -u duduclaw-rollback-prune`; repeat the update once more (rootless → newer rootless) | after bless the v0.3.0 entry is gone, the running entry and the rescue UKI remain; the second update keeps the previous rootless entry (≥ floor) as a fallback; before bless (first boot of the new entry, health gate not passed) nothing was deleted |
+| Factory reset trust | `install -o duduclaw -m 0644 /dev/null /data/system/factory-reset.pending` is impossible as uid 1000 (`as_gw touch /data/system/factory-reset.pending` → EACCES); as root create a marker owned by uid 1000, reboot | uid 1000 cannot create it; the uid-1000-owned marker is refused, nothing wiped |
 | Flatpak | `as_gw flatpak install --system …` (any small app from the offline repo) | refused by polkit (no `duduclaw-flatpak` membership); the kiosk Launcher install still works |

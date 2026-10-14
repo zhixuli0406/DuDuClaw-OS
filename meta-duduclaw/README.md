@@ -99,9 +99,10 @@ verified on a built image; see
 |---|---|---|
 | `duduclaw-gateway.service` | `duduclaw` (uid/gid 1000, fixed) | `NoNewPrivileges`, `RestrictNamespaces`; supplementary groups `duduclaw-ipc`, `duduclaw-kiosk`; `TMPDIR=/data/duduclaw/tmp`; `DOCKER_HOST`/`CONTAINER_HOST` point at the Podman socket |
 | `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | `podman system service`, `Delegate=yes` + `DelegateSubgroup=supervisor`, `ProtectSystem=strict`, bounding set `CAP_SETUID CAP_SETGID`, no NNP (newuidmap needs it); store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup |
-| `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000` |
+| `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000`; `--require-main-pid-of duduclaw-gateway.service --min-rollback-version …` are appended at build time once `DUDUCLAW_MIN_ROLLBACK_VERSION` is set |
 | `duduclaw-home-owner.service` | root, oneshot | `systemd-tmpfiles` with `Z` over `/data/duduclaw` before anything runs as uid 1000 (replaces `chown -R`, which followed symlinks); moves root-only state (machine-id, entropy seed, rescue audit log) to `/data/system` once |
-| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1` |
+| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`; refuses a marker that is not root-owned or is group/world-writable |
+| `duduclaw-rollback-prune.service` | root, oneshot | after `boot-complete.target`, deletes ESP entries older than `DUDUCLAW_MIN_ROLLBACK_VERSION` (`conf/distro/include/duduclaw-rollback-floor.inc`; empty, so skipped, until the matching platform snapshot) — no way back to a pre-rootless image by design |
 | `duduclaw-data-migrate.service`, `duduclaw-secaudit-scan.service` | `duduclaw` | they only touch the gateway's own tree |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`) |
 

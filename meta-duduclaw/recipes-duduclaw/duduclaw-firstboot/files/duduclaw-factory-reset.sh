@@ -20,8 +20,15 @@
 #               the gateway home (moved out on 2026-10-15)
 #            5. re-enable duduclaw-firstboot-provision.service
 #            6. delete the marker, last
-#   failure  a malformed marker (missing line, extra content, not a regular
-#            file, too large) wipes nothing and the marker stays, so the
+#   trust    only root may write the marker: it, /data/system and /data
+#            must be owned by root and not group- or world-writable (the
+#            tmpfiles lines create /data/system 0755 root:root). A marker
+#            that fails this check is treated like a malformed one. This
+#            keeps uid 1000 (any AI employee) from requesting a wipe by
+#            itself; the request has to come through duduclaw-sysd.
+#   failure  a malformed or untrusted marker (missing line, extra content,
+#            not a regular file, too large, wrong owner or mode) wipes
+#            nothing and the marker stays, so the
 #            device keeps working on its current data and the failure is in
 #            the journal. A wipe that fails part-way also keeps the marker,
 #            so the next boot tries again. Either way the unit exits non-zero.
@@ -140,6 +147,20 @@ if [[ -L $MARKER || ! -f $MARKER ]]; then
     log "refusing: $MARKER is not a regular file; nothing wiped, marker kept"
     exit 1
 fi
+# root_only PATH -> 0 if PATH is owned by uid 0 and has no group/other
+# write bit. `stat -c '%u %a'` works with busybox and GNU stat alike.
+root_only() {
+    local owner mode
+    read -r owner mode < <(stat -c '%u %a' "$1" 2>/dev/null) || return 1
+    [[ $owner == 0 && $mode =~ ^[0-7]+$ ]] || return 1
+    (( (8#$mode & 8#022) == 0 ))
+}
+for p in /data /data/system "$MARKER"; do
+    if [[ -L $p ]] || ! root_only "$p"; then
+        log "refusing: $p must be owned by root and not group/world-writable; nothing wiped, marker kept"
+        exit 1
+    fi
+done
 size=$(stat -c %s "$MARKER" 2>/dev/null) || size=-1
 if (( size < 0 || size > MAX_MARKER_BYTES )); then
     log "refusing: $MARKER has unexpected size ($size bytes); nothing wiped, marker kept"

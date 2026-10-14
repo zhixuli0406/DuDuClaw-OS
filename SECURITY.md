@@ -97,9 +97,17 @@ published image yet, and not yet verified on a built image:
   `systemd-tmpfiles` (never follows symlinks), not `chown -R`; root-only
   state (machine-id, entropy seed, rescue audit log) lives in
   `/data/system`, outside the gateway's home.
+- Once a rootless image has passed the boot health gate, ESP entries older
+  than the configured rollback floor are deleted, so neither a requested
+  rollback nor systemd-boot's automatic fallback can bring back an image
+  whose gateway ran as root. By design there is no way back to a
+  pre-rootless image after that. The floor is configured together with the
+  platform snapshot that supports it.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
-  do (that code is in the platform repo).
+  do (that code is in the platform repo). Until the platform snapshot with
+  sysd's main-PID caller check is vendored, any uid-1000 process can call
+  sysd directly, not only the gateway.
 
 ## Disclosure Policy
 

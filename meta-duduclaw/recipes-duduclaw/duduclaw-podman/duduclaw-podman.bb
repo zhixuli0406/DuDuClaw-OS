@@ -18,6 +18,7 @@ SRC_URI = " \
     file://duduclaw-containers.conf \
     file://duduclaw-podman-profile.sh \
     file://duduclaw-containers-modules.conf \
+    file://50-duduclaw-podman-guard.conf \
 "
 
 S = "${UNPACKDIR}"
@@ -45,6 +46,11 @@ do_install() {
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${UNPACKDIR}/duduclaw-podman-profile.sh ${D}${sysconfdir}/profile.d/duduclaw-podman.sh
 
+    # Re-load the loopback guard whenever nftables.service (re)loads the
+    # ruleset (see the drop-in's header).
+    install -d ${D}${systemd_system_unitdir}/nftables.service.d
+    install -m 0644 ${UNPACKDIR}/50-duduclaw-podman-guard.conf ${D}${systemd_system_unitdir}/nftables.service.d/50-duduclaw-podman-guard.conf
+
     install -d ${D}${nonarch_libdir}/modules-load.d
     install -m 0644 ${UNPACKDIR}/duduclaw-containers-modules.conf ${D}${nonarch_libdir}/modules-load.d/duduclaw-containers.conf
 }
@@ -63,6 +69,7 @@ FILES:${PN} += " \
     ${datadir}/duduclaw/tmpfiles.d/duduclaw-containers.conf \
     ${sysconfdir}/profile.d/duduclaw-podman.sh \
     ${nonarch_libdir}/modules-load.d/duduclaw-containers.conf \
+    ${systemd_system_unitdir}/nftables.service.d/50-duduclaw-podman-guard.conf \
 "
 
 # podman (engine, `docker` shim via PODMAN_FEATURES), passt (pasta),

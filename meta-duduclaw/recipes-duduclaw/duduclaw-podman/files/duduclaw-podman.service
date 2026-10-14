@@ -50,13 +50,12 @@
 # containers rather than unguarded containers.
 #
 # nftables.conf begins with `flush ruleset`, so the rule has to come back
-# whenever the firewall is reloaded or restarted:
-# ReloadPropagatedFrom=nftables.service turns `systemctl reload nftables`
-# into a reload of this unit, whose ExecReload re-runs the guard (ordered
-# after the firewall reload by After=); PartOf=nftables.service turns a
-# firewall restart into a restart of this unit (KillMode=process keeps the
-# containers running). Running `nft -f /etc/nftables.conf` by hand bypasses
-# both; reload through systemctl, or restart this unit afterwards.
+# whenever the firewall is (re)loaded: this recipe's nftables.service
+# drop-in (50-duduclaw-podman-guard.conf) re-runs the guard in the same job,
+# right after the ruleset loads, so containers that outlive a podman
+# restart (KillMode=process) are not left unguarded. PartOf= additionally
+# restarts this unit with the firewall. Running `nft -f
+# /etc/nftables.conf` by hand bypasses both; use systemctl.
 #
 # ExecStartPre (+) also creates the store directory (private tmpfiles file,
 # never applied by the generic boot-time tmpfiles run).
@@ -65,7 +64,6 @@ Description=Rootless Podman API for the DuDuClaw gateway (uid 1000)
 Requires=duduclaw-podman.socket duduclaw-home-owner.service nftables.service
 After=duduclaw-podman.socket duduclaw-home-owner.service duduclaw-factory-reset.service nftables.service
 PartOf=nftables.service
-ReloadPropagatedFrom=nftables.service
 
 [Service]
 Type=exec
@@ -81,7 +79,6 @@ Environment=TMPDIR=/data/duduclaw/tmp
 ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/share/duduclaw/tmpfiles.d/duduclaw-containers.conf
 ExecStartPre=+/usr/libexec/duduclaw/podman-egress-guard
 ExecStart=/usr/bin/podman system service --time=0
-ExecReload=+/usr/libexec/duduclaw/podman-egress-guard
 Restart=on-failure
 RestartSec=5
 

@@ -8,7 +8,7 @@
 #
 # storage.conf: replaces upstream's `driver = "vfs"` (full copy of every
 # layer, unusable for real images) with overlay, and points the rootless
-# store at /data/system/containers/$USER (see the file's header).
+# store at /data/system/containers/duduclaw (see the file's header).
 # containers.conf.d/50-duduclaw.conf: cgroupfs cgroup manager, pasta
 # networking with --no-map-gw, nftables firewall driver, tmp/events paths
 # that work under the podman unit's ProtectSystem=strict.

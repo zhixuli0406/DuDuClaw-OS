@@ -13,7 +13,12 @@
 # ExecStartPre moves the few root-owned files the previous root gateway era
 # left inside /data/duduclaw (entropy seed, machine-id, rescue audit log)
 # out to /data/system before `Z` would hand them to uid 1000. See the
-# script's own header.
+# script's own header. Its failure is logged but does not fail this unit
+# ("-" prefix): the gateway Requires= this unit, and a stuck relocation must
+# not keep the dashboard down. Nothing is lost by continuing: the root
+# consumers read only the new /data/system paths now (the initramfs adopts
+# a legacy file only while it is still root-owned), so a legacy copy that
+# `Z` then hands to uid 1000 is no longer read by anything privileged.
 #
 # Ordering note: this unit is ordered before duduclaw-podman.service, not
 # before duduclaw-podman.socket. Sockets start before basic.target and this
@@ -34,7 +39,7 @@ Before=duduclaw-data-migrate.service duduclaw-podman.service duduclaw-gateway.se
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/libexec/duduclaw/relocate-root-state.sh
+ExecStartPre=-/usr/libexec/duduclaw/relocate-root-state.sh
 # `--create` applies d/Z lines; no `--remove`, nothing here is ever deleted.
 # (The design note's `--remove=no` is not a valid flag; --remove takes no
 # value and is simply omitted.)

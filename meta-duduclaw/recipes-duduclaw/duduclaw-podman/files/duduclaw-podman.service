@@ -13,10 +13,18 @@
 #   - the image ships no setuid/setgid binary except newuidmap/newgidmap
 #     (duduclaw-image-compat.inc strips the rest and fails the build if one
 #     survives);
-#   - CapabilityBoundingSet keeps only CAP_SETUID/CAP_SETGID, which is all
-#     newuidmap/newgidmap need; a setuid exec cannot gain anything else.
-#     Inside a new user namespace the kernel resets the bounding set, so
-#     containers still get their namespaced capabilities;
+#   - CapabilityBoundingSet keeps only CAP_SETUID/CAP_SETGID: a setuid-root
+#     exec in this unit (newuidmap/newgidmap, the only setuid files left)
+#     gains at most those two on the host, which is what they need to
+#     write another process's uid_map/gid_map. Capabilities inside a
+#     container are a different matter: a process that creates a user
+#     namespace gets a full capability set scoped to that namespace
+#     regardless of this bounding set, so containers keep NET_ADMIN etc.
+#     there, and none of it applies to host resources;
+#   - InaccessiblePaths hides the root control sockets this unit has no
+#     business with (systemd's private socket, the system D-Bus socket,
+#     duduclaw-sysd's /run/duduclaw, the kiosk runtime dir): a program run
+#     through the API cannot even try them;
 #   - RestrictSUIDSGID blocks creating new setuid/setgid files;
 #   - ProtectSystem=strict with three writable paths: the store, the shared
 #     runtime dir and the gateway's TMPDIR (bind-mount sources the gateway
@@ -88,6 +96,7 @@ CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 RestrictSUIDSGID=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
+InaccessiblePaths=-/run/systemd/private -/run/dbus/system_bus_socket -/run/duduclaw -/run/duduclaw-kiosk
 # Deliberately absent: NoNewPrivileges=yes (would break newuidmap).
 
 [Install]

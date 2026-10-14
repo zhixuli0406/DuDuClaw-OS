@@ -189,7 +189,9 @@ ROOTFS_POSTPROCESS_COMMAND += "duduclaw_write_subids; "
 # allowlist after measuring, with the reasoning written here.
 #
 # Regular files only: setgid DIRECTORIES (group inheritance, not an
-# escalation path) are left alone. The assertion fails the build if a
+# escalation path) are left alone. The same step fails the build if any
+# regular file carries file capabilities, or if deferred (first-boot)
+# package postinsts are left that could re-add either after this check. The assertion fails the build if a
 # setuid/setgid regular file other than the allowlist survives, or if an
 # allowlisted binary is missing or lost its setuid bit (without it
 # `podman system service` refuses to start: "should have setuid or have
@@ -217,6 +219,42 @@ duduclaw_strip_setuid () {
         [ -f ".$p" ] || bbfatal "duduclaw_strip_setuid: $p is missing (rootless Podman needs it setuid; is shadow installed?)"
         [ -u ".$p" ] || bbfatal "duduclaw_strip_setuid: $p is not setuid (rootless Podman refuses to start without it)"
     done
+
     cd - >/dev/null
 }
 ROOTFS_POSTPROCESS_COMMAND += "duduclaw_strip_setuid; "
+
+# File capabilities are the other way an exec gains privilege (the
+# security.capability xattr; a cap_setuid+ep binary is as good as setuid
+# root). newuidmap/newgidmap stay setuid, not fcaps, so NO regular file may
+# carry file capabilities. A python function, not shell: do_rootfs is a
+# fakeroot task, so this runs in bitbake's pseudo-wrapped worker and
+# os.getxattr sees the xattrs packages set (and no heredoc trips bitbake's
+# shell parser). Deferred package postinsts (pkg_postinst_ontarget, run by
+# run-postinsts on first boot) would run after both checks and could add
+# setuid bits or capabilities back, so none may be left either. A hit fails
+# the build; a genuinely needed exception goes in here with its reasoning,
+# never by loosening the check.
+python duduclaw_check_filecaps () {
+    import os
+    root = d.getVar('IMAGE_ROOTFS')
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            try:
+                os.getxattr(path, 'security.capability', follow_symlinks=False)
+            except OSError:
+                continue
+            found.append(path[len(root):])
+    if found:
+        bb.fatal('duduclaw_check_filecaps: regular files with file capabilities: %s' % ' '.join(sorted(found)))
+    etc = root + d.getVar('sysconfdir')
+    for pm in ('rpm-postinsts', 'ipk-postinsts', 'deb-postinsts'):
+        pdir = os.path.join(etc, pm)
+        if os.path.isdir(pdir) and os.listdir(pdir):
+            bb.fatal('duduclaw_check_filecaps: deferred postinsts left in %s: %s' % (pdir[len(root):], ' '.join(sorted(os.listdir(pdir)))))
+}
+ROOTFS_POSTPROCESS_COMMAND += "duduclaw_check_filecaps; "

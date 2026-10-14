@@ -108,8 +108,9 @@
 #     under this setting; its shell tool then fails instead of running
 #     unsandboxed.
 #   - SupplementaryGroups: `duduclaw-kiosk` lets the gateway traverse the
-#     kiosk runtime directory (/run/duduclaw-kiosk, 0750) for wpctl and the
-#     comp sockets; `duduclaw-ipc` is the group duduclaw-comp hands its
+#     kiosk runtime directory (/run/duduclaw-kiosk, 0750) to reach the comp
+#     sockets (volume control is a comp verb; the PipeWire sockets there
+#     stay 0600); `duduclaw-ipc` is the group duduclaw-comp hands its
 #     shell-control/codrive sockets and token to (0660/0640). Membership is
 #     also in /etc/group (useradd), listed here so the unit says what it
 #     relies on.
@@ -149,8 +150,8 @@ Environment=DUDUCLAW_APPLIANCE=1
 Environment=DUDUCLAW_BIND=0.0.0.0
 Environment=XDG_RUNTIME_DIR=/run/duduclaw-gateway
 Environment=TMPDIR=/data/duduclaw/tmp
-Environment=DOCKER_HOST=unix:///run/duduclaw-gateway/podman/podman.sock
-Environment=CONTAINER_HOST=unix:///run/duduclaw-gateway/podman/podman.sock
+Environment=DOCKER_HOST=unix:///run/duduclaw-podman/podman.sock
+Environment=CONTAINER_HOST=unix:///run/duduclaw-podman/podman.sock
 ExecStart=/usr/bin/duduclaw run --yes
 Restart=on-failure
 RestartSec=5

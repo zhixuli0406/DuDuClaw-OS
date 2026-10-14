@@ -360,6 +360,26 @@ pub enum ShellControlRequest {
     /// dies while locked leaves comp locked, which is the safe direction —
     /// see `session_lock`'s "Fail-closed choices".
     SetSessionLocked { locked: bool },
+
+    /// Rootless gateway (2026-10-15): `{"op":"get_audio"}` — the default
+    /// output's volume (percent, as wpctl reports it), its mute state, and
+    /// `wpctl status`'s text (devices and the current default), so the
+    /// gateway's existing parser keeps working. Volume control moved here
+    /// because the gateway runs as uid 1000 now, the uid every AI employee
+    /// shares: handing it the PipeWire socket would give that uid a full
+    /// PipeWire client (microphone capture, screen-cast streams). Through
+    /// this socket it gets exactly these three verbs, run by comp (the
+    /// kiosk user's own PipeWire client) with fixed wpctl arguments.
+    /// Handled on the socket thread (`audio.rs`), never the compositor's.
+    GetAudio,
+    /// `{"op":"set_audio","params":{"volume_pct":40}}` and/or
+    /// `{"op":"set_audio","params":{"muted":true}}` on the default output.
+    /// At least one field; `volume_pct` 0..=100. Audited.
+    SetAudio { volume_pct: Option<i64>, muted: Option<bool> },
+    /// `{"op":"set_audio_output","params":{"id":52}}` — make PipeWire
+    /// object `id` (an id from `get_audio`'s status text) the default
+    /// output (`wpctl set-default <id>`). Audited.
+    SetAudioOutput { id: i64 },
 }
 
 impl ShellControlRequest {
@@ -380,6 +400,9 @@ impl ShellControlRequest {
             ShellControlRequest::CodriveStatus => "codrive_status",
             ShellControlRequest::CodriveDrive { .. } => "codrive_drive",
             ShellControlRequest::SetSessionLocked { .. } => "set_session_locked",
+            ShellControlRequest::GetAudio => "get_audio",
+            ShellControlRequest::SetAudio { .. } => "set_audio",
+            ShellControlRequest::SetAudioOutput { .. } => "set_audio_output",
         }
     }
 
@@ -409,6 +432,12 @@ impl ShellControlRequest {
                 | ShellControlRequest::GetOutputs
                 | ShellControlRequest::SetOutputScale { .. }
                 | ShellControlRequest::SetTheme { .. }
+                // Rootless gateway (2026-10-15): the gateway's volume
+                // control, narrower than a PipeWire socket by design (see
+                // `GetAudio`'s doc).
+                | ShellControlRequest::GetAudio
+                | ShellControlRequest::SetAudio { .. }
+                | ShellControlRequest::SetAudioOutput { .. }
         )
     }
 }
@@ -552,34 +581,50 @@ pub struct ShellControlResponse {
     /// response shape changed a single byte.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codrive: Option<CodriveStatusInfo>,
+    /// Rootless gateway (2026-10-15): populated by `get_audio` / `set_audio`
+    /// / `set_audio_output` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
+/// The `audio` block. Every field optional so a verb only reports what it
+/// read back; `get_audio` fills all three.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AudioInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_pct: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
 impl ShellControlResponse {
     pub fn windows(windows: Vec<ShellWindowInfo>) -> Self {
-        Self { ok: true, windows: Some(windows), matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, error: None }
+        Self { ok: true, windows: Some(windows), matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, audio: None, error: None }
     }
 
     /// CUR-2: the `get_cursor_source` / `set_cursor_source` success shape.
     pub fn cursor(info: CursorSourceInfo) -> Self {
-        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: Some(info), outputs: None, intents: None, codrive: None, error: None }
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: Some(info), outputs: None, intents: None, codrive: None, audio: None, error: None }
     }
 
     /// A `focus_window` hit — exactly one of `matched_app_id`/
     /// `matched_title_prefix` is `Some`, mirroring `codrive::window_target::
     /// WindowMatch`'s own two variants (never both, never neither).
     pub fn focused_by_app_id(app_id: String) -> Self {
-        Self { ok: true, windows: None, matched_app_id: Some(app_id), matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, error: None }
+        Self { ok: true, windows: None, matched_app_id: Some(app_id), matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, audio: None, error: None }
     }
 
     pub fn focused_by_title_prefix(title: String) -> Self {
-        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: Some(title), cursor: None, outputs: None, intents: None, codrive: None, error: None }
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: Some(title), cursor: None, outputs: None, intents: None, codrive: None, audio: None, error: None }
     }
 
     /// WP-comp-shell-display: the `get_outputs` success shape.
     pub fn outputs(outputs: Vec<ShellOutputInfo>) -> Self {
-        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: Some(outputs), intents: None, codrive: None, error: None }
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: Some(outputs), intents: None, codrive: None, audio: None, error: None }
     }
 
     /// D2: the bare `set_theme` success shape — `{"ok":true}` and nothing
@@ -588,7 +633,7 @@ impl ShellControlResponse {
     /// response minimal is the exact wire contract the shell side was
     /// written against.
     pub fn ok() -> Self {
-        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, error: None }
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, audio: None, error: None }
     }
 
     /// A1: the `take_shell_intents` success shape. Always `Some(intents)`,
@@ -600,18 +645,23 @@ impl ShellControlResponse {
     /// always be present on this op's response, unlike every other optional
     /// field on this envelope.
     pub fn intents(intents: Vec<String>) -> Self {
-        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: Some(intents), codrive: None, error: None }
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: Some(intents), codrive: None, audio: None, error: None }
     }
 
     /// A2: the `codrive_status` / `codrive_drive` success shape. Both ops
     /// answer with the same block, so a caller never has to branch on which
     /// one it sent to read the state back.
     pub fn codrive(info: CodriveStatusInfo) -> Self {
-        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: Some(info), error: None }
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: Some(info), audio: None, error: None }
+    }
+
+    /// Rootless gateway (2026-10-15): the audio verbs' success shape.
+    pub fn audio(info: AudioInfo) -> Self {
+        Self { ok: true, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, audio: Some(info), error: None }
     }
 
     pub fn err(error: impl Into<String>) -> Self {
-        Self { ok: false, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, error: Some(error.into()) }
+        Self { ok: false, windows: None, matched_app_id: None, matched_title_prefix: None, cursor: None, outputs: None, intents: None, codrive: None, audio: None, error: Some(error.into()) }
     }
 }
 

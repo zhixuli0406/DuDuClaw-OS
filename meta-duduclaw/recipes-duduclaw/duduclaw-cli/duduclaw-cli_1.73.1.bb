@@ -149,7 +149,8 @@ SRC_URI += " \
 #                 one else; in particular duduclaw-flatpak-verify, which is
 #                 in duduclaw-kiosk to reach the Wayland socket, is not.
 #   duduclaw-kiosk  (secondary) lets the gateway traverse /run/duduclaw-kiosk
-#                 (0750) to reach those sockets and the PipeWire socket.
+#                 (0750) to reach those sockets (not PipeWire: its sockets
+#                 stay 0600, volume goes through comp verbs).
 #
 # USERADD_DEPENDS + RDEPENDS on duduclaw-shell: duduclaw-kiosk (user and
 # group) comes from that recipe. USERADD_DEPENDS makes it exist in this

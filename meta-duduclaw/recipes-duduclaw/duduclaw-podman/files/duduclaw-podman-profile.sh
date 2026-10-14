@@ -6,5 +6,5 @@
 # mode against the same socket the gateway uses, so images an operator
 # pulls are the ones the sandboxes run. Unset it for a one-off local
 # command: `env -u CONTAINER_HOST -u DOCKER_HOST podman ...`.
-export CONTAINER_HOST=unix:///run/duduclaw-gateway/podman/podman.sock
-export DOCKER_HOST=unix:///run/duduclaw-gateway/podman/podman.sock
+export CONTAINER_HOST=unix:///run/duduclaw-podman/podman.sock
+export DOCKER_HOST=unix:///run/duduclaw-podman/podman.sock

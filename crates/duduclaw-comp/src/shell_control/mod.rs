@@ -390,6 +390,7 @@ mod audit;
 // (with its own `impl DuduclawComp` block, the pattern `codrive/takeover.rs`
 // and `codrive/watch.rs` already established) rather than more of this one:
 // `mod.rs` is already past the project's 800-line per-file cap.
+mod audio;
 mod codrive_ops;
 mod listener;
 mod protocol;
@@ -607,6 +608,12 @@ impl DuduclawComp {
             ShellControlRequest::SetSessionLocked { locked } => {
                 self.shell_control_set_session_locked(locked)
             }
+            // Answered on the socket thread by `audio::handle` and never sent
+            // here; kept exhaustive so a future dispatch change fails loudly
+            // instead of silently.
+            ShellControlRequest::GetAudio
+            | ShellControlRequest::SetAudio { .. }
+            | ShellControlRequest::SetAudioOutput { .. } => ShellControlResponse::err("audio_op_on_wrong_thread"),
         }
     }
 

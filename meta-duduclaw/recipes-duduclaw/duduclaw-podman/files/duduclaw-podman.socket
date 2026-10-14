@@ -10,9 +10,12 @@
 # from /etc/profile.d/duduclaw-podman.sh so an operator's `podman pull`
 # lands in the gateway's store, not in a root store nobody uses).
 #
-# The parent directory /run/duduclaw-gateway/podman is created 0700
-# duduclaw:duduclaw by tmpfiles.d/duduclaw-podman.conf during sysinit,
-# before sockets start, so systemd does not create it root-owned.
+# The parent directory /run/duduclaw-podman is root-owned 0711
+# (tmpfiles.d/duduclaw-podman.conf, sysinit, before sockets start): uid 1000
+# can reach the socket by name but cannot remove it or put its own listener
+# at that path, so a root shell's `podman` (CONTAINER_HOST) always talks to
+# this systemd-held socket. Until 2026-10-15 review it lived under
+# /run/duduclaw-gateway, which uid 1000 owns.
 #
 # Normal default dependencies (listens before basic.target). Ordering behind
 # duduclaw-home-owner.service is on the service, not here: that unit runs
@@ -21,11 +24,11 @@
 Description=Rootless Podman API socket for the DuDuClaw gateway
 
 [Socket]
-ListenStream=/run/duduclaw-gateway/podman/podman.sock
+ListenStream=/run/duduclaw-podman/podman.sock
 SocketUser=duduclaw
 SocketGroup=duduclaw
 SocketMode=0600
-DirectoryMode=0700
+DirectoryMode=0711
 
 [Install]
 WantedBy=sockets.target

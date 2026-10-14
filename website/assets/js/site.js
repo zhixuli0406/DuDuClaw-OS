@@ -9,45 +9,45 @@
    attributes on the asset cards in download.html.
    --------------------------------------------------------------- */
 var RELEASE = {
-  version: 'v0.2.0',
-  date: '2026-09-09',
-  platform: '1.63.0',
+  version: 'v0.3.0',
+  date: '2026-10-14',
+  platform: '1.73.1',
   kernel: 'Linux 6.18',
   yocto: 'Yocto Project 6.0 "wrynose"',
   stage: 'pre-GA bring-up',
-  previous: 'v0.1.0',
+  previous: 'v0.2.0',
   repo: 'https://github.com/zhixuli0406/DuDuClaw-OS',
-  downloadBase: 'https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/',
+  downloadBase: 'https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/',
   minisignKey: 'RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n',
   assets: [
     {
-      file: 'duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst',
-      bytes: 1727284910, size: '1.61 GiB',
+      file: 'duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst',
+      bytes: 1737537599, size: '1.62 GiB',
       edition: 'desktop', form: 'wic', machine: 'generic'
     },
     {
-      file: 'duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst',
-      bytes: 1723552090, size: '1.61 GiB',
+      file: 'duduclaw-os-duduclaw-qemux86-64-v0.3.0.wic.zst',
+      bytes: 1733787083, size: '1.61 GiB',
       edition: 'desktop', form: 'wic', machine: 'qemu'
     },
     {
-      file: 'duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso',
-      bytes: 2005925888, size: '1.87 GiB',
+      file: 'duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso',
+      bytes: 2016411648, size: '1.88 GiB',
       edition: 'desktop', form: 'iso', machine: 'generic'
     },
     {
-      file: 'duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso',
-      bytes: 1995728896, size: '1.86 GiB',
+      file: 'duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.3.0.iso',
+      bytes: 2005962752, size: '1.87 GiB',
       edition: 'desktop', form: 'iso', machine: 'qemu'
     },
     {
-      file: 'duduclaw-os-installer-duduclaw-genericx86-64-v0.2.0.iso',
-      bytes: 601882624, size: '574 MiB',
+      file: 'duduclaw-os-installer-duduclaw-genericx86-64-v0.3.0.iso',
+      bytes: 500170752, size: '477 MiB',
       edition: 'base', form: 'iso', machine: 'generic'
     },
     {
-      file: 'duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso',
-      bytes: 590690304, size: '563 MiB',
+      file: 'duduclaw-os-installer-duduclaw-qemux86-64-v0.3.0.iso',
+      bytes: 489758720, size: '467 MiB',
       edition: 'base', form: 'iso', machine: 'qemu'
     }
   ]

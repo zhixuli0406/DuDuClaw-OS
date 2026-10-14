@@ -7,6 +7,14 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Changed
+- **文件與官網改成 v0.3.0 的事實**（`README.md`、`README.en.md`、`meta-duduclaw/README.md`、`SECURITY.md`、`docs/README.md`）：版本徽章、狀態列、信任鏈與測試範圍從 v0.2.0 改到 v0.3.0。測試範圍照 Release 與 `wiki/impl/gcp-builder-2026-10.md` 寫：qemux86-64 整碟映像在無頭 QEMU（TCG、無 KVM）開到登入畫面，同機型兩個安裝器 ISO 開到 live 環境的自動登入；安裝精靈沒有跑；genericx86-64 只建置、沒有開機；沒有真機。Secure Boot／dm-verity／TPM 在 v0.3.0 仍未啟用：建置用的是 `kas/release-linux-builder.yml`，沒有疊加 `sb-signing.yml`／`tpm-luks.yml`；2026-10-14 拆開兩個發布 wic 查證，兩槽 UKI、rescue UKI 與 systemd-boot 的 PE 簽章表都是空的、ESP 沒有 enroll 金鑰、GPT 沒有 verity 分割、UKI initrd 沒有 tpm2／cryptsetup。`meta-duduclaw/README.md` 原本寫「QEMU 機型三種產物都開機驗證過」，與 v0.2.0 的實際紀錄不符，一併改正。
+- **`docs/guides/ai-runtimes.md`**：拿掉「清單對應映像內嵌的平台版本（v0.2.0 為 1.63.0）」。v0.3.0 與 v0.2.0 用的是同一份 2026-09-05 產生的 AI runtime 包（recipe 的 `DUDUCLAW_AI_RUNTIMES_DATE` 兩版都是 `20260905`），表格補上各 CLI 的版本（取自包內 `MANIFEST.txt`）；十個 CLI 都在平台 1.73.1 的 runtime catalog 裡。Gemini CLI runtime 的移除版本照 1.73.1 快照改為 v1.74.0（原寫 v1.71.0）；「未內建」補上 Google Antigravity（`agy`），在 v0.3.0 映像上安裝它沒有測過。README 的 AI 工具鏈段落同步。
+- **官網換成 v0.3.0**（`website/`）：`site.js` 的 `RELEASE`（版本、日期 2026-10-14、平台 1.73.1、上一版 v0.2.0、`downloadBase` 與六個資產的檔名、位元組、大小），下載頁與首頁的版本列、標題、按鈕、狀態卡、測試範圍徽章、`dd` 範例檔名與回舊版卡片（改指 v0.2.0）。下載頁的 QR code 原本編的是 v0.2.0 的 ISO 網址，改用同一套規則重產（version 11、錯誤修正 H，規則寫在 `website/README.md`；用同規則重產 v0.2.0 網址與原 path 逐位元組相同）。首頁六張截圖仍是 v0.2.0 的畫面，說明文字標明 v0.3.0 還沒重拍。全部 18 個資產網址與兩個 Release 頁以 `curl -sIL` 確認都是 200，資產的 Content-Length 與 Release 記錄的大小相同。本機 `scripts/build-site.sh` 建置後，全站內部連結與錨點檢查 0 個斷掉；headless Chromium 在桌機 1440 與手機 390 寬度開下載頁，沒有 console 錯誤、沒有水平捲動，QR code 截圖以 jsQR 解出的正是 v0.3.0 的 ISO 網址。
+
+### Fixed
+- **`release-os.sh smoke` 不再被無害的 kernel 訊息判成失敗**：提早結束輪詢的樣式原本包含裸字串 `failed with error`，guest kernel 找不到 `regulatory.db` 時印的「Direct firmware load for regulatory.db failed with error -2」也會命中。2026-10-14 在 GCP builder 上測 v0.3.0 安裝器 ISO 時，同一個樣式把正常開機的 QEMU 提早砍掉（`wiki/impl/gcp-builder-2026-10.md`）；`release-os.sh` 自己的 wic smoke 這次是先到登入畫面才沒中。現在只認 runqemu 與 kas 自己的錯誤行：`runqemu - ERROR`、kas 的 `- ERROR … - Shell returned non-zero exit status`，以及 kas 的 `Command "…" failed with error <n>`／`Command "…" failed:` 兩種寫法；guest 端的 systemd unit 失敗照舊不列入（smoke 只檢查能不能到登入畫面）。樣式漏掉的真實失敗仍會走 timeout 分支、一樣判失敗，只是比較慢，不會放行壞映像。兩個樣式改成 `SMOKE_LOGIN_RE`／`SMOKE_DIED_RE` 變數，新增 `scripts/tests/smoke-patterns.sh` 與 `scripts/tests/fixtures/smoke/` 範例（runqemu／kas 錯誤行取自 `wiki/reports/bring-up-evidence/` 的實際 log；kernel 那幾行是上游 kernel 的訊息格式，v0.3.0 當時的原始 log 沒有留下）。macOS 的 BSD grep 與 GNU grep 3.11 都跑過，22 個案例全過；改回舊樣式時這支測試會失敗 4 個案例。
+
 ## [0.3.0] - 2026-10-13 — 內嵌平台 v1.73.1×鎖定畫面免信箱解鎖（shell 1.65.3）×GCP builder
 
 內嵌的 DuDuClaw 平台從 v1.63.0 跳到 v1.73.1；鎖定畫面改用平台 v1.73.1 新增的本機擁有者驗證端點，換過信箱的擁有者也能解鎖（`duduclaw-shell` 1.65.3）。這一版第一次在 GCP 的 Linux builder 上建置，簽章仍只在維護者的 Mac 上進行。產物矩陣與 v0.2.0 相同：兩個機型各一份整碟映像 `.wic.zst`、基礎版與桌面版安裝 ISO。

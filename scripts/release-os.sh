@@ -587,6 +587,33 @@ run_build() {
 # the builder container is unprivileged (no /dev/net/tun for tap
 # networking), exactly as meta-duduclaw/README.md's own "Usage" section
 # explains.
+#
+# Log matchers (grep -E, run inside the builder against the combined
+# kas + runqemu + serial-console log). scripts/tests/smoke-patterns.sh
+# checks both against fixtures; keep each assignment on one line, the test
+# reads them from this file.
+#
+# SMOKE_DIED_RE fails the loop early when the launcher itself has given up,
+# instead of sitting out the full timeout on a QEMU that never started
+# (2026-09-08). It must only match the launcher's own error lines:
+#   - runqemu's logger:  "runqemu - ERROR - <message>"
+#   - kas's logger:      "<date> <time> - ERROR    - Shell returned non-zero exit status"
+#                        "<date> <time> - ERROR    - Command \"...\" failed with error <n>"
+#                        "<date> <time> - ERROR    - Command \"...\" failed:"
+#     (both Command forms are in wiki/reports/bring-up-evidence/y2-3-*.log)
+# It used to accept a bare `failed with error`, which the guest kernel also
+# prints when cfg80211 cannot find its regulatory database (the firmware
+# loader's "Direct firmware load for regulatory.db failed with error -2",
+# harmless). On 2026-10-14 that kernel line ended a healthy v0.3.0 ISO boot
+# test early under the same matcher (wiki/impl/gcp-builder-2026-10.md); the
+# wic reached login before the kernel printed it, so release-os.sh itself was
+# never hit. Narrowing this cannot let a broken image pass: a death the
+# pattern misses still ends in the timeout branch below, which fails the
+# same way (only slower). Guest-side systemd unit
+# failures are deliberately not matched either — DESIGN §3.2 keeps this gate
+# at "reaches a login prompt".
+SMOKE_LOGIN_RE='(^| )login:'
+SMOKE_DIED_RE='runqemu - ERROR|- ERROR +- (Shell returned non-zero exit status|Command ".*" failed( with error -?[0-9]+|:))'
 run_smoke_test() {
     local machine="$1" image="$2" timeout_s="${3:-300}" kas_cfg
     if ! kas_cfg="$(kas_cfg_chain "$machine")"; then
@@ -652,13 +679,12 @@ run_smoke_test() {
 
     local seen_login=false died=false
     while (( elapsed < timeout_s )); do
-        if docker exec "$BUILDER_CONTAINER" grep -qE '(^| )login:' "$log_path" 2>/dev/null; then
+        if docker exec "$BUILDER_CONTAINER" grep -qE "$SMOKE_LOGIN_RE" "$log_path" 2>/dev/null; then
             seen_login=true
             break
         fi
-        # Fail fast when runqemu itself has given up — otherwise this loop sat
-        # out the full timeout on a QEMU that never started (2026-09-08).
-        if docker exec "$BUILDER_CONTAINER" grep -qE 'runqemu - ERROR|failed with error|Shell returned non-zero' "$log_path" 2>/dev/null; then
+        # Fail fast when runqemu / kas itself has given up (see SMOKE_DIED_RE).
+        if docker exec "$BUILDER_CONTAINER" grep -qE "$SMOKE_DIED_RE" "$log_path" 2>/dev/null; then
             died=true
             break
         fi

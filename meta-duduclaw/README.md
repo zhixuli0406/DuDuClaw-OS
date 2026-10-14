@@ -100,9 +100,11 @@ for the budget and the refresh procedure. Secure Boot signing and
 dm-verity are enabled by the `kas/sb-signing.yml` overlay, TPM2 + LUKS by
 `kas/tpm-luks.yml`; a build without those overlays (which is what
 `scripts/release-os.sh build` does today, and what every release through
-v0.2.0 has shipped) produces unsigned UKIs, no verity partition and no TPM
+v0.3.0 has shipped) produces unsigned UKIs, no verity partition and no TPM
 stack. Release builds do chain `kas/serial1.yml` by default (SPDX off,
-`-j1`) — that overlay is unrelated to the trust chain.
+`-j1`), or `kas/release-linux-builder.yml` on a large Linux builder (SPDX
+off, 8 parallel tasks; v0.3.0 was built with it) — neither overlay touches
+the trust chain.
 
 ## Usage
 
@@ -236,9 +238,13 @@ kernel; both are handled in this layer but bite anyone adding a machine:
 
 See the repo-root [`CHANGELOG.md`](../CHANGELOG.md). v0.1.0 (2026-09-04) was
 the first tagged bring-up release; v0.2.0 (2026-09-09) resynced the
-embedded platform snapshot to v1.63.0. Both releases publish, per machine,
-all three artifact forms (the whole-disk image, the base-edition installer
-ISO, and the desktop-edition installer ISO), each signed; the QEMU machine
-is boot-verified for all three, the real-hardware machine
-(`duduclaw-genericx86-64`) remains config-audited only — it has not yet
-been booted on real hardware.
+embedded platform snapshot to v1.63.0; v0.3.0 (2026-10-13, published
+2026-10-14) resynced it to v1.73.1 with `duduclaw-shell` 1.65.3 and was the
+first release built on the GCP Linux builder. Every release publishes, per
+machine, all three artifact forms (the whole-disk image, the base-edition
+installer ISO, and the desktop-edition installer ISO), each signed. For
+v0.3.0 the QEMU machine's whole-disk image reached the login prompt and its
+two installer ISOs reached the live environment's automatic login under
+headless QEMU; the installer wizard was not run. The real-hardware machine
+(`duduclaw-genericx86-64`) was built but not booted — it has not yet been
+booted on real hardware.

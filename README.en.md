@@ -135,6 +135,8 @@ Prerequisites:
 
 A remote builder (GCP, for example) never holds the signing key: run `package --no-sign` there, copy `artifacts/os/v<version>/<machine>/` back to the machine that has the key, then run `sign` and `publish`. A Linux builder with plenty of memory can set `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` instead of the default `serial1.yml` (SPDX still off, no `-j1`); pass the same value to `build`, `smoke` and `package`.
 
+The log patterns `smoke` uses to decide "reached a login prompt" and "QEMU / kas gave up" have their own test: `scripts/tests/smoke-patterns.sh` (no Docker or QEMU needed; it checks each line of the samples in `scripts/tests/fixtures/smoke/`).
+
 Every subcommand's `v<version>` is optional and defaults to the `VERSION` file, the OS's own release line, independent of the embedded platform version. Run `release-os.sh` with no argument for the full usage text. Builder container setup, cache and disk layout, and the role of each image recipe are in [`meta-duduclaw/README.md`](meta-duduclaw/README.md).
 
 <a id="layout"></a>

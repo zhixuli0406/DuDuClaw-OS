@@ -1,0 +1,19 @@
+# Lines that must NOT match SMOKE_DIED_RE: they show up in the serial
+# console of a boot that is still healthy. One case per line; '#' lines and
+# blank lines are skipped by scripts/tests/smoke-patterns.sh.
+#
+# The false positive behind the 2026-10-14 fix (wiki/impl/gcp-builder-2026-10.md):
+# the guest kernel cannot find wireless-regdb's regulatory.db. The v0.3.0 log
+# line itself was not kept; these are the upstream kernel's message formats
+# (firmware loader, then cfg80211), with and without the printk timestamp.
+[    2.412345] platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+[    2.412398] cfg80211: failed to load regulatory.db
+# Other firmware misses print the same way:
+[    3.001122] i915 0000:00:02.0: Direct firmware load for i915/tgl_dmc.bin failed with error -2
+# Guest-side unit failures are out of scope for this gate (DESIGN 3.2):
+[FAILED] Failed to start Some optional service.
+# Ordinary boot chatter and the kiosk session the v0.3.0 ISO reached:
+[  OK  ] Started DuDuClaw kiosk session (duduclaw-comp + duduclaw-shell).
+runqemu - INFO - Running qemu-system-x86_64 -device virtio-net-pci,netdev=net0 -nographic
+2026-10-14 00:30:01 - INFO     - kas 5.5 started

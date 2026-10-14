@@ -1,0 +1,13 @@
+# Lines that MUST match SMOKE_DIED_RE: the launcher (runqemu or kas) has
+# given up. One case per line; lines starting with '#' and blank lines are
+# skipped by scripts/tests/smoke-patterns.sh.
+#
+# runqemu's own logger (2026-09-08, rm_work had removed qemu-helper-native's sysroot):
+runqemu - ERROR - Native sysroot directory /yocto-vmfs/tmp-duduclaw-qemux86-64/work/x86_64-linux/qemu-helper-native/1.0/recipe-sysroot-native/usr/bin doesn't exist
+# kas, copied from wiki/reports/bring-up-evidence/y2-3-cli-and-image-build-2026-08-25.log:
+2026-08-25 09:12:06 - ERROR    - Shell returned non-zero exit status
+2026-08-25 09:12:06 - ERROR    - Command "/bin/sh -c 'bitbake duduclaw-cli'" failed with error 1
+# kas, the other Command form, from y2-3-genericx86-64-build-2026-08-25.log:
+2026-08-25 10:49:21 - ERROR    - Command "/workspace/build$ /workspace/bitbake/bin/bitbake -c build duduclaw-image-minimal" failed:
+# The same kas line as the runqemu wrapper would print it:
+2026-10-14 00:31:02 - ERROR    - Command "/bin/sh -c 'runqemu duduclaw-image-live nographic serial iso ovmf slirp'" failed with error 1

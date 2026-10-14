@@ -7,6 +7,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Fixed
+- **`release-os.sh smoke` 不再被無害的 kernel 訊息判成失敗**：提早結束輪詢的樣式原本包含裸字串 `failed with error`，guest kernel 找不到 `regulatory.db` 時印的「Direct firmware load for regulatory.db failed with error -2」也會命中。2026-10-14 在 GCP builder 上測 v0.3.0 安裝器 ISO 時，同一個樣式把正常開機的 QEMU 提早砍掉（`wiki/impl/gcp-builder-2026-10.md`）；`release-os.sh` 自己的 wic smoke 這次是先到登入畫面才沒中。現在只認 runqemu 與 kas 自己的錯誤行：`runqemu - ERROR`、kas 的 `- ERROR … - Shell returned non-zero exit status`，以及 kas 的 `Command "…" failed with error <n>`／`Command "…" failed:` 兩種寫法；guest 端的 systemd unit 失敗照舊不列入（smoke 只檢查能不能到登入畫面）。樣式漏掉的真實失敗仍會走 timeout 分支、一樣判失敗，只是比較慢，不會放行壞映像。兩個樣式改成 `SMOKE_LOGIN_RE`／`SMOKE_DIED_RE` 變數，新增 `scripts/tests/smoke-patterns.sh` 與 `scripts/tests/fixtures/smoke/` 範例（runqemu／kas 錯誤行取自 `wiki/reports/bring-up-evidence/` 的實際 log；kernel 那幾行是上游 kernel 的訊息格式，v0.3.0 當時的原始 log 沒有留下）。macOS 的 BSD grep 與 GNU grep 3.11 都跑過，22 個案例全過；改回舊樣式時這支測試會失敗 4 個案例。
+
 ## [0.3.0] - 2026-10-13 — 內嵌平台 v1.73.1×鎖定畫面免信箱解鎖（shell 1.65.3）×GCP builder
 
 內嵌的 DuDuClaw 平台從 v1.63.0 跳到 v1.73.1；鎖定畫面改用平台 v1.73.1 新增的本機擁有者驗證端點，換過信箱的擁有者也能解鎖（`duduclaw-shell` 1.65.3）。這一版第一次在 GCP 的 Linux builder 上建置，簽章仍只在維護者的 Mac 上進行。產物矩陣與 v0.2.0 相同：兩個機型各一份整碟映像 `.wic.zst`、基礎版與桌面版安裝 ISO。

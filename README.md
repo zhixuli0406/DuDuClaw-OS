@@ -135,6 +135,8 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 
 遠端 builder（例如 GCP）不放簽章金鑰：在 builder 上跑 `package --no-sign`，把 `artifacts/os/v<版本>/<機型>/` 複製回持有金鑰的機器，再跑 `sign` 與 `publish`。大記憶體的 Linux builder 可以用 `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` 取代預設的 `serial1.yml`（同樣關掉 SPDX，但不做 `-j1`），`build`／`smoke`／`package` 要帶同一個值。
 
+smoke 判斷「到了登入畫面」與「QEMU／kas 已經放棄」用的 log 樣式有自己的測試：`scripts/tests/smoke-patterns.sh`（不需要 Docker 或 QEMU，對 `scripts/tests/fixtures/smoke/` 的範例逐行比對）。
+
 每個子命令的 `v<version>` 都可省略，預設讀 `VERSION` 檔（OS 自己的版號，與內嵌平台版號無關）。不帶參數執行可看完整說明。builder 容器怎麼起、磁碟與快取怎麼掛、各 image 的用途，見 [`meta-duduclaw/README.md`](meta-duduclaw/README.md)。
 
 <a id="layout"></a>

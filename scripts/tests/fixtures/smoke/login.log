@@ -1,0 +1,5 @@
+# Lines that MUST match SMOKE_LOGIN_RE. '#' lines and blank lines are skipped.
+# release-os.sh smoke on the v0.3.0 qemux86-64 wic (getty prompt):
+duduclaw-qemux86-64 login:
+# v0.3.0 live ISO (serial autologin), from the 2026-10-14 ISO boot test:
+duduclaw-qemux86-64 login: root (automatic login)

@@ -73,16 +73,44 @@ log() { echo "[health-check] $*"; }
 # default (duduclaw_core::config::gateway_port_for_home). Parsed
 # section-aware — a bare `grep port` would happily pick up an `[odoo]` or
 # `[relay]` port and probe the wrong listener.
+#
+# Rootless gateway (2026-10-15): config.toml lives in the gateway home, which
+# uid 1000 (every AI employee) controls, and this check runs as root during
+# the trial boots whose failure makes sd-boot fall back to the previous
+# image. So root never opens that path: read_config_capped copies at most
+# 64 KiB of it as the gateway account (setpriv, no new privileges) into a
+# root-owned temp file, and gives up after CONFIG_READ_TIMEOUT seconds. A
+# symlink to /dev/zero, a FIFO that never delivers data or a huge file then
+# cost at most that timeout and fall back to the default port, instead of
+# hanging this check or making root read something it should not.
+CONFIG_READ_TIMEOUT=5
+read_config_capped() {
+    local out="$1" pid i
+    setpriv --reuid=duduclaw --regid=duduclaw --clear-groups --no-new-privs -- \
+        dd if="$CONFIG" bs=65536 count=1 2>/dev/null > "$out" &
+    pid=$!
+    for (( i = 0; i < CONFIG_READ_TIMEOUT * 10; i++ )); do
+        kill -0 "$pid" 2>/dev/null || { wait "$pid"; return $?; }
+        sleep 0.1
+    done
+    kill -9 "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    log "reading $CONFIG did not finish within ${CONFIG_READ_TIMEOUT}s; using the default port"
+    return 1
+}
+
 resolve_port() {
-    local from_config=""
-    if [[ -r "$CONFIG" ]]; then
+    local from_config="" cfg
+    cfg="$(mktemp)" || { echo 18789; return; }
+    if read_config_capped "$cfg"; then
         from_config="$(awk '
             /^[[:space:]]*\[/ { section=$0; gsub(/[[:space:]]/, "", section) }
             section=="[gateway]" && /^[[:space:]]*port[[:space:]]*=/ {
                 v=$0; sub(/.*=[[:space:]]*/, "", v); gsub(/[^0-9]/, "", v);
                 if (v != "") { print v; exit }
-            }' "$CONFIG" 2>/dev/null)"
+            }' "$cfg" 2>/dev/null)"
     fi
+    rm -f "$cfg"
     if [[ "$from_config" =~ ^[0-9]+$ ]] && (( from_config > 0 && from_config < 65536 )); then
         echo "$from_config"
     else

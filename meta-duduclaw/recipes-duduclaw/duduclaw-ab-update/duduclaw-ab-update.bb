@@ -138,6 +138,9 @@ FILES:${PN} += "${@ ' ${sysconfdir}/sysupdate.d/15-duduclaw-root-verity.transfer
 # file by name; without duduclaw-cli installed, systemd would still accept
 # the drop-in but it would have no unit to apply to.
 RDEPENDS:${PN} += "bash curl duduclaw-cli"
+# setpriv: the health check reads config.toml as the gateway account
+# (2026-10-15), never as root.
+RDEPENDS:${PN} += "util-linux-setpriv"
 # rollback-prune.sh asks bootctl (main systemd package) for the ESP path.
 RDEPENDS:${PN} += "systemd"
 

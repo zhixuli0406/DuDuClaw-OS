@@ -97,6 +97,14 @@ RestrictSUIDSGID=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 InaccessiblePaths=-/run/systemd/private -/run/dbus/system_bus_socket -/run/duduclaw -/run/duduclaw-kiosk
+# systemd's varlink endpoints and udev's control socket (root IPC this unit
+# never uses). InaccessiblePaths= takes no globs, so they are listed; "-"
+# makes a name this systemd version does not create harmless. Left
+# reachable on purpose: /run/systemd/journal (conmon logs containers to
+# journald) and /run/systemd/resolve (name resolution for image pulls).
+# Unverified on the image which of these exist; V8 records `ls /run/systemd`
+# and that podman still works.
+InaccessiblePaths=-/run/systemd/userdb -/run/systemd/io.systemd.ManagedOOM -/run/systemd/io.systemd.Hostname -/run/systemd/io.systemd.Machine -/run/systemd/io.systemd.Credentials -/run/systemd/io.systemd.Import -/run/systemd/io.systemd.sysext -/run/systemd/io.systemd.Login -/run/systemd/io.systemd.BootControl -/run/systemd/netif/io.systemd.Network -/run/udev/control
 # Deliberately absent: NoNewPrivileges=yes (would break newuidmap).
 
 [Install]

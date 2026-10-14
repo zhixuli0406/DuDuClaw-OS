@@ -69,7 +69,7 @@ systemd-tmpfiles --create "$HOME_TMPFILES"
 # home can only ever redirect a write to somewhere uid 1000 could already
 # write. --clear-groups: none of these writes needs a supplementary group.
 as_gateway() {
-    setpriv --reuid="$GATEWAY_USER" --regid="$GATEWAY_USER" --clear-groups -- "$@"
+    setpriv --reuid="$GATEWAY_USER" --regid="$GATEWAY_USER" --clear-groups --no-new-privs -- "$@"
 }
 
 as_gateway mkdir -p "$SYSTEM_DIR"

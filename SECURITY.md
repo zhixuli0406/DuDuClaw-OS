@@ -86,12 +86,20 @@ published image yet, and not yet verified on a built image:
 - The DuDuClaw gateway, every AI CLI it runs and the local model server
   execute as the unprivileged `duduclaw` account (uid 1000) with
   `NoNewPrivileges`. AI employees share that uid, so the design assumes an
-  attacker who controls uid 1000, and no root process reads configuration
-  from that account's home (root shells run `duduclaw` and the bundled AI
-  CLIs through `setpriv` as uid 1000). `duduclaw-sysd` is the only root
-  service the gateway can call. An image is only built together with the
-  platform release in which sysd also checks that the caller is the
-  gateway's main process; the build refuses otherwise.
+  attacker who controls uid 1000. Root services do not read configuration
+  from that account's home; where root needs a value from it (the boot
+  health check's gateway port in `config.toml`), it is read as uid 1000
+  with a size cap and a timeout. Root login shells run `duduclaw` and the
+  bundled AI CLIs through `setpriv` as uid 1000 with no new privileges, and
+  the kernel refuses TIOCSTI keystroke injection to unprivileged callers;
+  that shell function covers interactive login shells only (`sh -c
+  duduclaw` runs as root). `duduclaw-sysd` is the only root service the
+  gateway can call. The A/B images (`duduclaw-image-ab` and the desktop
+  edition built on it) are refused at build time unless the platform
+  release in which sysd also checks that the caller is the gateway's main
+  process is vendored. Non-A/B development images
+  (`duduclaw-image`, `-data`, `-flatpak`) are not refused and run sysd with
+  the uid check only.
 - A/B updates install only from the root-owned `/data/system/updates`,
   filled by `duduclaw-sysd` after it verified the release signature and the
   version. The gateway reaches the kiosk's audio through three fixed

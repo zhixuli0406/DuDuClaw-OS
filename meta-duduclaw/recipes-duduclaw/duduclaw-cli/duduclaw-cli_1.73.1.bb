@@ -124,6 +124,7 @@ SRC_URI += " \
     file://relocate-root-state.sh \
     file://50-duduclaw-protected-links.conf \
     file://50-duduclaw-ptrace.conf \
+    file://50-duduclaw-tiocsti.conf \
 "
 
 # --- Service account (rootless gateway, 2026-10-15) ------------------------
@@ -168,6 +169,9 @@ RDEPENDS:${PN} += "duduclaw-shell"
 # setpriv: the supported way for root (an operator shell, firstboot) to run
 # something as the gateway account; runuser is not built without PAM.
 RDEPENDS:${PN} += "util-linux-setpriv"
+# setsid -w (util-linux; busybox setsid has no -w): the profile.d function
+# runs a non-interactive `duduclaw` without the root shell's terminal.
+RDEPENDS:${PN} += "util-linux-setsid"
 
 do_install:append() {
     install -d ${D}${systemd_system_unitdir}
@@ -195,6 +199,7 @@ do_install:append() {
     install -d ${D}${nonarch_libdir}/sysctl.d
     install -m 0644 ${UNPACKDIR}/50-duduclaw-protected-links.conf ${D}${nonarch_libdir}/sysctl.d/50-duduclaw-protected-links.conf
     install -m 0644 ${UNPACKDIR}/50-duduclaw-ptrace.conf ${D}${nonarch_libdir}/sysctl.d/50-duduclaw-ptrace.conf
+    install -m 0644 ${UNPACKDIR}/50-duduclaw-tiocsti.conf ${D}${nonarch_libdir}/sysctl.d/50-duduclaw-tiocsti.conf
 }
 
 inherit systemd
@@ -209,4 +214,5 @@ FILES:${PN} += " \
     ${libexecdir}/duduclaw/relocate-root-state.sh \
     ${nonarch_libdir}/sysctl.d/50-duduclaw-protected-links.conf \
     ${nonarch_libdir}/sysctl.d/50-duduclaw-ptrace.conf \
+    ${nonarch_libdir}/sysctl.d/50-duduclaw-tiocsti.conf \
 "

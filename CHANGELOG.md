@@ -31,6 +31,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **TPM 狀態檔搬出 home**：`duduclaw-data-status.service` 改寫 `/data/system/tpm-status.json`（0644、先寫暫存檔再改名）。平台目前沒有任何程式讀這個檔。
 - **工廠重置也清 Windows 虛擬機登記與遷移留下的舊檔**：清空 `/data/system/windows-vm`、移除 `/data/system/legacy`（22 個情境測過）。
 - **已知缺口（設計取捨）**：第一個 rootless 映像還沒 bless 之前，systemd-boot 的自動回退仍以舊的 root gateway 項目為備援。新映像上的 AI 員工以 uid 1000 執行，可以故意讓試開機失敗（讓 gateway 不回應 `/healthz`），三次後裝置就回到 gateway 以 root 執行的映像。要關掉這條路，就得在新項目證明開得起來之前刪掉舊項目，等於放棄壞掉更新的回滾；窗口只有幾次開機，而且需要新映像上已經有 agent 程式在跑。第一次 bless 之後 rollback-prune 會刪掉舊項目。
+- **再審後的收尾**：root shell 與 AI CLI 降到 uid 1000 時加上 `--no-new-privs`；stdin 不是終端機時另以 `setsid -w` 開新 session、不帶 root shell 的終端機；互動式 CLI 需要終端機而保留，改靠 kernel 拒絕非特權的 TIOCSTI（`duduclaw-rootless.cfg` 設 `CONFIG_LEGACY_TIOCSTI` 為關、`50-duduclaw-tiocsti.conf` 設 `dev.tty.legacy_tiocsti = 0`），hook 或 MCP server 不能把按鍵塞回 root shell。`profile.d` 的函式只在登入 shell 生效，`sh -c duduclaw` 仍以 root 執行，文件寫明。A/B 健康閘門讀 `config.toml` 的 port 改以 uid 1000、最多 64 KiB、5 秒逾時讀取（uid 1000 原本可以把它指向 `/dev/zero` 或 FIFO 讓健康檢查卡住，觸發試開機回退）。Podman unit 的 `InaccessiblePaths` 再加 systemd 的 varlink socket 與 udev 控制 socket。`SECURITY.md` 改寫：只有 A/B 映像會在沒有下限時拒絕建置，非 A/B 的開發映像 sysd 只檢查 uid。
 - 以上 gateway 去 root 與容器堆疊的項目都還沒在建好的映像上建置或開機。做過的只有靜態檢查（`bash -n`／`sh -n`）與容器裡的行為測試：tmpfiles 設定（systemd 259 的 `systemd-tmpfiles`）、工廠重置（21 個情境）、`relocate-root-state.sh`（8 個）與回滾清理（16 個），後三者在 Alpine 的 busybox 上跑；Podman unit 的硬化組合在 systemd 257 容器裡確認不會隱含 `NoNewPrivileges`、`ExecStartPre=+` 執行時 unit 的 cgroup 已存在。審查後加的 comp 音量 verb 在 Linux 容器裡跑過 `cargo test`。
 
 ### Changed

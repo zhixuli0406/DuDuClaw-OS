@@ -1,7 +1,7 @@
-SUMMARY = "polkit rule: duduclaw agent group gets passwordless Flatpak SystemHelper access"
-DESCRIPTION = "Installs a single polkit .rules file granting the 'duduclaw' \
-group (the gateway/agent service account's existing primary group) \
-unauthenticated access to org.freedesktop.Flatpak.* SystemHelper actions \
+SUMMARY = "polkit rule: the duduclaw-flatpak group gets passwordless Flatpak SystemHelper access"
+DESCRIPTION = "Installs a single polkit .rules file granting the \
+'duduclaw-flatpak' group (created here, deliberately without the gateway \
+account in it since 2026-10-15) unauthenticated access to org.freedesktop.Flatpak.* SystemHelper actions \
 (install/update/uninstall/modify-repo). This is the OS-side permission \
 foundation for 'agent installs/updates Flatpak apps on the user's behalf' \
 (Y3-2 ticket, MAP-agent-native-os-2026-08.md decision ③) -- it does NOT \
@@ -35,6 +35,14 @@ DEPENDS += "polkit"
 RDEPENDS:${PN} += "polkit"
 inherit features_check
 REQUIRED_DISTRO_FEATURES = "polkit"
+
+# The group the rule keys on (2026-10-15, rootless gateway). Created here
+# so the rule and its group ship together. No account is added: see the
+# GROUP CHANGE note in the .rules file for why the gateway is not a member
+# and when it should become one.
+inherit useradd
+USERADD_PACKAGES = "${PN}"
+GROUPADD_PARAM:${PN} = "--system duduclaw-flatpak"
 
 SRC_URI = "file://60-duduclaw-flatpak-agent.rules"
 

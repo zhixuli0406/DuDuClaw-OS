@@ -16,11 +16,28 @@
 # no `User=` yet, so it runs as root (uid 0) same as this unit — `0` is
 # the CURRENT real uid the gateway connects as, not a placeholder.
 #
-# Once the Yocto layer provisions its own non-root `duduclaw` service user
-# (mirroring appliance/postinst.d/20-users-and-units.sh's fixed uid 1000)
-# AND duduclaw-gateway.service gains a matching `User=`, change this back
-# to `--allowed-uid 1000` in the SAME commit as that user's creation --
-# tracked as an explicit TODO, not silently deferred. Running two
+# DONE 2026-10-15 (rootless gateway): duduclaw-cli now creates the fixed
+# uid 1000 `duduclaw` account and duduclaw-gateway.service runs as it, so
+# this unit says `--allowed-uid 1000` (same commit as the user, as planned
+# below). sysd chowns the socket to that uid and keeps its own SO_PEERCRED
+# check; root (the A/B health check's liveness probe) can still connect
+# and gets the structured "unauthorized" reply, which that probe counts as
+# alive.
+#
+# NOT YET: `--require-main-pid-of duduclaw-gateway.service`. Every AI
+# employee runs as uid 1000 too, so a uid check alone admits them. The
+# platform is adding that flag to duduclaw-sysd (accept a request only from
+# the gateway unit's MainPID; it relies on kernel.yama.ptrace_scope=1,
+# which duduclaw-cli's 50-duduclaw-ptrace.conf pins). The sysd snapshot
+# vendored here (v1.73.1, files/duduclaw-sysd-src) does not know the flag,
+# and clap rejects an unknown argument, so adding it now would stop sysd
+# from starting at all: no reboot, no update apply, no maintenance mode.
+# TODO(platform-sync): when scripts/sync-platform.sh brings in a platform
+# snapshot whose `duduclaw-sysd --help` lists --require-main-pid-of, append
+# it to ExecStart below in the same commit as that snapshot refresh.
+#
+# History (Y9-2): the paragraph that follows was written while the gateway
+# still ran as root. Running two
 # privileged daemons as root and gating them by "root talking to root" is
 # not the intended end state (see original reasoning below); `0` is a
 # bring-up-stage value that matches today's actual process identities, not
@@ -41,7 +58,7 @@ Type=simple
 User=root
 RuntimeDirectory=duduclaw
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 0
+ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 1000
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=300

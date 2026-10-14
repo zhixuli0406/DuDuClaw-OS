@@ -126,11 +126,11 @@ probe_gateway() {
 # is what makes that useful instead of merely tolerable: without it curl
 # aborts with "Received HTTP/0.9 when not allowed" (exit 1) and throws the
 # reply away; with it, the daemon's own structured refusal comes back as the
-# body. On this Yocto line duduclaw-sysd.service has no --allowed-uid
-# configured at all yet (see that unit's own header comment), so the
-# expected reply here is duduclaw-sysd's fail-closed "unauthorized" JSON for
-# every peer including root — a positive proof the daemon is alive, parsing
-# and answering, which is exactly what the gate needs to know. Cheaper and
+# body. duduclaw-sysd.service admits only uid 1000 (the gateway account,
+# --allowed-uid 1000 since 2026-10-15) and this check runs as root, so the
+# expected reply here is duduclaw-sysd's "unauthorized" JSON — a positive
+# proof the daemon is alive, parsing and answering, which is exactly what
+# the gate needs to know. Cheaper and
 # more honest than inferring liveness from an error code.
 #
 # Two tiers, deliberately: a missing socket or a refused connect is the only

@@ -30,6 +30,9 @@ if [[ -e "$NEW" ]]; then
     exit 0
 fi
 echo "[migration 1788717600] moving ${OLD} -> ${NEW}"
-install -d -m 0755 -o root -g root "$NEW_DIR"
+# Since 2026-10-15 this runs as the gateway account and $NEW_DIR belongs
+# to it (duduclaw-home.conf creates it 0755 duduclaw:duduclaw before this
+# runner starts), so no -o/-g here: a non-root install cannot chown to root.
+install -d -m 0755 "$NEW_DIR"
 mv "$OLD" "$NEW"
 chmod 0644 "$NEW"

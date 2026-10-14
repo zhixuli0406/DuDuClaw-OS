@@ -69,8 +69,17 @@ inherit systemd useradd
 # it joins a group that already exists -- zero rework, and the group name
 # was chosen to match that account from day one specifically for this
 # reason.
+#
+# 2026-10-15 (rootless gateway): the paragraph above is history. The real
+# `duduclaw` account now exists (duduclaw-cli, uid/gid 1000), and the polkit
+# rule no longer keys on its group: it keys on `duduclaw-flatpak`, created
+# by duduclaw-polkit-flatpak with no service account in it. This verify
+# identity therefore moves to `duduclaw-flatpak` as its primary group. Two
+# effects: the diagnostic keeps exercising the rule for real, and this
+# account no longer shares a group with the gateway, whose files are
+# group-readable under the default umask. This recipe no longer creates
+# any group itself.
 USERADD_PACKAGES = "${PN}"
-GROUPADD_PARAM:${PN} = "--system duduclaw"
 # Y5-2 additions to the secondary group list -- `duduclaw-kiosk` and
 # `input`, both formalizing manual fixes Y4-2 only ever did by hand inside a
 # live QEMU session:
@@ -89,7 +98,7 @@ GROUPADD_PARAM:${PN} = "--system duduclaw"
 #                   rule, and the rule does nothing without this membership;
 #                   see USERADD_DEPENDS below for why both cross-recipe
 #                   groups are safe to reference here at useradd time.
-USERADD_PARAM:${PN} = "--system --no-create-home --gid duduclaw --groups duduclaw-kiosk,input --shell /sbin/nologin duduclaw-flatpak-verify"
+USERADD_PARAM:${PN} = "--system --no-create-home --gid duduclaw-flatpak --groups duduclaw-kiosk,input --shell /sbin/nologin duduclaw-flatpak-verify"
 
 # useradd.bbclass's own documented mechanism (see duduclaw-shell.bb's
 # identical USERADD_DEPENDS comment for the full "why RDEPENDS alone is not
@@ -102,7 +111,10 @@ USERADD_PARAM:${PN} = "--system --no-create-home --gid duduclaw --groups duducla
 # class of group oe-core's systemd_259.5.bb package provides, same as
 # duduclaw-shell.bb's own `render` dependency already established for this
 # exact Yocto release).
-USERADD_DEPENDS = "systemd duduclaw-shell"
+# duduclaw-polkit-flatpak (2026-10-15): creates `duduclaw-flatpak`, this
+# account's primary group (already in RDEPENDS above, which orders its
+# preinst first on the target).
+USERADD_DEPENDS = "systemd duduclaw-shell duduclaw-polkit-flatpak"
 
 SRC_URI = " \
     file://duduclaw-flatpak-kiosk-verify.sh \

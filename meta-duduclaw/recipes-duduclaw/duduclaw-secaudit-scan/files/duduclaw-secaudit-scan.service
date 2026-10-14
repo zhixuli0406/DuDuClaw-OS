@@ -13,9 +13,22 @@
 [Unit]
 Description=DuDuClaw OS scheduled quick secaudit self-scan
 ConditionPathExists=/data/duduclaw
+After=duduclaw-home-owner.service
 
 [Service]
 Type=oneshot
+# Runs as the gateway account since 2026-10-15 (rootless gateway). It reads
+# and writes only the gateway's own tree (/data/duduclaw, reports under
+# secaudit/reports, which the dashboard lists), so root bought nothing and
+# a root writer in a uid-1000 tree would follow whatever symlink uid 1000
+# left there. DUDUCLAW_HOME is now set explicitly: before this the unit had
+# none, so `--save` resolved to root's own ~/.duduclaw instead of the
+# gateway's home.
+User=duduclaw
+Group=duduclaw
+NoNewPrivileges=yes
+Environment=DUDUCLAW_HOME=/data/duduclaw
+Environment=HOME=/data/duduclaw
 ExecStart=/usr/sbin/duduclaw-secaudit-scan.sh
 # secaudit's own scanner orchestration (semgrep/gitleaks/cargo-audit) and
 # repo-walking can be I/O and CPU heavy on modest appliance hardware —

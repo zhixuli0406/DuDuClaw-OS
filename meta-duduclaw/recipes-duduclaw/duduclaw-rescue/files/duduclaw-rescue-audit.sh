@@ -6,7 +6,11 @@
 # rescue shell starts.
 #
 # WS-3/B3 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱二 B3):
-# primary write target is now /data/duduclaw/audit/rescue/ — /data exists
+# primary write target is now /data/system/audit/rescue/ (it was
+# /data/duduclaw/audit/rescue/ until 2026-10-15; that tree now belongs to the
+# uid-1000 gateway account, so a root writer must not use it, and the audit
+# trail must not be editable by it. duduclaw-cli's relocate-root-state.sh
+# moves an existing log over once) — /data exists
 # on this line as of Y8-1/Y9-1 (the original 2026-08-26 comment here, now
 # out of date, said it did not; superseded, not silently left stale). This
 # closes two real gaps at once, checked not assumed:
@@ -37,7 +41,7 @@
 # masquerade as the primary path having worked.
 set -e
 
-PRIMARY_DIR="/data/duduclaw/audit/rescue"
+PRIMARY_DIR="/data/system/audit/rescue"
 FALLBACK_DIR="/var/log/duduclaw"
 LOG_FILE="rescue-boot-audit.jsonl"
 
@@ -53,7 +57,7 @@ else
 	# there is nowhere left to write and the marker is genuinely lost —
 	# logged to the journal either way so the gap itself is on record even
 	# when the file cannot be.
-	logger -t duduclaw-rescue "WARNING: /data/duduclaw/audit/rescue unavailable, falling back to ${FALLBACK_DIR} (degraded — see duduclaw-rescue-audit.sh)" 2>/dev/null || true
+	logger -t duduclaw-rescue "WARNING: /data/system/audit/rescue unavailable, falling back to ${FALLBACK_DIR} (degraded — see duduclaw-rescue-audit.sh)" 2>/dev/null || true
 	mkdir -p "${FALLBACK_DIR}" 2>/dev/null && chmod 0700 "${FALLBACK_DIR}" 2>/dev/null || true
 	LOG_DIR="${FALLBACK_DIR}"
 fi

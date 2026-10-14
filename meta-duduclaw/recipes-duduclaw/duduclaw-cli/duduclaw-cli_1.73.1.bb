@@ -117,6 +117,56 @@ CXXFLAGS:append = " -ffile-prefix-map=${WORKDIR}=${TARGET_DBGSRC_DIR}"
 
 SRC_URI += "file://duduclaw-gateway.service"
 SRC_URI += "file://duduclaw-home-profile.sh"
+SRC_URI += " \
+    file://duduclaw-home-owner.service \
+    file://duduclaw-home.conf \
+    file://duduclaw-gateway.conf \
+    file://relocate-root-state.sh \
+    file://50-duduclaw-protected-links.conf \
+    file://50-duduclaw-ptrace.conf \
+"
+
+# --- Service account (rootless gateway, 2026-10-15) ------------------------
+# duduclaw-gateway.service runs as `duduclaw`, uid/gid 1000. Fixed ids, not
+# dynamic ones: the gateway's files on /data survive A/B updates and a
+# rollback, so the owner id has to be the same in every image ever built.
+# 1000 is the Debian line's value (appliance/postinst.d/20-users-and-units.sh
+# `useradd -r -g duduclaw -u 1000`) and stays clear of the range shadow
+# hands out to --system accounts (999 downwards). Not yet verified on a
+# built image that nothing else claims 1000 (`getent passwd 1000`,
+# `getent group 1000`, V1 in wiki/eval/rootless-verification-2026-10.md).
+#
+# Groups:
+#   duduclaw      primary group, gid 1000. It used to be created (with a
+#                 dynamic gid) by duduclaw-flatpak-kiosk-verify, and the
+#                 Flatpak polkit rule granted it every Flatpak action. That
+#                 grant now keys on the empty `duduclaw-flatpak` group
+#                 (duduclaw-polkit-flatpak), so the gateway gets no Flatpak
+#                 rights from this group.
+#   duduclaw-ipc  the group duduclaw-comp gives its shell-control and
+#                 codrive sockets (0660) and codrive token (0640). Members:
+#                 this account and duduclaw-kiosk (GROUPMEMS below), and no
+#                 one else; in particular duduclaw-flatpak-verify, which is
+#                 in duduclaw-kiosk to reach the Wayland socket, is not.
+#   duduclaw-kiosk  (secondary) lets the gateway traverse /run/duduclaw-kiosk
+#                 (0750) to reach those sockets and the PipeWire socket.
+#
+# USERADD_DEPENDS + RDEPENDS on duduclaw-shell: duduclaw-kiosk (user and
+# group) comes from that recipe. USERADD_DEPENDS makes it exist in this
+# recipe's sysroot passwd database, RDEPENDS makes the package manager
+# install it (and run its useradd preinst) before this package's. Every
+# image that installs duduclaw-cli already installs duduclaw-shell through
+# duduclaw-image-desktop.inc, so this adds nothing to any image.
+inherit useradd
+USERADD_PACKAGES = "${PN}"
+GROUPADD_PARAM:${PN} = "--system --gid 1000 duduclaw; --system duduclaw-ipc"
+USERADD_PARAM:${PN} = "--system --uid 1000 --gid duduclaw --home-dir /data/duduclaw --no-create-home --shell /sbin/nologin --groups duduclaw-ipc,duduclaw-kiosk duduclaw"
+GROUPMEMS_PARAM:${PN} = "-a duduclaw-kiosk -g duduclaw-ipc"
+USERADD_DEPENDS = "duduclaw-shell"
+RDEPENDS:${PN} += "duduclaw-shell"
+# setpriv: the supported way for root (an operator shell, firstboot) to run
+# something as the gateway account; runuser is not built without PAM.
+RDEPENDS:${PN} += "util-linux-setpriv"
 
 do_install:append() {
     install -d ${D}${systemd_system_unitdir}
@@ -128,10 +178,34 @@ do_install:append() {
     # launcher reads /data/duduclaw) this closes.
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${UNPACKDIR}/duduclaw-home-profile.sh ${D}${sysconfdir}/profile.d/duduclaw-home.sh
+
+    # Rootless gateway (2026-10-15): ownership oneshot + its tmpfiles file
+    # (private path on purpose, see duduclaw-home.conf's header), the
+    # /run/duduclaw-gateway runtime dir, the one-time relocation of
+    # root-only state out of the home, and the two sysctl files the
+    # tmpfiles walk and the sysd caller check rely on.
+    install -m 0644 ${UNPACKDIR}/duduclaw-home-owner.service ${D}${systemd_system_unitdir}/duduclaw-home-owner.service
+    install -d ${D}${datadir}/duduclaw/tmpfiles.d
+    install -m 0644 ${UNPACKDIR}/duduclaw-home.conf ${D}${datadir}/duduclaw/tmpfiles.d/duduclaw-home.conf
+    install -d ${D}${nonarch_libdir}/tmpfiles.d
+    install -m 0644 ${UNPACKDIR}/duduclaw-gateway.conf ${D}${nonarch_libdir}/tmpfiles.d/duduclaw-gateway.conf
+    install -d ${D}${libexecdir}/duduclaw
+    install -m 0755 ${UNPACKDIR}/relocate-root-state.sh ${D}${libexecdir}/duduclaw/relocate-root-state.sh
+    install -d ${D}${nonarch_libdir}/sysctl.d
+    install -m 0644 ${UNPACKDIR}/50-duduclaw-protected-links.conf ${D}${nonarch_libdir}/sysctl.d/50-duduclaw-protected-links.conf
+    install -m 0644 ${UNPACKDIR}/50-duduclaw-ptrace.conf ${D}${nonarch_libdir}/sysctl.d/50-duduclaw-ptrace.conf
 }
 
 inherit systemd
-SYSTEMD_SERVICE:${PN} = "duduclaw-gateway.service"
+SYSTEMD_SERVICE:${PN} = "duduclaw-gateway.service duduclaw-home-owner.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
-FILES:${PN} += "${systemd_system_unitdir}/duduclaw-gateway.service"
+FILES:${PN} += " \
+    ${systemd_system_unitdir}/duduclaw-gateway.service \
+    ${systemd_system_unitdir}/duduclaw-home-owner.service \
+    ${datadir}/duduclaw/tmpfiles.d/duduclaw-home.conf \
+    ${nonarch_libdir}/tmpfiles.d/duduclaw-gateway.conf \
+    ${libexecdir}/duduclaw/relocate-root-state.sh \
+    ${nonarch_libdir}/sysctl.d/50-duduclaw-protected-links.conf \
+    ${nonarch_libdir}/sysctl.d/50-duduclaw-ptrace.conf \
+"

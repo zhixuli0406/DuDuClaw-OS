@@ -185,7 +185,8 @@ duduclaw_ro_root_hook () {
     # file entirely, which together REPLACE what
     # systemd-random-seed.service would have done: (a)
     # recipes-core/initrdscripts/initramfs-module-duduclaw-persist loads a
-    # persisted seed from /data/duduclaw/system/random-seed into
+    # persisted seed from /data/system/random-seed (before 2026-10-15:
+    # /data/duduclaw/system/random-seed) into
     # /dev/urandom during the initrd, before this masked unit would ever
     # have had a chance to run anyway; (b)
     # recipes-duduclaw/duduclaw-persist-seed's own

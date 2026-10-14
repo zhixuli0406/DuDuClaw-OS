@@ -17,7 +17,12 @@
 #      rebuild preserves anything under root), and writing here now means
 #      zero migration work whenever this line's root eventually does go
 #      read-only.
-#   2. This Yocto line has not yet created an unprivileged `duduclaw`
+#   2. SUPERSEDED 2026-10-15 (rootless gateway): the gateway now runs as
+#      the fixed uid 1000 `duduclaw` account (duduclaw-cli's useradd), this
+#      script refuses to run without it, and every write into the gateway
+#      home goes through `as_gateway` (setpriv) below; see the "Gateway
+#      account and home ownership" block. Original text, kept as history:
+#      This Yocto line has not yet created an unprivileged `duduclaw`
 #      service user -- duduclaw-gateway.service
 #      (recipes-duduclaw/duduclaw-cli/files/duduclaw-gateway.service) runs
 #      as root today (that recipe's own header calls this out as
@@ -34,7 +39,40 @@ set -euo pipefail
 
 DUDUCLAW_HOME=/data/duduclaw
 SYSTEM_DIR=/data/duduclaw/system
-mkdir -p "$DUDUCLAW_HOME" "$SYSTEM_DIR"
+# Root-only device state that used to sit in $SYSTEM_DIR (machine-id) lives
+# here since 2026-10-15; /data/system is root-owned, the gateway home is not.
+SYSTEM_STATE_DIR=/data/system
+GATEWAY_USER=duduclaw
+HOME_TMPFILES=/usr/share/duduclaw/tmpfiles.d/duduclaw-home.conf
+KIOSK_TMPFILES=/usr/share/duduclaw/tmpfiles.d/duduclaw-kiosk-home.conf
+
+# --- Gateway account and home ownership (rootless gateway, 2026-10-15) ---
+# The gateway runs as `duduclaw` (uid 1000). Without that account nothing
+# could own the home this script is about to create and the gateway could
+# not start anyway, so stop here instead of provisioning a root-owned tree.
+if ! id -u "$GATEWAY_USER" >/dev/null 2>&1; then
+    echo "duduclaw-firstboot-provision: no '$GATEWAY_USER' account on this image" \
+         "(duduclaw-cli creates it) -- refusing to provision ${DUDUCLAW_HOME}" >&2
+    exit 1
+fi
+
+# Create the home (0700) and hand it to the gateway account in one step.
+# systemd-tmpfiles, not `chown -R`: see that file's header (busybox chown
+# follows symlinks). This also picks up anything the graphical installer
+# wrote into /data/duduclaw as root before first boot.
+systemd-tmpfiles --create "$HOME_TMPFILES"
+
+# Everything below that writes INTO the gateway home runs as the gateway
+# account. This unit normally runs once, but it runs again on any boot
+# where $SYSTEM_DIR/.provisioned is missing, and uid 1000 (any AI employee)
+# can delete that file. Writing as uid 1000 means a symlink planted in the
+# home can only ever redirect a write to somewhere uid 1000 could already
+# write. --clear-groups: none of these writes needs a supplementary group.
+as_gateway() {
+    setpriv --reuid="$GATEWAY_USER" --regid="$GATEWAY_USER" --clear-groups -- "$@"
+}
+
+as_gateway mkdir -p "$SYSTEM_DIR"
 # $SYSTEM_DIR holds device.key (chmod 600 below) and machine-id -- tighten
 # the directory itself so another local account can't even enumerate its
 # contents, matching the Debian line's own H3g-motivated fix (that line's
@@ -43,22 +81,7 @@ mkdir -p "$DUDUCLAW_HOME" "$SYSTEM_DIR"
 # other than duduclaw-kiosk exists on this line yet -- cheap to do right
 # from the start rather than needing a forward-only migrator of our own
 # later).
-chmod 700 "$SYSTEM_DIR"
-
-# --- gateway service-account detection -----------------------------------
-# See divergence (2) above. `id -u` is POSIX and present on every image
-# this recipe targets (base-files/shadow always ship it).
-if id -u duduclaw >/dev/null 2>&1; then
-    DUDUCLAW_OWNER="duduclaw:duduclaw"
-else
-    DUDUCLAW_OWNER="root:root"
-    echo "duduclaw-firstboot-provision: no 'duduclaw' service user on this" \
-         "image yet -- ${DUDUCLAW_HOME} stays root:root (duduclaw-gateway.service" \
-         "also still runs as root; see that unit's own header). This is" \
-         "consistent with this Yocto line's current security posture, not a" \
-         "regression -- revisit together with the gateway's own user=root" \
-         "decision, not by chown-ing this directory alone." >&2
-fi
+as_gateway chmod 700 "$SYSTEM_DIR"
 
 # --- machine-id persistence -------------------------------------------
 # Same reasoning as the Debian line's script: systemd generates a fresh
@@ -74,8 +97,15 @@ fi
 # actually achieves cross-reboot STABILITY depends on exactly when
 # systemd's own machine-id generation runs relative to this unit; flagged
 # there as needing a real-boot check, same status here.
-if [[ ! -s "$SYSTEM_DIR/machine-id" ]]; then
-    cp /etc/machine-id "$SYSTEM_DIR/machine-id"
+#
+# 2026-10-15: the persisted copy lives in /data/system/machine-id, not
+# $SYSTEM_DIR. The initramfs persist module bind-mounts that file onto
+# /etc/machine-id, so it must not sit in a tree uid 1000 owns. The
+# initramfs module itself normally creates it before this script runs;
+# this is the fallback for boots where it could not (LUKS /data).
+mkdir -p "$SYSTEM_STATE_DIR"
+if [[ ! -s "$SYSTEM_STATE_DIR/machine-id" ]]; then
+    cp /etc/machine-id "$SYSTEM_STATE_DIR/machine-id"
 fi
 
 # --- device key placeholder ---------------------------------------------
@@ -100,9 +130,9 @@ fi
 # classic/POSIX dd invocation form, not a GNU-only extension, so this is
 # expected to be robust on any busybox/coreutils combination this image
 # family ships, not merely patched to work around today's specific build.
-if [[ ! -s "$SYSTEM_DIR/device.key" ]]; then
-    dd if=/dev/urandom bs=32 count=1 2>/dev/null | sha256sum | cut -d' ' -f1 > "$SYSTEM_DIR/device.key"
-    chmod 600 "$SYSTEM_DIR/device.key"
+if ! as_gateway test -s "$SYSTEM_DIR/device.key"; then
+    dd if=/dev/urandom bs=32 count=1 2>/dev/null | sha256sum | cut -d' ' -f1 \
+        | as_gateway sh -c 'umask 077 && cat > "$1" && chmod 600 "$1"' sh "$SYSTEM_DIR/device.key"
 fi
 
 # --- journald FSS (Forward Secure Sealing) key generation ---------------
@@ -153,12 +183,14 @@ fi
 # warning logged, script continues) rather than failing the whole
 # first-boot provisioning run over a non-essential hardening feature.
 FSS_VERIFY_KEY="$DUDUCLAW_HOME/journal-verify.key"
-if [[ ! -s "$FSS_VERIFY_KEY" ]]; then
+# 2026-10-15: generated as root (journalctl needs it), written as the
+# gateway account (the file lives in the gateway home and has always been
+# meant for the dashboard to show). Same tmp-then-rename shape as before.
+if ! as_gateway test -s "$FSS_VERIFY_KEY"; then
     fss_key="$(journalctl --setup-keys 2>/dev/null || true)"
     if [[ -n "$fss_key" ]]; then
-        printf '%s\n' "$fss_key" > "${FSS_VERIFY_KEY}.tmp"
-        chmod 600 "${FSS_VERIFY_KEY}.tmp"
-        mv "${FSS_VERIFY_KEY}.tmp" "$FSS_VERIFY_KEY"
+        printf '%s\n' "$fss_key" \
+            | as_gateway sh -c 'umask 077 && cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$FSS_VERIFY_KEY"
     else
         echo "duduclaw-firstboot-provision: journalctl --setup-keys produced no" \
              "key (gcrypt support missing, /var/log/journal not yet initialised," \
@@ -171,8 +203,12 @@ if [[ ! -s "$FSS_VERIFY_KEY" ]]; then
 fi
 
 # --- gateway home + service-account ownership -----------------------------
-mkdir -p "$DUDUCLAW_HOME"
-chown -R "$DUDUCLAW_OWNER" "$DUDUCLAW_HOME"
+# 2026-10-15: ownership and the 0700 mode below are now both applied by the
+# systemd-tmpfiles call at the top of this script (`d /data/duduclaw 0700
+# duduclaw duduclaw` + `Z`), and again on every boot by
+# duduclaw-home-owner.service. The former `chown -R` is gone (it followed
+# symlinks). The history of the 0700 decision is kept below.
+#
 # 0700 on the gateway home itself (WP-F, 2026-09-05, docs/todo/
 # TODO-ai-runtimes-2026-09.md §3 WP-F item 4). Until this round only
 # $SYSTEM_DIR was tightened (chmod 700 near the top of this script) and
@@ -189,9 +225,7 @@ chown -R "$DUDUCLAW_OWNER" "$DUDUCLAW_HOME"
 # the same reason, applied one level up now that the level above holds
 # secrets too.
 #
-# Applied AFTER the recursive chown on purpose: chown does not touch mode
-# bits, but the ordering keeps "who owns it" and "who may enter it" as one
-# readable block. Not `chmod -R`: subdirectories under here are owned by
+# Not `chmod -R`: subdirectories under here are owned by
 # their own creators (the CLIs themselves, each with its own idea of the
 # right mode -- claude-code already chmod 600's its credentials file) and
 # blanket-recursing would fight them on every boot.
@@ -201,7 +235,7 @@ chown -R "$DUDUCLAW_OWNER" "$DUDUCLAW_HOME"
 # goes through /data/system/windows-vm instead (DUDUCLAW_WINDOWS_VM_APPS_DIR
 # in 20-home.conf; migration 1788717600 moves an existing file). Nothing
 # else under here is meant to be readable by another account.
-chmod 0700 "$DUDUCLAW_HOME"
+as_gateway chmod 0700 "$DUDUCLAW_HOME"
 
 # --- kiosk user home directory --------------------------------------------
 # duduclaw-kiosk's passwd entry already points --home-dir at this path
@@ -221,8 +255,11 @@ chmod 0700 "$DUDUCLAW_HOME"
 # could not overwrite it on a later real OOBE run. This unit's own
 # ConditionPathExists=!.provisioned only lets it fire once, so the
 # recursive walk's cost is a non-issue.
-mkdir -p /data/duduclaw-kiosk
-chown -R duduclaw-kiosk:duduclaw-kiosk /data/duduclaw-kiosk
+#
+# 2026-10-15: `chown -R` replaced by systemd-tmpfiles (`d` + `Z` in
+# duduclaw-kiosk-home.conf), for the same reason as the gateway home:
+# busybox chown follows symlinks. Still first-boot only, as before.
+systemd-tmpfiles --create "$KIOSK_TMPFILES"
 
 # --- minimal config.toml ---------------------------------------------
 # Same shape `write_minimal_config()` in crates/duduclaw-core/src/config.rs
@@ -235,8 +272,8 @@ chown -R duduclaw-kiosk:duduclaw-kiosk /data/duduclaw-kiosk
 # config.toml doesn't already exist, so a later boot after the operator has
 # edited it through the dashboard is never clobbered.
 CONFIG_PATH="$DUDUCLAW_HOME/config.toml"
-if [[ ! -f "$CONFIG_PATH" ]]; then
-    cat > "${CONFIG_PATH}.tmp" <<'EOF'
+if ! as_gateway test -f "$CONFIG_PATH"; then
+    as_gateway sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$CONFIG_PATH" <<'EOF'
 # DuDuClaw configuration (auto-created by the OS first-boot provisioning
 # service). Finish setup in the dashboard -- no need to edit this by hand.
 
@@ -250,15 +287,13 @@ port = 18789
 
 # The compositor's co-drive agent-seat socket lives in the kiosk session's
 # runtime dir (duduclaw-comp creates both files at every session start);
-# the gateway is a root system service with no XDG_RUNTIME_DIR of its own,
+# the gateway's own runtime dir is a different one (/run/duduclaw-gateway),
 # so it must be told explicitly -- see migration 1788591433.sh for the
 # retroactive half of this fix.
 [codrive]
 socket_path = "/run/duduclaw-kiosk/duduclaw-codrive.sock"
 token_path = "/run/duduclaw-kiosk/duduclaw-codrive.token"
 EOF
-    mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-    chown "$DUDUCLAW_OWNER" "$CONFIG_PATH"
 fi
 
 # --- H3g /data migrations baseline (fresh-machine detection) -------------
@@ -269,14 +304,15 @@ fi
 # shipped migration already-applied rather than ever replay one.
 MIGRATIONS_SRC_DIR="${DUDUCLAW_MIGRATIONS_DIR:-/usr/share/duduclaw/migrations}"
 MIGRATIONS_MARKER_DIR="$SYSTEM_DIR/migrations"
-mkdir -p "$MIGRATIONS_MARKER_DIR"
+# Markers are created by the gateway account (2026-10-15): the runner,
+# duduclaw-data-migrate.service, runs as that account too.
+as_gateway mkdir -p "$MIGRATIONS_MARKER_DIR"
 if [[ -d "$MIGRATIONS_SRC_DIR" ]]; then
     for script in "$MIGRATIONS_SRC_DIR"/*.sh; do
         [[ -e "$script" ]] || continue   # glob didn't match anything: no migrations shipped yet
-        touch "$MIGRATIONS_MARKER_DIR/$(basename "$script")"
+        as_gateway touch "$MIGRATIONS_MARKER_DIR/$(basename "$script")"
     done
 fi
-chown -R "$DUDUCLAW_OWNER" "$MIGRATIONS_MARKER_DIR"
 
 # --- Secure Boot factory-enroll downgrade (WS-3/SB-3, 2026-09-02) --------
 # The factory loader.conf (recipes-core/images/duduclaw-image-ab/
@@ -324,4 +360,4 @@ if [[ -f "$ESP_LOADER_CONF" ]] && grep -q '^secure-boot-enroll force$' "$ESP_LOA
     mv "${ESP_LOADER_CONF}.tmp" "$ESP_LOADER_CONF"
 fi
 
-touch "$SYSTEM_DIR/.provisioned"
+as_gateway touch "$SYSTEM_DIR/.provisioned"

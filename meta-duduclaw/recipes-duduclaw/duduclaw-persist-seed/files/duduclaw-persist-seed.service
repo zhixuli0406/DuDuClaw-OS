@@ -1,7 +1,7 @@
 # DuDuClaw OS — entropy-seed cross-reboot write-back (VER-P, 信任鏈 P1 殘項,
 # 2026-09-03). Companion half of recipes-core/initrdscripts/
 # initramfs-module-duduclaw-persist, which only ever READS
-# /data/duduclaw/system/random-seed (see that module's own header, "entropy
+# /data/system/random-seed (see that module's own header, "entropy
 # seed" section) — this unit is what keeps that file itself fresh, so the
 # NEXT boot has something DIFFERENT to load rather than the same bytes
 # forever.
@@ -44,6 +44,11 @@
 # the fail-open/needs-recovery states classes/duduclaw-tpm.bbclass's own
 # four-cell truth table documents) makes this unit a silent, harmless
 # no-op rather than a failed unit polluting `systemctl --failed`.
+# 2026-10-15 (rootless gateway): the seed file moved from
+# /data/duduclaw/system/random-seed to /data/system/random-seed. The gateway
+# home now belongs to uid 1000; a root writer there would write through
+# whatever uid 1000 put at that path. /data/system is root-owned.
+# duduclaw-cli's relocate-root-state.sh carries an existing seed over once.
 [Unit]
 Description=DuDuClaw OS: persist entropy seed across reboots (trust chain P1 residual)
 Documentation=commercial/docs/DESIGN-os-trust-chain-2026-09.md
@@ -54,9 +59,9 @@ ConditionPathIsMountPoint=/data
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/bin/mkdir -p /data/duduclaw/system
-ExecStart=/bin/sh -c 'dd if=/dev/urandom of=/data/duduclaw/system/random-seed.new bs=512 count=1 2>/dev/null && mv -f /data/duduclaw/system/random-seed.new /data/duduclaw/system/random-seed'
-ExecStop=/bin/sh -c 'dd if=/dev/urandom of=/data/duduclaw/system/random-seed.new bs=512 count=1 2>/dev/null && mv -f /data/duduclaw/system/random-seed.new /data/duduclaw/system/random-seed'
+ExecStartPre=/bin/mkdir -p /data/system
+ExecStart=/bin/sh -c 'dd if=/dev/urandom of=/data/system/random-seed.new bs=512 count=1 2>/dev/null && mv -f /data/system/random-seed.new /data/system/random-seed'
+ExecStop=/bin/sh -c 'dd if=/dev/urandom of=/data/system/random-seed.new bs=512 count=1 2>/dev/null && mv -f /data/system/random-seed.new /data/system/random-seed'
 
 [Install]
 WantedBy=multi-user.target

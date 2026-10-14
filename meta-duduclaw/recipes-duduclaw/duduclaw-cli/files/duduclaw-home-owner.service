@@ -1,0 +1,44 @@
+# Fix ownership of the gateway's /data trees before anything runs as uid
+# 1000 (rootless gateway, 2026-10-15).
+#
+# Runs once per boot, as root, after /data is mounted and after first-boot
+# provisioning / a pending factory reset, and before every unit that runs
+# as `duduclaw`: the gateway, the rootless Podman API, data-migrate and the
+# secaudit timer. At that point no uid-1000 process exists, so nothing can
+# race the walk. During normal operation every new file is created by uid
+# 1000 itself, so there is nothing to repair until the next boot. Files a
+# rollback to an older (root-gateway) image creates as root are repaired on
+# the next boot of a newer image.
+#
+# ExecStartPre moves the few root-owned files the previous root gateway era
+# left inside /data/duduclaw (entropy seed, machine-id, rescue audit log)
+# out to /data/system before `Z` would hand them to uid 1000. See the
+# script's own header.
+#
+# Ordering note: this unit is ordered before duduclaw-podman.service, not
+# before duduclaw-podman.socket. Sockets start before basic.target and this
+# unit (a normal service) after it, so ordering the socket behind it would
+# be a dependency cycle. The socket only creates a listening fd under
+# /run/duduclaw-gateway; the service it activates waits for this unit.
+#
+# RequiresMountsFor=/data instead of Requires=data.mount: on the A/B images
+# /data has a mount unit and this waits for it; on an image without a /data
+# partition the tmpfiles lines create the directories on the root
+# filesystem, which is what the gateway needs there.
+[Unit]
+Description=DuDuClaw: fix ownership of /data/duduclaw before the gateway starts
+RequiresMountsFor=/data
+After=duduclaw-firstboot-provision.service duduclaw-factory-reset.service
+Before=duduclaw-data-migrate.service duduclaw-podman.service duduclaw-gateway.service duduclaw-secaudit-scan.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/libexec/duduclaw/relocate-root-state.sh
+# `--create` applies d/Z lines; no `--remove`, nothing here is ever deleted.
+# (The design note's `--remove=no` is not a valid flag; --remove takes no
+# value and is simply omitted.)
+ExecStart=/usr/bin/systemd-tmpfiles --create /usr/share/duduclaw/tmpfiles.d/duduclaw-home.conf
+
+[Install]
+WantedBy=multi-user.target

@@ -24,18 +24,34 @@
 # all-root posture. This is a tracked divergence, not a silent downgrade:
 # revisit together with the gateway's own eventual move to an unprivileged
 # user, at which point both units should switch together.
+#
+# Runs as the gateway account since 2026-10-15 (rootless gateway). The
+# runner keeps its completion markers in /data/duduclaw/system/migrations,
+# a tree uid 1000 owns, so any AI employee can delete a marker and make a
+# script run again. As root that would turn every migration into a root
+# action on an attacker-shaped tree (symlinks and all); as uid 1000 a re-run
+# can only do what uid 1000 could already do. Every shipped script only
+# touches the gateway's own files (config.toml, the home, and the
+# gateway-owned /data/system/windows-vm). Root-side relocations that the
+# rootless switch needed (entropy seed, machine-id, rescue audit log) are
+# done by duduclaw-cli's relocate-root-state.sh in
+# duduclaw-home-owner.service instead, for the same reason.
 [Unit]
 Description=DuDuClaw OS /data forward-only settings migrations (H3g, Yocto)
 Documentation=file:///usr/bin/duduclaw (data-migrate subcommand)
 Documentation=file:///usr/share/duduclaw/migrations
-After=duduclaw-firstboot-provision.service
-Requires=duduclaw-firstboot-provision.service
+After=duduclaw-firstboot-provision.service duduclaw-home-owner.service
+Requires=duduclaw-firstboot-provision.service duduclaw-home-owner.service
 Before=duduclaw-gateway.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+User=duduclaw
+Group=duduclaw
+NoNewPrivileges=yes
 Environment=DUDUCLAW_HOME=/data/duduclaw
+Environment=HOME=/data/duduclaw
 ExecStart=/usr/bin/duduclaw data-migrate --run
 TimeoutStartSec=120
 

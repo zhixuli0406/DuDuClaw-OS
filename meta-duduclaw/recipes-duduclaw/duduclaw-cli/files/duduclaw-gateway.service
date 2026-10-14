@@ -3,9 +3,10 @@
 # Adapted from appliance/mkosi.extra/etc/systemd/system/duduclaw-gateway.service
 # (the Debian appliance line's verified unit), simplified the same way
 # duduclaw-sysd.service was for this Y2-1 bring-up stage:
-#   - No User=duduclaw / ReadWritePaths=/data -- this Yocto image doesn't
-#     provision a non-root service user or a /data mount yet (that's
-#     product-layer work for a later ticket). Runs as root for now.
+#   - SUPERSEDED (2026-10-15, rootless gateway): this bullet used to say
+#     "No User=duduclaw, runs as root for now". The unit now runs as the
+#     fixed uid/gid 1000 `duduclaw` account that this recipe creates; see
+#     the "Rootless gateway" block right above [Service]'s User= line.
 #   - No After=/Wants=/Environment=DUDUCLAW_HOME on/for
 #     duduclaw-firstboot-provision.service in THIS base unit -- STALE CLAIM
 #     CORRECTED (WP3, 2026-08-29, DESIGN-installer-settings-integration-
@@ -87,31 +88,81 @@
 # would silently outrank `DUDUCLAW_APPLIANCE=1` from then on (reproduced
 # live on this exact VM). The explicit env var wins unconditionally and
 # needs no `config.toml` migration.
+#
+# --- Rootless gateway (2026-10-15, WP-O1) ---------------------------------
+# The gateway and every AI CLI it spawns run as `duduclaw` (uid/gid 1000,
+# created by this recipe's useradd block; same fixed id the Debian line's
+# appliance/postinst.d/20-users-and-units.sh uses). The only root component
+# left on the gateway's side is duduclaw-sysd, reached over its socket.
+#
+# Threat model: an AI employee runs as this same uid, so everything this
+# uid can reach is assumed to be reachable by an attacker. That is why:
+#   - NoNewPrivileges=yes stays (below): no exec in this tree can gain
+#     privilege through a setuid/setcap binary.
+#   - RestrictNamespaces=yes: the gateway and the AI CLIs do not need user,
+#     mount or network namespaces of their own. Containers are created by
+#     duduclaw-podman.service (a separate unit, no NNP, so newuidmap works
+#     there), which this unit only talks to over its API socket. Known
+#     cost, unverified: a vendor CLI that sandboxes itself with bubblewrap
+#     (Claude Code's optional sandbox mode) cannot create its namespaces
+#     under this setting; its shell tool then fails instead of running
+#     unsandboxed.
+#   - SupplementaryGroups: `duduclaw-kiosk` lets the gateway traverse the
+#     kiosk runtime directory (/run/duduclaw-kiosk, 0750) for wpctl and the
+#     comp sockets; `duduclaw-ipc` is the group duduclaw-comp hands its
+#     shell-control/codrive sockets and token to (0660/0640). Membership is
+#     also in /etc/group (useradd), listed here so the unit says what it
+#     relies on.
+#   - XDG_RUNTIME_DIR=/run/duduclaw-gateway: created 0700 by this recipe's
+#     tmpfiles.d/duduclaw-gateway.conf, NOT RuntimeDirectory= (systemd would
+#     delete it when the unit stops, and duduclaw-podman.service shares it).
+#   - TMPDIR=/data/duduclaw/tmp: PrivateTmp=yes (below) gives this unit a
+#     /tmp that the podman unit cannot see, so a bind-mount source the
+#     gateway creates with tempfile::tempdir() (discovery scoring) must
+#     live on /data instead. std::env::temp_dir() honours TMPDIR.
+#   - DOCKER_HOST / CONTAINER_HOST: bollard reads DOCKER_HOST, the podman
+#     CLI (and its `docker` shim) switches to remote mode when
+#     CONTAINER_HOST is set, so neither the gateway nor its children ever
+#     run podman locally (which would need newuidmap and therefore no NNP).
+#     On the base edition, which ships no container engine, the socket
+#     simply does not exist and the container probe reports "not
+#     available" exactly as before.
+#   - Requires/After duduclaw-home-owner.service: that oneshot runs
+#     systemd-tmpfiles over /data/duduclaw (Z = fix ownership without
+#     following symlinks) before the gateway or podman start; it replaced
+#     the `chown -R` firstboot used to run. See its own unit file.
 [Unit]
-Description=DuDuClaw gateway (Yocto bring-up)
-After=duduclaw-sysd.service
+Description=DuDuClaw gateway
+After=duduclaw-sysd.service duduclaw-home-owner.service duduclaw-podman.socket
 Wants=duduclaw-sysd.service
+Requires=duduclaw-home-owner.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=notify
 NotifyAccess=main
+User=duduclaw
+Group=duduclaw
+SupplementaryGroups=duduclaw-ipc duduclaw-kiosk
 Environment=DUDUCLAW_APPLIANCE=1
 Environment=DUDUCLAW_BIND=0.0.0.0
+Environment=XDG_RUNTIME_DIR=/run/duduclaw-gateway
+Environment=TMPDIR=/data/duduclaw/tmp
+Environment=DOCKER_HOST=unix:///run/duduclaw-gateway/podman/podman.sock
+Environment=CONTAINER_HOST=unix:///run/duduclaw-gateway/podman/podman.sock
 ExecStart=/usr/bin/duduclaw run --yes
 Restart=on-failure
 RestartSec=5
 WatchdogSec=60
 
 # WS-3/A2 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱一 A2 /
-# G11): first systemd sandboxing pass on the gateway unit. Still runs as
-# root (User=root is NOT added here -- A3/G12's own service-user work is a
-# separate, larger ticket per that design doc's own scoping: "涉及 /data
-# 權限遷移與 spawn 鏈，是 P0 裡最大的一件，可獨立票"), so these four
-# directives only remove privilege-escalation and filesystem-write surface
-# that this root process does not actually need, they do not attempt to
-# drop uid 0 itself.
+# G11): first systemd sandboxing pass on the gateway unit. Written while the
+# unit still ran as root; A3/G12's service-user work landed on 2026-10-15
+# (see the "Rootless gateway" block above). The four directives below were
+# kept unchanged. Where a paragraph below reasons "since the unit already
+# runs as uid 0", read it as history: as uid 1000, NoNewPrivileges is what
+# stops this tree from regaining root through a setuid binary at all.
 #
 # NoNewPrivileges=yes: blocks setuid/setgid/file-capability escalation on
 # every exec() this unit or its children perform (systemd.exec(5)). Since
@@ -190,7 +241,8 @@ NoNewPrivileges=yes
 ProtectHome=read-only
 PrivateTmp=yes
 ProtectSystem=full
-ReadWritePaths=-/data
+ReadWritePaths=-/data -/run/duduclaw-gateway
+RestrictNamespaces=yes
 
 [Install]
 WantedBy=multi-user.target

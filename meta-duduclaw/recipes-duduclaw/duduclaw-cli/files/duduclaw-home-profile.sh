@@ -8,6 +8,15 @@
 # This export makes the three parties — services, interactive CLI, shell —
 # agree on one home. profile.d reaches login shells only; the services keep
 # their own explicit Environment= lines and do not depend on this file.
+#
+# Since 2026-10-15 the gateway runs as uid 1000 (`duduclaw`). A `duduclaw`
+# command an operator runs from a root shell still writes into this home as
+# root; the gateway can rename or delete such a file but not rewrite it
+# until the next boot, when duduclaw-home-owner.service hands everything
+# under /data/duduclaw back to uid 1000. To act as the gateway instead:
+#   setpriv --reuid=duduclaw --regid=duduclaw --init-groups duduclaw <args>
+# (runuser is not available: util-linux builds it only with PAM, and this
+# distro has no PAM.)
 export DUDUCLAW_HOME=/data/duduclaw
 # Same value duduclaw-firstboot's 20-home.conf gives the gateway unit: the
 # Windows RemoteApp registry lives outside the 0700 gateway home so the

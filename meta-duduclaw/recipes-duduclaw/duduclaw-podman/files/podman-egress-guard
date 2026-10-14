@@ -1,0 +1,53 @@
+#!/bin/sh
+# Load the loopback guard for duduclaw-podman.service (2026-10-15, WP-O2).
+# Run as root from that unit's ExecStartPre (+). Exit non-zero, and the unit
+# does not start, if the rule cannot be loaded.
+#
+# Why: rootless containers reach the network through pasta, which runs as
+# uid 1000 inside this unit's cgroup and opens ordinary host sockets on the
+# container's behalf. A connection from a container to any host address
+# (127.0.0.1, the LAN IP, the pasta-mapped host address) therefore leaves
+# the host stack on `lo`, and nftables.conf accepts everything arriving on
+# lo. Without this rule a sandboxed container could reach the dashboard
+# (0.0.0.0:18789), llama-server (127.0.0.1:8080) and every other local
+# listener.
+#
+# What: nftables.conf has an empty chain `duduclaw_podman_egress` that the
+# output chain jumps to for packets leaving on lo. This script fills it in
+# one transaction (flush + add, atomic):
+#   - DNS to systemd-resolved's stub listeners (127.0.0.53 / 127.0.0.54,
+#     port 53) is allowed: pasta forwards container DNS to the host
+#     resolver, which on this image is the resolved stub;
+#   - every other packet that a socket in this cgroup sends in the
+#     ORIGINAL direction of its connection is dropped (a connection this
+#     cgroup opens towards a local address);
+#   - reply-direction packets pass, so a host program connecting INTO a
+#     port pasta publishes (Windows VM RDP on 3389, the noVNC page on 8006)
+#     still works.
+#
+# The cgroup path is matched at level 2 (system.slice/<unit>), which covers
+# podman itself, conmon, pasta and every container cgroup podman creates
+# under its delegated subtree. nft resolves the path to the cgroup's inode
+# number at load time, which is why this runs on every start of the unit
+# (the cgroup exists by then: ExecStartPre runs inside it) instead of
+# living in nftables.conf.
+#
+# Kernel: needs CONFIG_NFT_SOCKET and CONFIG_SOCK_CGROUP_DATA (selected by
+# CONFIG_CGROUP_BPF); both are requested by duduclaw-rootless.cfg.
+set -eu
+
+CGROUP="system.slice/duduclaw-podman.service"
+CHAIN="duduclaw_podman_egress"
+
+nft -f - <<NFT
+flush chain inet filter ${CHAIN}
+table inet filter {
+	chain ${CHAIN} {
+		socket cgroupv2 level 2 "${CGROUP}" ip daddr { 127.0.0.53, 127.0.0.54 } udp dport 53 accept
+		socket cgroupv2 level 2 "${CGROUP}" ip daddr { 127.0.0.53, 127.0.0.54 } tcp dport 53 accept
+		socket cgroupv2 level 2 "${CGROUP}" ct direction original counter drop
+	}
+}
+NFT
+
+echo "podman-egress-guard: loopback guard loaded for ${CGROUP}" >&2

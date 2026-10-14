@@ -52,7 +52,9 @@ meta-duduclaw/
 │                                            #   firstboot, data-binds, data-open, persist-seed, firewall,
 │                                            #   journald, secaudit-scan, rescue, os-installer, live-tweaks,
 │                                            #   flatpak-offline-repo, flatpak-setup, flatpak-kiosk-verify, polkit-flatpak,
-│                                            #   compat-runners, steam-devices, ai-runtimes, llama-server
+│                                            #   compat-runners, steam-devices, ai-runtimes, llama-server,
+│                                            #   podman (rootless engine for the gateway, desktop edition)
+├── recipes-containers/container-host-config/ # bbappend: overlay storage + rootless containers.conf drop-in
 ├── recipes-ai/llama-cpp/                    # llama.cpp v0.4.0 — llama-server / llama-cli (CPU build)
 ├── recipes-kernel/linux/                    # linux-yocto 6.18 bbappend + per-machine config fragments
 ├── recipes-graphics/mesa/                   # Mesa version pin (LLVM codegen fix for the GUI stack)
@@ -77,15 +79,37 @@ meta-duduclaw/
 
 | Recipe | What it is | Role |
 |---|---|---|
-| `duduclaw-image-appliance` | **Desktop edition**: A/B update chain + the desktop stack + Flatpak-preloaded Chromium / LibreOffice / Steam + app compatibility layer + read-only root + firewall + login hardening | **Shipping image** — the `.wic.zst` in each release, and the payload of `duduclaw-image-live-desktop` |
+| `duduclaw-image-appliance` | **Desktop edition**: A/B update chain + the desktop stack + Flatpak-preloaded Chromium / LibreOffice / Steam + app compatibility layer + rootless Podman (no setuid binaries besides `newuidmap`/`newgidmap`) + read-only root + firewall + login hardening | **Shipping image** — the `.wic.zst` in each release, and the payload of `duduclaw-image-live-desktop` |
 | `duduclaw-image-appliance-test` | Same payload, root serial autologin | QEMU test variant, never shipped |
-| `duduclaw-image-ab` | **Base image**: A/B GPT layout + update chain on top of `duduclaw-image` (which already carries the desktop stack — comp/shell, IME, audio, XWayland — and the gateway); no app layer, no read-only root, no firewall | Payload of the `duduclaw-image-live` ISO since v0.1.0; a bring-up artifact |
+| `duduclaw-image-ab` | **Base image**: A/B GPT layout + update chain on top of `duduclaw-image` (which already carries the desktop stack — comp/shell, IME, audio, XWayland — and the gateway); firewall included since 2026-10-15; no app layer, no container engine, no read-only root | Payload of the `duduclaw-image-live` ISO since v0.1.0; a bring-up artifact |
 | `duduclaw-image-live` (+ `-live-initramfs`) | squashfs live environment with the graphical installer; writes the image named by `DUDUCLAW_INSTALL_PAYLOAD_IMAGE` (default `duduclaw-image-ab`) to the target disk | The base-edition installer `.iso`, shipped with every release since v0.1.0 |
 | `duduclaw-image-live-desktop` | Same live environment, payload = `duduclaw-image-appliance` (desktop edition) | The desktop-edition installer `.iso` (added 2026-09-04, alongside v0.1.0, and shipped with every release since) |
 | `duduclaw-image-flatpak` | Flatpak / bubblewrap / ostree / polkit carriage on top of `-data` | Building block |
 | `duduclaw-image-data` | `/data` partition + first-boot provisioning on top of `duduclaw-image` | Building block |
 | `duduclaw-image` | `duduclaw-sysd` + `duduclaw` payload on top of `-minimal` | Building block |
 | `duduclaw-image-minimal` | Console-only UKI + systemd-boot image | Bring-up / smoke |
+
+### Service accounts and privileges
+
+In the layer since 2026-10-15 (rootless gateway). Not in v0.3.0, and not yet
+verified on a built image; see
+[`../wiki/eval/rootless-verification-2026-10.md`](../wiki/eval/rootless-verification-2026-10.md).
+
+| Account / unit | Runs as | Notes |
+|---|---|---|
+| `duduclaw-gateway.service` | `duduclaw` (uid/gid 1000, fixed) | `NoNewPrivileges`, `RestrictNamespaces`; supplementary groups `duduclaw-ipc`, `duduclaw-kiosk`; `TMPDIR=/data/duduclaw/tmp`; `DOCKER_HOST`/`CONTAINER_HOST` point at the Podman socket |
+| `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | `podman system service`, `Delegate=yes` + `DelegateSubgroup=supervisor`, `ProtectSystem=strict`, bounding set `CAP_SETUID CAP_SETGID`, no NNP (newuidmap needs it); store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup |
+| `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000` |
+| `duduclaw-home-owner.service` | root, oneshot | `systemd-tmpfiles` with `Z` over `/data/duduclaw` before anything runs as uid 1000 (replaces `chown -R`, which followed symlinks); moves root-only state (machine-id, entropy seed, rescue audit log) to `/data/system` once |
+| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1` |
+| `duduclaw-data-migrate.service`, `duduclaw-secaudit-scan.service` | `duduclaw` | they only touch the gateway's own tree |
+| `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`) |
+
+The Flatpak polkit grant now keys on the empty `duduclaw-flatpak` group, so
+the gateway has no Flatpak rights. `duduclaw-cli` ships
+`fs.protected_hardlinks/symlinks=1` and `kernel.yama.ptrace_scope=1`.
+`runuser` is not in the image (util-linux builds it only with PAM); act as
+the gateway with `setpriv --reuid=duduclaw --regid=duduclaw --init-groups`.
 
 Shared payload sets:
 `duduclaw-image-{data,flatpak,desktop,compat,runtimes}.inc`;

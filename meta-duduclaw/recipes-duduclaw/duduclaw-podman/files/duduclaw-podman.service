@@ -1,0 +1,97 @@
+# Rootless Podman API service for the DuDuClaw gateway (2026-10-15, WP-O2).
+#
+# `podman system service` as uid 1000 (`duduclaw`), activated by
+# duduclaw-podman.socket. A system unit with User=, not a user unit: there
+# is no PAM, logind session or systemd user manager on this OS.
+#
+# Threat model: AI employees run as the same uid as this service and can
+# reach its API, and this unit cannot have NoNewPrivileges (newuidmap and
+# newgidmap must keep their setuid bit working here). Through the libpod API
+# a caller can make podman execute an arbitrary host binary (an absolute
+# OCI runtime path) inside this unit, as uid 1000. So this unit is
+# hardened as if uid 1000 code already runs in it:
+#   - the image ships no setuid/setgid binary except newuidmap/newgidmap
+#     (duduclaw-image-compat.inc strips the rest and fails the build if one
+#     survives);
+#   - CapabilityBoundingSet keeps only CAP_SETUID/CAP_SETGID, which is all
+#     newuidmap/newgidmap need; a setuid exec cannot gain anything else.
+#     Inside a new user namespace the kernel resets the bounding set, so
+#     containers still get their namespaced capabilities;
+#   - RestrictSUIDSGID blocks creating new setuid/setgid files;
+#   - ProtectSystem=strict with three writable paths: the store, the shared
+#     runtime dir and the gateway's TMPDIR (bind-mount sources the gateway
+#     creates for containers live there).
+# What stays: kernel attack surface reachable from an unprivileged user
+# namespace (netfilter, overlayfs and similar have had LPE bugs there).
+#
+# cgroups: Delegate=yes alone is not enough. With cgroup v2's
+# no-internal-process rule, `podman system service` sitting in the unit's
+# root cgroup makes --memory/--pids-limit/--cpus silently ineffective
+# (podman reports success, the container has no limits). DelegateSubgroup=
+# supervisor moves this process into a child cgroup and the limits take
+# effect. Measured on Fedora 42 / systemd 257 / podman 5.8 (container
+# OOM-killed under --memory 32m only with the subgroup); not yet on this
+# image (systemd 259.5), see V8 in wiki/eval/rootless-verification-2026-10.md.
+#
+# KillMode=process: restarting this service does not kill running
+# containers (conmon and the containers stay in the unit's cgroup); the
+# gateway's own sweep cleans up leftovers.
+#
+# Host loopback guard (ExecStartPre, runs as root via "+"): pasta opens its
+# host-side sockets as this unit, so a container can reach anything that
+# listens on the host (the dashboard on 0.0.0.0:18789, llama-server on
+# 127.0.0.1:8080) over loopback, and nftables.conf's `iif lo accept`
+# would let it in. The guard script loads a rule that drops loopback
+# connections this unit's cgroup initiates. It runs on every start because
+# nftables resolves the cgroup path to the cgroup's inode number when the
+# rule is loaded; a static rule in nftables.conf could not even be loaded
+# at boot (this cgroup does not exist yet) and would go stale after a
+# restart. If the guard cannot be loaded, this unit does not start: no
+# containers rather than unguarded containers.
+#
+# nftables.conf begins with `flush ruleset`, so the rule has to come back
+# whenever the firewall is reloaded or restarted:
+# ReloadPropagatedFrom=nftables.service turns `systemctl reload nftables`
+# into a reload of this unit, whose ExecReload re-runs the guard (ordered
+# after the firewall reload by After=); PartOf=nftables.service turns a
+# firewall restart into a restart of this unit (KillMode=process keeps the
+# containers running). Running `nft -f /etc/nftables.conf` by hand bypasses
+# both; reload through systemctl, or restart this unit afterwards.
+#
+# ExecStartPre (+) also creates the store directory (private tmpfiles file,
+# never applied by the generic boot-time tmpfiles run).
+[Unit]
+Description=Rootless Podman API for the DuDuClaw gateway (uid 1000)
+Requires=duduclaw-podman.socket duduclaw-home-owner.service nftables.service
+After=duduclaw-podman.socket duduclaw-home-owner.service duduclaw-factory-reset.service nftables.service
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
+
+[Service]
+Type=exec
+User=duduclaw
+Group=duduclaw
+Delegate=yes
+DelegateSubgroup=supervisor
+KillMode=process
+Environment=XDG_RUNTIME_DIR=/run/duduclaw-gateway
+Environment=HOME=/data/duduclaw
+# Image pulls stage layers in TMPDIR (default /var/tmp, read-only here).
+Environment=TMPDIR=/data/duduclaw/tmp
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/share/duduclaw/tmpfiles.d/duduclaw-containers.conf
+ExecStartPre=+/usr/libexec/duduclaw/podman-egress-guard
+ExecStart=/usr/bin/podman system service --time=0
+ExecReload=+/usr/libexec/duduclaw/podman-egress-guard
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ReadWritePaths=/data/system/containers/duduclaw /run/duduclaw-gateway /data/duduclaw/tmp
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+RestrictSUIDSGID=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+# Deliberately absent: NoNewPrivileges=yes (would break newuidmap).
+
+[Install]
+# Started on demand by the socket; no WantedBy of its own.

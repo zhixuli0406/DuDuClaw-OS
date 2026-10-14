@@ -47,6 +47,33 @@
 # four packages; B3 (separate ticket) adds the `duduclaw compat windows-vm`
 # CLI + its own compat.d declaration (windows-vm.toml, not touched here).
 #
+# --- 2026-10-15: rootless Podman replaced rootful Docker (WP-O2) -----------
+# The paragraphs below about docker / runc / docker-compose are kept as
+# history; those three packages are no longer installed. The container
+# engine is now:
+#   podman          rootless, run by duduclaw-podman.service as the gateway
+#                   account (uid 1000). PODMAN_FEATURES "docker" (upstream
+#                   default) installs the `docker` shim, which is what
+#                   compat.d's windows-vm `require_tool = ["docker", ...]`
+#                   and the platform's `docker` CLI calls find. Distro
+#                   settings (rootless PACKAGECONFIG, root podman.socket not
+#                   enabled, container profile) are in duduclaw-os.conf.
+#   crun            OCI runtime (meta-virt-container-podman.inc's choice).
+#                   CRUN_AS_RUNC installs a `runc` symlink and RCONFLICTS
+#                   runc, so runc must not be listed any more.
+#   podman-compose  `docker compose` / `podman compose` provider for the
+#                   Windows VM runner (docker-compose's default
+#                   docker-plugin build needs dockerd).
+#   passt           pasta, the rootless network backend (50-duduclaw.conf).
+#   duduclaw-podman the API socket/service, store dirs, loopback guard,
+#                   root-shell CONTAINER_HOST and module preload list.
+#   shadow          newuidmap/newgidmap (useradd.bbclass already makes
+#                   useradd packages RDEPEND on shadow; named here because
+#                   the setuid allowlist below depends on it).
+# Plus two ROOTFS_POSTPROCESS steps at the end of this file: the
+# /etc/subuid + /etc/subgid range for the gateway account, and the setuid
+# strip with its build-time assertion.
+#
 # docker (meta-virtualization/recipes-containers/docker, docker-moby_git.bb
 #   at the time of writing): the container runtime dockur/windows runs
 #   under. IMAGE_INSTALL names it "docker", not the recipe's own PN
@@ -118,4 +145,78 @@
 #   IMAGE_INSTALL name, not "freerdp3-tools" (that package name does not
 #   exist in this recipe).
 
-IMAGE_INSTALL:append = " duduclaw-compat-runners waydroid docker runc docker-compose freerdp3"
+IMAGE_INSTALL:append = " duduclaw-compat-runners waydroid freerdp3"
+IMAGE_INSTALL:append = " podman crun podman-compose passt duduclaw-podman shadow"
+
+# --- Subordinate ids for the gateway account (2026-10-15, WP-O2) ----------
+# Rootless Podman maps container uids/gids 1..65536 onto host ids
+# 100000..165535 through newuidmap/newgidmap, which read /etc/subuid and
+# /etc/subgid. shadow's do_install only touches both files empty, and on
+# the read-only root nothing can add the entry at runtime, so it is written
+# into the image here. 65536 ids is what images that run their own non-root
+# users (task sandbox `--user uid:gid`) need. 100000 is above every system
+# and regular id this image allocates. Not relying on shadow 4.19's
+# `useradd --add-subids-for-system`: unverified for this version.
+DUDUCLAW_SUBID_USER = "duduclaw"
+DUDUCLAW_SUBID_RANGE = "100000:65536"
+duduclaw_write_subids () {
+    for f in ${IMAGE_ROOTFS}${sysconfdir}/subuid ${IMAGE_ROOTFS}${sysconfdir}/subgid; do
+        touch "$f"
+        sed -i -e '/^${DUDUCLAW_SUBID_USER}:/d' "$f"
+        echo "${DUDUCLAW_SUBID_USER}:${DUDUCLAW_SUBID_RANGE}" >> "$f"
+        chmod 0644 "$f"
+    done
+}
+ROOTFS_POSTPROCESS_COMMAND += "duduclaw_write_subids; "
+
+# --- Strip setuid/setgid bits (2026-10-15, WP-O2, threat model H2) --------
+# AI employees run as the gateway's uid and can reach the rootless Podman
+# API, whose unit cannot have NoNewPrivileges (newuidmap/newgidmap need
+# their setuid bit). Through that API a caller can get podman to execute an
+# arbitrary host binary inside that unit. Any setuid binary in the image is
+# then one exec away from uid 0, so the image ships none except the two
+# Podman needs. Candidates this removes: shadow's su/passwd/chfn/chsh/
+# newgrp/gpasswd/expiry, busybox.suid's applets, fusermount3 (rootless
+# Podman uses kernel overlayfs, not fuse-overlayfs). Effects: root is
+# unaffected; no interactive account on this OS needs passwd or su (the
+# rescue account logs in directly). Possible casualties to check on the
+# first real image (V23 and the extra checks in
+# wiki/eval/rootless-verification-2026-10.md): fusermount3 is what lets the
+# kiosk user's xdg-document-portal mount its FUSE filesystem, so Flatpak
+# apps may lose portal-mediated file access; dbus-daemon-launch-helper (if
+# the image uses dbus-daemon) only matters for system services activated
+# without a SystemdService= line. Either one may need to go on the
+# allowlist after measuring, with the reasoning written here.
+#
+# Regular files only: setgid DIRECTORIES (group inheritance, not an
+# escalation path) are left alone. The assertion fails the build if a
+# setuid/setgid regular file other than the allowlist survives, or if an
+# allowlisted binary is missing or lost its setuid bit (without it
+# `podman system service` refuses to start: "should have setuid or have
+# filecaps setuid"). Runs after duduclaw_write_subids and after the
+# read-only-root hook regardless of order, since neither touches modes.
+DUDUCLAW_SETUID_ALLOWLIST = "/usr/bin/newuidmap /usr/bin/newgidmap"
+duduclaw_strip_setuid () {
+    cd ${IMAGE_ROOTFS}
+    find . -xdev -type f -perm /6000 | while read -r f; do
+        p="${f#.}"
+        case " ${DUDUCLAW_SETUID_ALLOWLIST} " in
+            *" $p "*) continue ;;
+        esac
+        chmod u-s,g-s "$f"
+        bbnote "duduclaw_strip_setuid: cleared setuid/setgid on $p"
+    done
+    leftover=$(find . -xdev -type f -perm /6000 | sed -e 's#^\.##' | sort)
+    for p in $leftover; do
+        case " ${DUDUCLAW_SETUID_ALLOWLIST} " in
+            *" $p "*) ;;
+            *) bbfatal "duduclaw_strip_setuid: $p still has a setuid/setgid bit after stripping" ;;
+        esac
+    done
+    for p in ${DUDUCLAW_SETUID_ALLOWLIST}; do
+        [ -f ".$p" ] || bbfatal "duduclaw_strip_setuid: $p is missing (rootless Podman needs it setuid; is shadow installed?)"
+        [ -u ".$p" ] || bbfatal "duduclaw_strip_setuid: $p is not setuid (rootless Podman refuses to start without it)"
+    done
+    cd - >/dev/null
+}
+ROOTFS_POSTPROCESS_COMMAND += "duduclaw_strip_setuid; "

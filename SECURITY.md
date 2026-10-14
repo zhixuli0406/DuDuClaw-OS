@@ -78,6 +78,29 @@ through v0.3.0 has been built without them (unsigned UKIs, no verity
 partition, no TPM stack — see the README's Trust chain section). The
 desktop edition ships with a read-only root.
 
+## Runtime Privilege Model
+
+In the layer since 2026-10-15, both editions. Not in v0.3.0 or any
+published image yet, and not yet verified on a built image:
+
+- The DuDuClaw gateway and every AI CLI it runs execute as the unprivileged
+  `duduclaw` account (uid 1000) with `NoNewPrivileges`. `duduclaw-sysd` is the
+  only root service the gateway can call, and it accepts only uid 1000.
+  AI employees share that uid, so the design assumes an attacker who
+  controls uid 1000.
+- The desktop edition runs containers with rootless Podman as the same
+  account. Every setuid/setgid bit in the image is removed except on
+  `newuidmap`/`newgidmap`, and the build fails if another one survives. A
+  firewall rule drops connections that containers (through pasta) open
+  towards services on the host itself.
+- Ownership of the gateway's data is repaired at boot with
+  `systemd-tmpfiles` (never follows symlinks), not `chown -R`; root-only
+  state (machine-id, entropy seed, rescue audit log) lives in
+  `/data/system`, outside the gateway's home.
+- What remains: kernel bugs reachable from an unprivileged user namespace,
+  and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
+  do (that code is in the platform repo).
+
 ## Disclosure Policy
 
 We follow [coordinated vulnerability disclosure](https://en.wikipedia.org/wiki/Coordinated_vulnerability_disclosure):

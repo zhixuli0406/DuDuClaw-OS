@@ -37,5 +37,21 @@ gcloud --account="$ACCOUNT" --project="$PROJECT" run deploy "$SERVICE" \
   --min-instances 0 --max-instances 3 \
   --quiet
 
+# A staged rollout (deploy --no-traffic --tag, then update-traffic
+# --to-revisions) leaves traffic pinned to that revision, and every later
+# deploy then creates a revision that never serves (2026-10-11 to 10-14).
+# Route traffic to the latest revision and fail unless the new one serves it all.
+gcloud --account="$ACCOUNT" --project="$PROJECT" run services update-traffic "$SERVICE" \
+  --region "$REGION" --to-latest --quiet >/dev/null
+gcloud --account="$ACCOUNT" --project="$PROJECT" run services describe "$SERVICE" \
+  --region "$REGION" --format=json | python3 -c '
+import json, sys
+s = json.load(sys.stdin)["status"]
+latest = s.get("latestReadyRevisionName")
+serving = [t.get("revisionName") for t in s.get("traffic", []) if t.get("percent")]
+if latest != s.get("latestCreatedRevisionName") or serving != [latest]:
+    sys.exit(f"deploy: new revision is not serving all traffic (latest={latest}, serving={serving})")
+print(f"serving {latest}")'
+
 gcloud --account="$ACCOUNT" --project="$PROJECT" run services describe "$SERVICE" \
   --region "$REGION" --format="value(status.url)"

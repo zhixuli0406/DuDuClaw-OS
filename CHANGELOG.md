@@ -7,6 +7,10 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Security
+- **SSH 預設關閉，基礎版也有防火牆**：dropbear 原本在每個映像開機就在 22 埠監聽；基礎版（`duduclaw-image-ab`，一般 `installer` ISO）沒有防火牆，所以區網上連得到。現在 dropbear 預設不啟用（`recipes-core/dropbear/dropbear_%.bbappend`），防火牆從桌面版移到兩版共用的 `duduclaw-image-ab.bb`。
+- **維護模式的 SSH 開關可以用了**：防火牆新增空的 `maintenance_tcp_ports` 集合，只放行這個集合裡的埠。維護模式開啟時由 `duduclaw-sysd` 啟動 `dropbear.socket` 並把 22 加入集合，視窗關閉時停掉 dropbear、結束連線並移除 22。這段平台程式從平台 v1.73.3 起提供；舊版平台操作的是映像裡不存在的 `ssh.service`，開關不會有作用。以上尚未在建好的映像上開機驗證。
+
 ### Changed
 - **文件與官網改成 v0.3.0 的事實**（`README.md`、`README.en.md`、`meta-duduclaw/README.md`、`SECURITY.md`、`docs/README.md`）：版本徽章、狀態列、信任鏈與測試範圍從 v0.2.0 改到 v0.3.0。測試範圍照 Release 與 `wiki/impl/gcp-builder-2026-10.md` 寫：qemux86-64 整碟映像在無頭 QEMU（TCG、無 KVM）開到登入畫面，同機型兩個安裝器 ISO 開到 live 環境的自動登入；安裝精靈沒有跑；genericx86-64 只建置、沒有開機；沒有真機。Secure Boot／dm-verity／TPM 在 v0.3.0 仍未啟用：建置用的是 `kas/release-linux-builder.yml`，沒有疊加 `sb-signing.yml`／`tpm-luks.yml`；2026-10-14 拆開兩個發布 wic 查證，兩槽 UKI、rescue UKI 與 systemd-boot 的 PE 簽章表都是空的、ESP 沒有 enroll 金鑰、GPT 沒有 verity 分割、UKI initrd 沒有 tpm2／cryptsetup。`meta-duduclaw/README.md` 原本寫「QEMU 機型三種產物都開機驗證過」，與 v0.2.0 的實際紀錄不符，一併改正。
 - **`docs/guides/ai-runtimes.md`**：拿掉「清單對應映像內嵌的平台版本（v0.2.0 為 1.63.0）」。v0.3.0 與 v0.2.0 用的是同一份 2026-09-05 產生的 AI runtime 包（recipe 的 `DUDUCLAW_AI_RUNTIMES_DATE` 兩版都是 `20260905`），表格補上各 CLI 的版本（取自包內 `MANIFEST.txt`）；十個 CLI 都在平台 1.73.1 的 runtime catalog 裡。Gemini CLI runtime 的移除版本照 1.73.1 快照改為 v1.74.0（原寫 v1.71.0）；「未內建」補上 Google Antigravity（`agy`），在 v0.3.0 映像上安裝它沒有測過。README 的 AI 工具鏈段落同步。

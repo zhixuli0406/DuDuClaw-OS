@@ -309,7 +309,11 @@ DUDUCLAW_AB_DATA_SIZE_MB = "8192"
 # CONFIG_NFT_CT) is wired unscoped (both machines) via linux-yocto_6.18.
 # bbappend + recipes-kernel/linux/linux-yocto/duduclaw-nftables.cfg, same
 # wave -- no additional kernel wiring needed here.
-IMAGE_INSTALL:append = " duduclaw-firewall"
+#
+# 2026-10-15: the IMAGE_INSTALL line moved to duduclaw-image-ab.bb, which
+# this recipe requires, so the base edition (duduclaw-image-ab, the plain
+# `installer` ISO) gets the same firewall. Until then that edition shipped
+# with no firewall and dropbear listening on the LAN.
 
 # --- OS security line P0 (WS-3/S1+S3, 2026-09-01) --------------------------
 # DESIGN-os-security-line-2026-09.md §2 secaudit 遷入 D1' P0. `duduclaw

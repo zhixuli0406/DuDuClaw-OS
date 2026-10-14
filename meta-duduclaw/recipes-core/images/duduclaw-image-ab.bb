@@ -161,6 +161,19 @@ IMAGE_INSTALL:append = " duduclaw-ab-update"
 # exact verification status reached this round.
 IMAGE_INSTALL:append = " duduclaw-firstboot"
 
+# --- Default-deny firewall for both editions (2026-10-15) ------------------
+# duduclaw-firewall used to be appended only in duduclaw-image-appliance.bb,
+# so the base edition built from this recipe (the plain `installer` ISO)
+# shipped with no firewall at all while dropbear listened on port 22. It
+# lives here now; duduclaw-image-appliance.bb requires this file and gets it
+# unchanged. The ruleset allows only the dashboard port, mDNS and basic
+# ICMP inbound, plus whatever maintenance mode adds to its port set
+# (recipes-duduclaw/duduclaw-firewall/files/nftables.conf). This edition
+# has no Waydroid, so the forward-chain risk noted in that file does not
+# apply here. Kernel nftables support is already wired for both machines
+# by linux-yocto_6.18.bbappend.
+IMAGE_INSTALL:append = " duduclaw-firewall"
+
 # Y9-2 (2026-08-27): factory UKI naming + loader.conf default, so the very
 # first boot's own UKI competes in the SAME sysupdate-managed namespace as
 # every future update instead of permanently winning by static pin.

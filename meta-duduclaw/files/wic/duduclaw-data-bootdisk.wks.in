@@ -82,4 +82,4 @@ part / --source rootfs --fstype=ext4 --label root --align 1024 --exclude-path bo
 # partition on real hardware with a bigger disk -- see that script's own
 # header for the full mechanism, ported near-verbatim from the Debian
 # appliance line's equivalent.
-part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --fsoptions=defaults,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_DATA_SIZE_MB}
+part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --fsoptions=defaults,nosuid,nodev,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_DATA_SIZE_MB}

@@ -33,6 +33,19 @@
 # DISTRO_VERSION would forbid rolling back from one rootless release to the
 # previous rootless release, which is exactly the rollback A/B exists for.
 #
+# Known gap during the FIRST rootless image's trial boots (design
+# trade-off, accepted): until that entry is blessed, sd-boot's automatic
+# boot assessment still holds the previous, root-gateway entry as its
+# fallback. An AI employee on the new image runs as uid 1000 and can make
+# those trial boots fail on purpose (stop the gateway from answering
+# /healthz, hang it past the health-check budget), and three failed tries
+# send the device back to the image where the gateway, and therefore the
+# agent, ran as root. Closing it would mean deleting the old entry before
+# the new one has proved it boots, i.e. giving up rollback for a broken
+# update; the window is a few boots long and needs agent code already
+# running on the new image. After the first bless, rollback-prune removes
+# the old entry and the path is gone.
+#
 # Trade-off, by design: once a rootless image is blessed, the device can
 # no longer return to any pre-rootless image, by sysd rollback or by
 # sd-boot fallback. Recovering from a bad rootless release means shipping a

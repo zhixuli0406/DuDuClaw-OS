@@ -98,13 +98,20 @@ verified on a built image; see
 | Account / unit | Runs as | Notes |
 |---|---|---|
 | `duduclaw-gateway.service` | `duduclaw` (uid/gid 1000, fixed) | `NoNewPrivileges`, `RestrictNamespaces`; supplementary groups `duduclaw-ipc`, `duduclaw-kiosk`; `TMPDIR=/data/duduclaw/tmp`; `DOCKER_HOST`/`CONTAINER_HOST` point at the Podman socket |
-| `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | `podman system service`, `Delegate=yes` + `DelegateSubgroup=supervisor`, `ProtectSystem=strict`, bounding set `CAP_SETUID CAP_SETGID`, no NNP (newuidmap needs it); store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup |
+| `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | socket `/run/duduclaw-podman/podman.sock` (root 0711 dir); `podman system service`, `InaccessiblePaths=` for root control sockets, `Delegate=yes` + `DelegateSubgroup=supervisor`, `ProtectSystem=strict`, bounding set `CAP_SETUID CAP_SETGID`, no NNP (newuidmap needs it); store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup |
 | `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000`; `--require-main-pid-of duduclaw-gateway.service --min-rollback-version …` are appended at build time once `DUDUCLAW_MIN_ROLLBACK_VERSION` is set |
 | `duduclaw-home-owner.service` | root, oneshot | `systemd-tmpfiles` with `Z` over `/data/duduclaw` before anything runs as uid 1000 (replaces `chown -R`, which followed symlinks); moves root-only state (machine-id, entropy seed, rescue audit log) to `/data/system` once |
 | `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`; refuses a marker that is not root-owned or is group/world-writable |
 | `duduclaw-rollback-prune.service` | root, oneshot | after `boot-complete.target`, deletes ESP entries older than `DUDUCLAW_MIN_ROLLBACK_VERSION` (`conf/distro/include/duduclaw-rollback-floor.inc`; empty, so skipped, until the matching platform snapshot) — no way back to a pre-rootless image by design |
 | `duduclaw-data-migrate.service`, `duduclaw-secaudit-scan.service` | `duduclaw` | they only touch the gateway's own tree |
-| `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`) |
+| `duduclaw-llama-server.service` | `duduclaw` | no `EnvironmentFile=`; `llama-server-run` reads only the four `LLAMA_*` keys from the gateway's settings file as uid 1000 and binds 127.0.0.1 |
+| `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
+
+Image builds stop at `do_rootfs` while `DUDUCLAW_MIN_ROLLBACK_VERSION` is
+empty (no platform guards yet). A/B updates install from the root-owned
+`/data/system/updates` once it is set. `/data` is mounted `nosuid,nodev`.
+The iwd D-Bus policy for `duduclaw` covers only Station, Network,
+KnownNetwork, AgentManager and property reads.
 
 The Flatpak polkit grant now keys on the empty `duduclaw-flatpak` group, so
 the gateway has no Flatpak rights. `duduclaw-cli` ships

@@ -15,6 +15,9 @@
 #               container store; files there belong to subordinate uids)
 #            3. clear_network=1: empty /data/system/iwd (saved Wi-Fi
 #               networks and passphrases)
+#            3b. empty /data/system/windows-vm (Windows RemoteApp registry,
+#               owned by the gateway) and remove /data/system/legacy (root
+#               files the rootless migration parked there)
 #            4. remove /data/system/machine-id, so the next boot gets a new
 #               machine identity, as it did when machine-id still lived in
 #               the gateway home (moved out on 2026-10-15)
@@ -193,6 +196,8 @@ if (( clear_network == 1 )); then
 else
     log "clear_network=0: keeping saved networks in /data/system/iwd"
 fi
+wipe_contents /data/system/windows-vm || failed=1
+remove_tree /data/system/legacy || failed=1
 if [[ -L /data/system/machine-id ]]; then
     log "refusing: /data/system/machine-id is a symlink"
     failed=1

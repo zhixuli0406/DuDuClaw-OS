@@ -83,14 +83,26 @@ desktop edition ships with a read-only root.
 In the layer since 2026-10-15, both editions. Not in v0.3.0 or any
 published image yet, and not yet verified on a built image:
 
-- The DuDuClaw gateway and every AI CLI it runs execute as the unprivileged
-  `duduclaw` account (uid 1000) with `NoNewPrivileges`. `duduclaw-sysd` is the
-  only root service the gateway can call, and it accepts only uid 1000.
-  AI employees share that uid, so the design assumes an attacker who
-  controls uid 1000.
+- The DuDuClaw gateway, every AI CLI it runs and the local model server
+  execute as the unprivileged `duduclaw` account (uid 1000) with
+  `NoNewPrivileges`. AI employees share that uid, so the design assumes an
+  attacker who controls uid 1000, and no root process reads configuration
+  from that account's home (root shells run `duduclaw` and the bundled AI
+  CLIs through `setpriv` as uid 1000). `duduclaw-sysd` is the only root
+  service the gateway can call. An image is only built together with the
+  platform release in which sysd also checks that the caller is the
+  gateway's main process; the build refuses otherwise.
+- A/B updates install only from the root-owned `/data/system/updates`,
+  filled by `duduclaw-sysd` after it verified the release signature and the
+  version. The gateway reaches the kiosk's audio through three fixed
+  compositor verbs, not through the PipeWire socket; its Wi-Fi access is
+  limited to the iwd interfaces the network page uses. `/data` is mounted
+  `nosuid,nodev`.
 - The desktop edition runs containers with rootless Podman as the same
   account. Every setuid/setgid bit in the image is removed except on
-  `newuidmap`/`newgidmap`, and the build fails if another one survives. A
+  `newuidmap`/`newgidmap`, and the build fails if another one survives, if
+  any file carries file capabilities, or if first-boot postinsts are left
+  that could add either back. A
   firewall rule drops connections that containers (through pasta) open
   towards services on the host itself.
 - Ownership of the gateway's data is repaired at boot with
@@ -102,12 +114,12 @@ published image yet, and not yet verified on a built image:
   rollback nor systemd-boot's automatic fallback can bring back an image
   whose gateway ran as root. By design there is no way back to a
   pre-rootless image after that. The floor is configured together with the
-  platform snapshot that supports it.
+  platform snapshot that supports it. Known gap: before the first rootless
+  image is blessed, code running as uid 1000 on it can make its trial boots
+  fail and so trigger systemd-boot's fallback to the previous image.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
-  do (that code is in the platform repo). Until the platform snapshot with
-  sysd's main-PID caller check is vendored, any uid-1000 process can call
-  sysd directly, not only the gateway.
+  do (that code is in the platform repo).
 
 ## Disclosure Policy
 

@@ -322,7 +322,10 @@ duduclaw_persist_run() {
 	fi
 
 	mkdir -p "$DUDUCLAW_PERSIST_MNT"
-	if ! mount -t ext4 "$DUDUCLAW_PERSIST_DATA_DEV" "$DUDUCLAW_PERSIST_MNT" 2>/dev/console; then
+	# nosuid,nodev,noexec (2026-10-15): this module only reads and writes
+	# two small files; nothing on /data may be executed or honoured as a
+	# device or setuid file while it is mounted here.
+	if ! mount -t ext4 -o nosuid,nodev,noexec "$DUDUCLAW_PERSIST_DATA_DEV" "$DUDUCLAW_PERSIST_MNT" 2>/dev/console; then
 		msg "duduclaw-persist: mount of ${DUDUCLAW_PERSIST_DATA_DEV} (plain ext4 path) failed -- skipping machine-id/seed persistence for this boot (fail-open)."
 		return
 	fi

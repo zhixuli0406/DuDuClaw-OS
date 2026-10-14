@@ -76,6 +76,16 @@ pub fn spawn(
 
     let listener = UnixListener::bind(&sock_path)?;
     std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o600))?;
+    // Rootless gateway (2026-10-15): the gateway is uid 1000, not root, so
+    // the socket is shared with the `duduclaw-ipc` group (0660) when that
+    // group exists; owner-only otherwise. The SO_PEERCRED check below still
+    // decides who is Human / Agent / refused. See `crate::ipc_access`.
+    let access = crate::ipc_access::share_path(
+        &sock_path,
+        crate::ipc_access::ipc_group_gid(),
+        crate::ipc_access::SHARED_SOCKET_MODE,
+    )?;
+    log_ipc_access("shell_control", &sock_path, &access);
 
     tracing::info!(
         path = %sock_path.display(),
@@ -90,6 +100,26 @@ pub fn spawn(
         .name("shell-control".into())
         .spawn(move || accept_loop(listener, own_uid, agent_uid, shared, tx))
         .map(|_handle| ())
+}
+
+/// One log line per endpoint saying which access mode was applied, so the
+/// journal answers "why can the gateway (not) connect" directly.
+pub(crate) fn log_ipc_access(what: &str, path: &std::path::Path, access: &crate::ipc_access::Access) {
+    use crate::ipc_access::{Access, IPC_GROUP};
+    match access {
+        Access::Group { gid } => tracing::info!(
+            path = %path.display(), gid = *gid,
+            "{what}: shared with group {IPC_GROUP}"
+        ),
+        Access::Private => tracing::info!(
+            path = %path.display(),
+            "{what}: group {IPC_GROUP} not found — owner-only (a non-root gateway cannot connect)"
+        ),
+        Access::Fallback { gid, reason } => tracing::warn!(
+            path = %path.display(), gid = *gid, reason = %reason,
+            "{what}: could not hand to group {IPC_GROUP} (is this user a member?) — owner-only"
+        ),
+    }
 }
 
 fn accept_loop(

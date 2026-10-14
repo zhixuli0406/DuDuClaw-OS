@@ -211,6 +211,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// removed first (mirrors `listener.rs`'s stale-socket handling), so a new
 /// token is guaranteed correct perms every run regardless of a prior run's
 /// file state.
+///
+/// Rootless gateway (2026-10-15): after the write, the same descriptor is
+/// handed to the `duduclaw-ipc` group and widened to 0640, so the uid-1000
+/// gateway can read the token; it stays 0600 when that group does not exist
+/// or the chown is refused. Only after the secret is already in the file
+/// does the group get read access, and it is the group the OS limits to the
+/// kiosk user and the gateway (see `crate::ipc_access`).
 fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let _ = std::fs::remove_file(path);
@@ -221,6 +228,12 @@ fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
         .mode(0o600)
         .open(path)?;
     f.write_all(token.as_bytes())?;
+    let access = crate::ipc_access::share_file(
+        &f,
+        crate::ipc_access::ipc_group_gid(),
+        crate::ipc_access::SHARED_SECRET_MODE,
+    )?;
+    crate::shell_control::log_ipc_access("codrive token", path, &access);
     Ok(())
 }
 

@@ -52,6 +52,7 @@ mod decor;
 mod grabs;
 mod ime;
 mod input;
+mod ipc_access;
 mod layer_shell;
 mod minimize;
 mod output_prefs;

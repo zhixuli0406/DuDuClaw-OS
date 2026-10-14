@@ -394,6 +394,10 @@ mod codrive_ops;
 mod listener;
 mod protocol;
 
+// Shared with `codrive` (its socket and token use the same group-access
+// helper, `crate::ipc_access`, and should log the outcome the same way).
+pub(crate) use listener::log_ipc_access;
+
 pub(crate) use protocol::{
     ShellControlRequest, ShellControlResponse, ShellIntent, ShellOutputInfo, ShellOutputMode,
     ShellWindowInfo, MAX_PENDING_SHELL_INTENTS, OUTPUT_SCALE_STEPS,

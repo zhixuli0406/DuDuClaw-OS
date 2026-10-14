@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>下載 DuDuClaw OS v0.2.0</title>
-<meta name="description" content="DuDuClaw OS v0.2.0 下載：桌面版與基礎版、安裝器 ISO 與整碟映像、真實 x86-64 硬體與 QEMU 兩種機器目標，共六個資產，每個都附 SHA-256 與 minisign 簽章。">
+<title>下載 DuDuClaw OS v0.3.0</title>
+<meta name="description" content="DuDuClaw OS v0.3.0 下載：桌面版與基礎版、安裝器 ISO 與整碟映像、真實 x86-64 硬體與 QEMU 兩種機器目標，共六個資產，每個都附 SHA-256 與 minisign 簽章。">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="DuDuClaw OS">
 <meta property="og:locale" content="zh_TW">
-<meta property="og:title" content="下載 DuDuClaw OS v0.2.0">
+<meta property="og:title" content="下載 DuDuClaw OS v0.3.0">
 <meta property="og:description" content="六個資產、SHA-256 與 minisign 簽章、燒錄步驟與硬體條件都在同一頁。">
 <meta property="og:image" content="https://os.duduclaw.dudustudio.monster/assets/screens/home-dark.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="下載 DuDuClaw OS v0.2.0">
+<meta name="twitter:title" content="下載 DuDuClaw OS v0.3.0">
 <meta name="twitter:description" content="六個資產、SHA-256 與 minisign 簽章、燒錄步驟與硬體條件都在同一頁。">
 <meta name="twitter:image" content="https://os.duduclaw.dudustudio.monster/assets/screens/home-dark.png">
 
@@ -104,11 +104,11 @@
 
 <div class="release-band">
   <div class="wrap">
-    <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.2.0" rel="noopener">
+    <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.3.0" rel="noopener">
       <span class="dot" aria-hidden="true"></span>
-      <strong>v0.2.0</strong>
-      <span>2026-09-09</span>
-      <span>內嵌平台 1.63.0</span>
+      <strong>v0.3.0</strong>
+      <span>2026-10-14</span>
+      <span>內嵌平台 1.73.1</span>
       <span>Linux 6.18</span>
       <span>pre-GA bring-up</span>
       <svg class="icon icon-sm" aria-hidden="true"><use href="#i-arrow"></use></svg>
@@ -120,11 +120,11 @@
 
   <section class="page-head">
     <div class="wrap">
-      <h1>下載 DuDuClaw OS v0.2.0</h1>
+      <h1>下載 DuDuClaw OS v0.3.0</h1>
       <p>先依試用目的選桌面版或基礎版，再選 QEMU／真機目標與安裝形式。每個資產都附 <code>.sha256</code> 與 <code>.minisig</code>，寫入前請驗證並備份目標硬碟。</p>
       <div class="badge-row">
-        <span class="pill">2026-09-09 發布</span>
-        <span class="pill">內嵌平台 1.63.0</span>
+        <span class="pill">2026-10-14 發布</span>
+        <span class="pill">內嵌平台 1.73.1</span>
         <span class="pill">Linux 6.18</span>
         <span class="pill">Yocto Project 6.0 「wrynose」</span>
         <span class="pill">Apache-2.0</span>
@@ -137,8 +137,8 @@
       <div class="notice">
         <h2>下載前先知道這幾件事</h2>
         <ul>
-          <li><strong>0.2.0 是 bring-up 版本</strong>，1.0.0 才是第一個 GA。拿來當生產環境的唯一一台機器並不合適。</li>
-          <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 只做過設定稽核。這一版發布前跑過 QEMU 開機測試的只有整碟映像，兩種安裝器 ISO 沒有重跑開機；發布後 QEMU 版的桌面版安裝器在 QEMU 開到安裝精靈第一頁，沒有跑完安裝。</li>
+          <li><strong>0.3.0 是 bring-up 版本</strong>，1.0.0 才是第一個 GA。拿來當生產環境的唯一一台機器並不合適。</li>
+          <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。發布前在 QEMU 上，QEMU 版的整碟映像開到登入畫面，兩種安裝器 ISO 開到 live 環境的自動登入；安裝精靈這一版沒有跑。</li>
           <li><strong>開機鏈未啟用 Secure Boot 簽章</strong>，安裝前要在韌體裡關閉 Secure Boot；下載資產另有 minisign 簽章可驗證來源。dm-verity 與 TPM 也還沒啟用。</li>
           <li><strong>目標機需要 UEFI</strong>、支援 AVX2 的 x86-64 CPU 與一顆 SSD。arm64 機器（Apple Silicon、樹莓派）不能用。</li>
         </ul>
@@ -166,7 +166,7 @@
           <p>選桌面版的整碟映像（<code>.wic.zst</code>）。解壓之後 <code>dd</code> 或 <code>bmaptool</code> 寫進目標硬碟，跳過安裝精靈。</p>
         </article>
       </div>
-      <p style="margin-top:20px;color:var(--muted)">機器維度也要選對：<code>duduclaw-qemux86-64</code> 是 QEMU bring-up 目標，v0.2.0 的整碟映像發布前在 QEMU 開機到登入畫面，安裝器 ISO 跑完安裝的 QEMU 紀錄停在 v0.1.0 與 2026-09-06 的開發版，v0.2.0 的桌面版安裝器只在發布後開到安裝精靈第一頁；<code>duduclaw-genericx86-64</code> 是真實硬體目標，目前只做過設定稽核，在 QEMU 上開不起來。</p>
+      <p style="margin-top:20px;color:var(--muted)">機器維度也要選對：<code>duduclaw-qemux86-64</code> 是 QEMU bring-up 目標，v0.3.0 發布前整碟映像在 QEMU 開機到登入畫面、兩種安裝器 ISO 開到 live 環境的自動登入，但安裝精靈沒有跑，跑完安裝的 QEMU 紀錄仍停在 v0.1.0 與 2026-09-06 的開發版；<code>duduclaw-genericx86-64</code> 是真實硬體目標，在 QEMU 上開不起來，這一版只建置、沒有開機。</p>
     </div>
   </section>
 
@@ -219,22 +219,22 @@
             <div class="badge-row">
               <span class="pill pill-accent">桌面版</span>
               <span class="pill">安裝器 ISO</span>
-              <span class="pill pill-warn">真機目標，僅設定稽核</span>
+              <span class="pill pill-warn">真機目標，本版未開機</span>
             </div>
-            <p class="asset-name">duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso</p>
+            <p class="asset-name">duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso</p>
             <p class="asset-sub">
-              <span>1.87 GiB</span>
+              <span>1.88 GiB</span>
               <span>duduclaw-genericx86-64</span>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso.sha256" rel="noopener">.sha256</a>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso.minisig" rel="noopener">.minisig</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso.sha256" rel="noopener">.sha256</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso.minisig" rel="noopener">.minisig</a>
             </p>
           </div>
           <div class="asset-actions">
-            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso" rel="noopener">
+            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               下載 ISO
             </a>
-            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso">
+            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製連結</span>
             </button>
@@ -246,22 +246,22 @@
             <div class="badge-row">
               <span class="pill pill-accent">桌面版</span>
               <span class="pill">安裝器 ISO</span>
-              <span class="pill pill-warn">QEMU 開到安裝精靈，未跑完安裝</span>
+              <span class="pill pill-warn">QEMU 開到 live 環境，未跑安裝</span>
             </div>
-            <p class="asset-name">duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso</p>
+            <p class="asset-name">duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.3.0.iso</p>
             <p class="asset-sub">
-              <span>1.86 GiB</span>
+              <span>1.87 GiB</span>
               <span>duduclaw-qemux86-64</span>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso.sha256" rel="noopener">.sha256</a>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso.minisig" rel="noopener">.minisig</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.3.0.iso.sha256" rel="noopener">.sha256</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.3.0.iso.minisig" rel="noopener">.minisig</a>
             </p>
           </div>
           <div class="asset-actions">
-            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso" rel="noopener">
+            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.3.0.iso" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               下載 ISO
             </a>
-            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.2.0.iso">
+            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.3.0.iso">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製連結</span>
             </button>
@@ -273,22 +273,22 @@
             <div class="badge-row">
               <span class="pill pill-accent">桌面版</span>
               <span class="pill">整碟映像</span>
-              <span class="pill pill-warn">真機目標，僅設定稽核</span>
+              <span class="pill pill-warn">真機目標，本版未開機</span>
             </div>
-            <p class="asset-name">duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst</p>
+            <p class="asset-name">duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst</p>
             <p class="asset-sub">
-              <span>1.61 GiB</span>
+              <span>1.62 GiB</span>
               <span>duduclaw-genericx86-64</span>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst.sha256" rel="noopener">.sha256</a>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst.minisig" rel="noopener">.minisig</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst.sha256" rel="noopener">.sha256</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst.minisig" rel="noopener">.minisig</a>
             </p>
           </div>
           <div class="asset-actions">
-            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst" rel="noopener">
+            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               下載映像
             </a>
-            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst">
+            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製連結</span>
             </button>
@@ -302,20 +302,20 @@
               <span class="pill">整碟映像</span>
               <span class="pill pill-ok">QEMU 開機測試通過</span>
             </div>
-            <p class="asset-name">duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst</p>
+            <p class="asset-name">duduclaw-os-duduclaw-qemux86-64-v0.3.0.wic.zst</p>
             <p class="asset-sub">
               <span>1.61 GiB</span>
               <span>duduclaw-qemux86-64</span>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst.sha256" rel="noopener">.sha256</a>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst.minisig" rel="noopener">.minisig</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-qemux86-64-v0.3.0.wic.zst.sha256" rel="noopener">.sha256</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-qemux86-64-v0.3.0.wic.zst.minisig" rel="noopener">.minisig</a>
             </p>
           </div>
           <div class="asset-actions">
-            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst" rel="noopener">
+            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-qemux86-64-v0.3.0.wic.zst" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               下載映像
             </a>
-            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-duduclaw-qemux86-64-v0.2.0.wic.zst">
+            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-duduclaw-qemux86-64-v0.3.0.wic.zst">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製連結</span>
             </button>
@@ -327,22 +327,22 @@
             <div class="badge-row">
               <span class="pill">基礎版</span>
               <span class="pill">安裝器 ISO</span>
-              <span class="pill pill-warn">真機目標，僅設定稽核</span>
+              <span class="pill pill-warn">真機目標，本版未開機</span>
             </div>
-            <p class="asset-name">duduclaw-os-installer-duduclaw-genericx86-64-v0.2.0.iso</p>
+            <p class="asset-name">duduclaw-os-installer-duduclaw-genericx86-64-v0.3.0.iso</p>
             <p class="asset-sub">
-              <span>574 MiB</span>
+              <span>477 MiB</span>
               <span>duduclaw-genericx86-64</span>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.2.0.iso.sha256" rel="noopener">.sha256</a>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.2.0.iso.minisig" rel="noopener">.minisig</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.3.0.iso.sha256" rel="noopener">.sha256</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.3.0.iso.minisig" rel="noopener">.minisig</a>
             </p>
           </div>
           <div class="asset-actions">
-            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.2.0.iso" rel="noopener">
+            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.3.0.iso" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               下載 ISO
             </a>
-            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.2.0.iso">
+            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-genericx86-64-v0.3.0.iso">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製連結</span>
             </button>
@@ -354,22 +354,22 @@
             <div class="badge-row">
               <span class="pill">基礎版</span>
               <span class="pill">安裝器 ISO</span>
-              <span class="pill pill-warn">QEMU 目標，本版未重跑開機</span>
+              <span class="pill pill-warn">QEMU 開到 live 環境，未跑安裝</span>
             </div>
-            <p class="asset-name">duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso</p>
+            <p class="asset-name">duduclaw-os-installer-duduclaw-qemux86-64-v0.3.0.iso</p>
             <p class="asset-sub">
-              <span>563 MiB</span>
+              <span>467 MiB</span>
               <span>duduclaw-qemux86-64</span>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso.sha256" rel="noopener">.sha256</a>
-              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso.minisig" rel="noopener">.minisig</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.3.0.iso.sha256" rel="noopener">.sha256</a>
+              <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.3.0.iso.minisig" rel="noopener">.minisig</a>
             </p>
           </div>
           <div class="asset-actions">
-            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso" rel="noopener">
+            <a class="btn btn-primary" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.3.0.iso" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               下載 ISO
             </a>
-            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.2.0.iso">
+            <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-duduclaw-qemux86-64-v0.3.0.iso">
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製連結</span>
             </button>
@@ -395,7 +395,7 @@
             </linearGradient>
           </defs>
           <rect class="qr-plate" width="69" height="69" rx="3.2"/>
-          <g class="qr-dots" transform="translate(.5 .5)" stroke-width="0.92"><path d="M14 4h0m1 0h0m1 0h0m4 0h0m3 0h0m1 0h0m4 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m4 0h0m2 0h0m1 0h0m-43 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m4 0h0m1 0h0m2 0h0m1 0h0m6 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m-43 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m2 0h0m2 0h0m2 0h0m4 0h0m2 0h0m4 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m-36 1h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m6 0h0m2 0h0m2 0h0m4 0h0m5 0h0m1 0h0m1 0h0m2 0h0m-44 1h0m1 0h0m1 0h0m4 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m12 0h0m2 0h0m3 0h0m2 0h0m4 0h0m2 0h0m1 0h0m1 0h0m-42 1h0m1 0h0m4 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m6 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m5 0h0m1 0h0m-42 1h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m8 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m-44 1h0m1 0h0m3 0h0m6 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m6 0h0m5 0h0m4 0h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m-50 1h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m8 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m9 0h0m2 0h0m2 0h0m3 0h0m7 0h0m1 0h0m3 0h0m1 0h0m2 0h0m-55 1h0m1 0h0m3 0h0m2 0h0m1 0h0m3 0h0m3 0h0m2 0h0m4 0h0m4 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m6 0h0m2 0h0m1 0h0m3 0h0m1 0h0m-58 1h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m3 0h0m3 0h0m2 0h0m2 0h0m3 0h0m1 0h0m2 0h0m2 0h0m4 0h0m5 0h0m3 0h0m4 0h0m3 0h0m2 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-52 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m5 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m6 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m-57 1h0m1 0h0m4 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m4 0h0m2 0h0m3 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m-60 1h0m1 0h0m2 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m2 0h0m3 0h0m1 0h0m1 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m2 0h0m5 0h0m1 0h0m4 0h0m1 0h0m1 0h0m6 0h0m1 0h0m2 0h0m-56 1h0m3 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m5 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m-59 1h0m1 0h0m2 0h0m1 0h0m3 0h0m4 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m5 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m7 0h0m5 0h0m2 0h0m3 0h0m2 0h0m4 0h0m-59 1h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m5 0h0m3 0h0m2 0h0m3 0h0m3 0h0m3 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m2 0h0m1 0h0m3 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m3 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m6 0h0m2 0h0m-59 1h0m1 0h0m3 0h0m1 0h0m5 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m3 0h0m5 0h0m-60 1h0m4 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m4 0h0m2 0h0m2 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m2 0h0m1 0h0m-60 1h0m3 0h0m3 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m2 0h0m1 0h0m2 0h0m1 0h0m4 0h0m5 0h0m1 0h0m1 0h0m2 0h0m4 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m3 0h0m-56 1h0m3 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m2 0h0m4 0h0m4 0h0m3 0h0m2 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m5 0h0m4 0h0m-58 1h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m4 0h0m1 0h0m2 0h0m2 0h0m5 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m6 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m2 0h0m5 0h0m1 0h0m3 0h0m1 0h0m-57 1h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m3 0h0m6 0h0m3 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m3 0h0m4 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m6 0h0m1 0h0m2 0h0m1 0h0m14 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m2 0h0m2 0h0m6 0h0m2 0h0m-60 1h0m4 0h0m1 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m23 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m2 0h0m-60 1h0m1 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m15 0h0m4 0h0m7 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m-58 1h0m1 0h0m2 0h0m4 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m18 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m4 0h0m-60 1h0m1 0h0m1 0h0m8 0h0m2 0h0m1 0h0m1 0h0m5 0h0m4 0h0m19 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m7 0h0m-58 1h0m2 0h0m7 0h0m3 0h0m2 0h0m2 0h0m1 0h0m1 0h0m4 0h0m1 0h0m15 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m6 0h0m3 0h0m-60 1h0m2 0h0m9 0h0m5 0h0m4 0h0m17 0h0m2 0h0m1 0h0m4 0h0m2 0h0m1 0h0m3 0h0m1 0h0m6 0h0m2 0h0m1 0h0m-60 1h0m2 0h0m1 0h0m6 0h0m1 0h0m4 0h0m1 0h0m3 0h0m1 0h0m2 0h0m16 0h0m1 0h0m1 0h0m1 0h0m5 0h0m1 0h0m4 0h0m7 0h0m2 0h0m-59 1h0m1 0h0m1 0h0m7 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m17 0h0m1 0h0m5 0h0m1 0h0m1 0h0m2 0h0m10 0h0m1 0h0m-58 1h0m8 0h0m1 0h0m1 0h0m8 0h0m17 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m-55 1h0m2 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m4 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m14 0h0m2 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m2 0h0m4 0h0m2 0h0m-55 1h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m14 0h0m3 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m-60 1h0m2 0h0m3 0h0m1 0h0m3 0h0m4 0h0m7 0h0m1 0h0m1 0h0m15 0h0m1 0h0m2 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m-60 1h0m1 0h0m1 0h0m1 0h0m2 0h0m5 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m7 0h0m4 0h0m2 0h0m4 0h0m3 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m-58 1h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m1 0h0m1 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m5 0h0m3 0h0m1 0h0m6 0h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m-58 1h0m1 0h0m2 0h0m1 0h0m4 0h0m5 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m3 0h0m3 0h0m1 0h0m2 0h0m5 0h0m-57 1h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m6 0h0m3 0h0m1 0h0m5 0h0m2 0h0m1 0h0m2 0h0m4 0h0m2 0h0m2 0h0m1 0h0m3 0h0m-54 1h0m3 0h0m1 0h0m2 0h0m4 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m3 0h0m8 0h0m2 0h0m1 0h0m1 0h0m5 0h0m3 0h0m3 0h0m-60 1h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m6 0h0m1 0h0m2 0h0m2 0h0m1 0h0m5 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m3 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m-60 1h0m3 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m4 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-54 1h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m4 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m4 0h0m3 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m3 0h0m8 0h0m3 0h0m1 0h0m2 0h0m-58 1h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m2 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m-59 1h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m5 0h0m1 0h0m1 0h0m1 0h0m6 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m2 0h0m1 0h0m6 0h0m1 0h0m1 0h0m6 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m-52 1h0m2 0h0m1 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m4 0h0m1 0h0m2 0h0m3 0h0m1 0h0m4 0h0m1 0h0m4 0h0m1 0h0m4 0h0m1 0h0m3 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-60 1h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m6 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m3 0h0m2 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m-59 1h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m4 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m5 0h0m4 0h0m1 0h0m-60 1h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m3 0h0m2 0h0m3 0h0m4 0h0m10 0h0m2 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m10 0h0m1 0h0m1 0h0m1 0h0m-52 1h0m1 0h0m1 0h0m2 0h0m1 0h0m5 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m6 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m6 0h0m1 0h0m1 0h0m1 0h0m-52 1h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m2 0h0m1 0h0m6 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m9 0h0m1 0h0m-51 1h0m2 0h0m1 0h0m7 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m6 0h0m7 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m7 0h0m-48 1h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m7 0h0m1 0h0m5 0h0m1 0h0m5 0h0m2 0h0m3 0h0m10 0h0m-52 1h0m3 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m4 0h0m2 0h0m2 0h0m3 0h0m5 0h0m1 0h0m5 0h0m1 0h0m4 0h0m4 0h0m1 0h0m3 0h0m-52 1h0m4 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m8 0h0m3 0h0m1 0h0m5 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m4 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-50 1h0m1 0h0m4 0h0m7 0h0m3 0h0m1 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m5 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m4 0h0m1 0h0m1 0h0m-49 1h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m5 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m4 0h0m1 0h0m1 0h0m1 0h0"/></g>
+          <g class="qr-dots" transform="translate(.5 .5)" stroke-width="0.92"><path d="M14 4h0m1 0h0m1 0h0m4 0h0m3 0h0m1 0h0m4 0h0m1 0h0m3 0h0m2 0h0m1 0h0m6 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m4 0h0m2 0h0m1 0h0m-43 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m2 0h0m6 0h0m1 0h0m2 0h0m1 0h0m4 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m-43 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m1 0h0m2 0h0m4 0h0m2 0h0m4 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m-36 1h0m1 0h0m3 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m6 0h0m2 0h0m2 0h0m4 0h0m5 0h0m1 0h0m1 0h0m2 0h0m-44 1h0m1 0h0m1 0h0m1 0h0m3 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m12 0h0m2 0h0m3 0h0m2 0h0m4 0h0m2 0h0m1 0h0m1 0h0m-42 1h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m6 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m5 0h0m1 0h0m-42 1h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m8 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m-44 1h0m1 0h0m2 0h0m1 0h0m2 0h0m4 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m6 0h0m9 0h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m-50 1h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m6 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m9 0h0m3 0h0m1 0h0m3 0h0m8 0h0m3 0h0m1 0h0m2 0h0m-55 1h0m1 0h0m3 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m2 0h0m4 0h0m4 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m3 0h0m3 0h0m2 0h0m1 0h0m1 0h0m6 0h0m2 0h0m1 0h0m3 0h0m1 0h0m-58 1h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m3 0h0m3 0h0m2 0h0m2 0h0m3 0h0m1 0h0m2 0h0m2 0h0m3 0h0m1 0h0m5 0h0m3 0h0m1 0h0m3 0h0m3 0h0m2 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-52 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m5 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m-57 1h0m5 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m4 0h0m2 0h0m3 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m-60 1h0m1 0h0m4 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m2 0h0m3 0h0m1 0h0m1 0h0m3 0h0m4 0h0m1 0h0m1 0h0m3 0h0m2 0h0m2 0h0m5 0h0m1 0h0m4 0h0m1 0h0m1 0h0m6 0h0m1 0h0m2 0h0m-56 1h0m3 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m5 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m-59 1h0m1 0h0m1 0h0m1 0h0m4 0h0m4 0h0m2 0h0m1 0h0m1 0h0m3 0h0m5 0h0m1 0h0m4 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m7 0h0m5 0h0m2 0h0m3 0h0m2 0h0m4 0h0m-59 1h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m4 0h0m4 0h0m2 0h0m2 0h0m4 0h0m3 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m2 0h0m1 0h0m3 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m6 0h0m2 0h0m-59 1h0m1 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m3 0h0m5 0h0m-60 1h0m4 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m3 0h0m-60 1h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m2 0h0m1 0h0m2 0h0m1 0h0m4 0h0m5 0h0m1 0h0m1 0h0m2 0h0m4 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m3 0h0m-56 1h0m3 0h0m4 0h0m2 0h0m1 0h0m1 0h0m1 0h0m5 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m2 0h0m3 0h0m3 0h0m2 0h0m3 0h0m2 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m5 0h0m4 0h0m-58 1h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m4 0h0m1 0h0m2 0h0m2 0h0m5 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m5 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m2 0h0m5 0h0m1 0h0m3 0h0m1 0h0m-57 1h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m1 0h0m3 0h0m6 0h0m3 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m3 0h0m4 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m2 0h0m6 0h0m1 0h0m2 0h0m1 0h0m14 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m5 0h0m2 0h0m2 0h0m6 0h0m2 0h0m-60 1h0m4 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m23 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m2 0h0m-57 1h0m1 0h0m2 0h0m2 0h0m2 0h0m4 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m15 0h0m4 0h0m7 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m-58 1h0m1 0h0m2 0h0m4 0h0m1 0h0m4 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m18 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m4 0h0m-59 1h0m1 0h0m8 0h0m2 0h0m1 0h0m1 0h0m7 0h0m2 0h0m19 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m7 0h0m-58 1h0m2 0h0m7 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m15 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m6 0h0m3 0h0m-60 1h0m2 0h0m9 0h0m5 0h0m3 0h0m18 0h0m2 0h0m1 0h0m4 0h0m2 0h0m1 0h0m3 0h0m1 0h0m6 0h0m2 0h0m1 0h0m-60 1h0m2 0h0m1 0h0m6 0h0m1 0h0m4 0h0m1 0h0m3 0h0m1 0h0m2 0h0m16 0h0m1 0h0m1 0h0m1 0h0m5 0h0m1 0h0m4 0h0m7 0h0m2 0h0m-59 1h0m1 0h0m1 0h0m7 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m15 0h0m2 0h0m1 0h0m5 0h0m1 0h0m1 0h0m2 0h0m10 0h0m1 0h0m-58 1h0m8 0h0m1 0h0m1 0h0m8 0h0m17 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m-55 1h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m4 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m14 0h0m2 0h0m1 0h0m2 0h0m1 0h0m3 0h0m2 0h0m1 0h0m2 0h0m4 0h0m2 0h0m-55 1h0m2 0h0m3 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m14 0h0m3 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m-60 1h0m2 0h0m3 0h0m1 0h0m3 0h0m4 0h0m2 0h0m1 0h0m4 0h0m1 0h0m1 0h0m15 0h0m1 0h0m2 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m-60 1h0m1 0h0m1 0h0m1 0h0m2 0h0m5 0h0m1 0h0m3 0h0m1 0h0m4 0h0m2 0h0m1 0h0m1 0h0m3 0h0m3 0h0m5 0h0m2 0h0m4 0h0m3 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m-58 1h0m2 0h0m2 0h0m2 0h0m3 0h0m1 0h0m3 0h0m1 0h0m3 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m5 0h0m3 0h0m1 0h0m6 0h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m-58 1h0m1 0h0m2 0h0m1 0h0m4 0h0m1 0h0m4 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m1 0h0m1 0h0m3 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m3 0h0m2 0h0m1 0h0m1 0h0m2 0h0m3 0h0m3 0h0m1 0h0m2 0h0m5 0h0m-57 1h0m3 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m1 0h0m6 0h0m3 0h0m1 0h0m5 0h0m2 0h0m1 0h0m2 0h0m4 0h0m2 0h0m2 0h0m1 0h0m3 0h0m-54 1h0m1 0h0m2 0h0m1 0h0m1 0h0m5 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m3 0h0m8 0h0m2 0h0m1 0h0m1 0h0m5 0h0m3 0h0m3 0h0m-60 1h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m6 0h0m1 0h0m2 0h0m2 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m3 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m-60 1h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m4 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-54 1h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m4 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m4 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m3 0h0m8 0h0m3 0h0m1 0h0m2 0h0m-58 1h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m1 0h0m4 0h0m2 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m2 0h0m4 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m-57 1h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m3 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m2 0h0m2 0h0m1 0h0m4 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m-56 1h0m1 0h0m5 0h0m1 0h0m1 0h0m1 0h0m6 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m2 0h0m1 0h0m6 0h0m1 0h0m1 0h0m6 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m-58 1h0m1 0h0m5 0h0m1 0h0m1 0h0m1 0h0m4 0h0m1 0h0m2 0h0m1 0h0m4 0h0m3 0h0m3 0h0m1 0h0m4 0h0m1 0h0m4 0h0m1 0h0m4 0h0m1 0h0m3 0h0m2 0h0m3 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-59 1h0m2 0h0m1 0h0m1 0h0m2 0h0m6 0h0m3 0h0m1 0h0m3 0h0m4 0h0m2 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m3 0h0m2 0h0m3 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m-58 1h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m3 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m-59 1h0m1 0h0m1 0h0m2 0h0m3 0h0m2 0h0m4 0h0m2 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m3 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m5 0h0m4 0h0m1 0h0m-60 1h0m1 0h0m1 0h0m1 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m3 0h0m3 0h0m2 0h0m3 0h0m4 0h0m10 0h0m2 0h0m1 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m10 0h0m1 0h0m1 0h0m1 0h0m-52 1h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m3 0h0m6 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m3 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m6 0h0m1 0h0m1 0h0m1 0h0m-52 1h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m2 0h0m2 0h0m2 0h0m1 0h0m2 0h0m2 0h0m1 0h0m6 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m9 0h0m1 0h0m-51 1h0m2 0h0m1 0h0m7 0h0m1 0h0m2 0h0m2 0h0m2 0h0m1 0h0m6 0h0m7 0h0m2 0h0m1 0h0m2 0h0m1 0h0m2 0h0m2 0h0m7 0h0m-48 1h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m3 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m7 0h0m1 0h0m5 0h0m1 0h0m5 0h0m2 0h0m3 0h0m10 0h0m-52 1h0m3 0h0m2 0h0m2 0h0m2 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m1 0h0m4 0h0m4 0h0m3 0h0m5 0h0m1 0h0m5 0h0m1 0h0m4 0h0m4 0h0m1 0h0m3 0h0m-52 1h0m4 0h0m2 0h0m2 0h0m1 0h0m2 0h0m2 0h0m5 0h0m3 0h0m2 0h0m1 0h0m1 0h0m5 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m1 0h0m4 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m-50 1h0m1 0h0m4 0h0m4 0h0m3 0h0m3 0h0m2 0h0m4 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m5 0h0m1 0h0m1 0h0m2 0h0m1 0h0m3 0h0m1 0h0m4 0h0m1 0h0m1 0h0m-49 1h0m1 0h0m2 0h0m1 0h0m2 0h0m6 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m4 0h0m1 0h0m2 0h0m1 0h0m2 0h0m4 0h0m1 0h0m1 0h0m2 0h0m1 0h0m1 0h0m1 0h0m1 0h0m2 0h0m2 0h0m4 0h0m1 0h0m1 0h0m1 0h0"/></g>
           <g class="qr-finder"><path d="M59.500,4.000h4.000a1.500,1.500 0 0 1 1.500,1.500v4.000a1.500,1.500 0 0 1 -1.500,1.500h-4.000a1.500,1.500 0 0 1 -1.500,-1.500v-4.000a1.500,1.500 0 0 1 1.500,-1.500zM60.000,5.000h3.000a1.000,1.000 0 0 1 1.000,1.000v3.000a1.000,1.000 0 0 1 -1.000,1.000h-3.000a1.000,1.000 0 0 1 -1.000,-1.000v-3.000a1.000,1.000 0 0 1 1.000,-1.000z" fill-rule="evenodd"/><path d="M60.600,6.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z"/><path d="M5.500,58.000h4.000a1.500,1.500 0 0 1 1.500,1.500v4.000a1.500,1.500 0 0 1 -1.500,1.500h-4.000a1.500,1.500 0 0 1 -1.500,-1.500v-4.000a1.500,1.500 0 0 1 1.500,-1.500zM6.000,59.000h3.000a1.000,1.000 0 0 1 1.000,1.000v3.000a1.000,1.000 0 0 1 -1.000,1.000h-3.000a1.000,1.000 0 0 1 -1.000,-1.000v-3.000a1.000,1.000 0 0 1 1.000,-1.000z" fill-rule="evenodd"/><path d="M6.600,60.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z"/><path d="M5.500,4.000h4.000a1.500,1.500 0 0 1 1.500,1.500v4.000a1.500,1.500 0 0 1 -1.500,1.500h-4.000a1.500,1.500 0 0 1 -1.500,-1.500v-4.000a1.500,1.500 0 0 1 1.500,-1.500zM6.000,5.000h3.000a1.000,1.000 0 0 1 1.000,1.000v3.000a1.000,1.000 0 0 1 -1.000,1.000h-3.000a1.000,1.000 0 0 1 -1.000,-1.000v-3.000a1.000,1.000 0 0 1 1.000,-1.000z" fill-rule="evenodd"/><path d="M6.600,6.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z"/></g>
           <g class="qr-align"><path d="M32.900,8.000h3.200a0.900,0.900 0 0 1 0.900,0.900v3.200a0.900,0.900 0 0 1 -0.900,0.900h-3.200a0.900,0.900 0 0 1 -0.900,-0.900v-3.200a0.900,0.900 0 0 1 0.900,-0.900zM33.600,9.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z" fill-rule="evenodd"/><circle cx="34.50" cy="10.50" r="0.62"/><path d="M8.900,32.000h3.200a0.900,0.900 0 0 1 0.900,0.900v3.200a0.900,0.900 0 0 1 -0.900,0.900h-3.200a0.900,0.900 0 0 1 -0.900,-0.900v-3.200a0.900,0.900 0 0 1 0.900,-0.900zM9.600,33.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z" fill-rule="evenodd"/><circle cx="10.50" cy="34.50" r="0.62"/><path d="M32.900,32.000h3.200a0.900,0.900 0 0 1 0.900,0.900v3.200a0.900,0.900 0 0 1 -0.900,0.900h-3.200a0.900,0.900 0 0 1 -0.900,-0.900v-3.200a0.900,0.900 0 0 1 0.900,-0.900zM33.600,33.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z" fill-rule="evenodd"/><circle cx="34.50" cy="34.50" r="0.62"/><path d="M56.900,32.000h3.200a0.900,0.900 0 0 1 0.900,0.900v3.200a0.900,0.900 0 0 1 -0.900,0.900h-3.200a0.900,0.900 0 0 1 -0.900,-0.900v-3.200a0.900,0.900 0 0 1 0.900,-0.900zM57.600,33.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z" fill-rule="evenodd"/><circle cx="58.50" cy="34.50" r="0.62"/><path d="M32.900,56.000h3.200a0.900,0.900 0 0 1 0.900,0.900v3.200a0.900,0.900 0 0 1 -0.900,0.900h-3.200a0.900,0.900 0 0 1 -0.900,-0.900v-3.200a0.900,0.900 0 0 1 0.900,-0.900zM33.600,57.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z" fill-rule="evenodd"/><circle cx="34.50" cy="58.50" r="0.62"/><path d="M56.900,56.000h3.200a0.900,0.900 0 0 1 0.900,0.900v3.200a0.900,0.900 0 0 1 -0.900,0.900h-3.200a0.900,0.900 0 0 1 -0.900,-0.900v-3.200a0.900,0.900 0 0 1 0.900,-0.900zM57.600,57.000h1.800a0.600,0.600 0 0 1 0.600,0.600v1.800a0.600,0.600 0 0 1 -0.600,0.600h-1.800a0.600,0.600 0 0 1 -0.600,-0.600v-1.800a0.600,0.600 0 0 1 0.600,-0.600z" fill-rule="evenodd"/><circle cx="58.50" cy="58.50" r="0.62"/></g>
           <svg class="qr-mark" x="27.45" y="27.45" width="14.10" height="14.10" viewBox="0 0 100 100" aria-hidden="true">
@@ -415,9 +415,9 @@
         </div>
         <div class="qr-body">
           <h3 id="qr-title">用手機帶走下載連結</h3>
-          <p>這張碼是預設推薦資產的直連網址：桌面版安裝器 ISO、真實 x86-64 硬體目標。手機掃了可以先存起來，再到要燒錄隨身碟的那台電腦上打開；映像檔 1.87 GiB，不建議直接下載到手機。</p>
-          <p class="qr-file">duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso</p>
-          <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.2.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso">
+          <p>這張碼是預設推薦資產的直連網址：桌面版安裝器 ISO、真實 x86-64 硬體目標。手機掃了可以先存起來，再到要燒錄隨身碟的那台電腦上打開；映像檔 1.88 GiB，不建議直接下載到手機。</p>
+          <p class="qr-file">duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso</p>
+          <button class="btn btn-ghost btn-sm needs-js-inline" type="button" data-copy-url="https://github.com/zhixuli0406/DuDuClaw-OS/releases/download/v0.3.0/duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
             <span data-copy-label>複製連結</span>
           </button>
@@ -426,7 +426,7 @@
 
       <p class="empty-note" id="asset-empty" hidden>目前的篩選沒有對應的資產。基礎版只提供安裝器 ISO，整碟映像只有桌面版才有。</p>
 
-      <p style="margin-top:20px;color:var(--muted);font-size:14.5px">兩個 <code>.wic.zst</code> 另外附了 <code>.manifest.json</code>，內容是建置溯源資訊，不屬於信任鏈。全部資產列在 <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.2.0" rel="noopener">v0.2.0 Release 頁</a>。</p>
+      <p style="margin-top:20px;color:var(--muted);font-size:14.5px">兩個 <code>.wic.zst</code> 另外附了 <code>.manifest.json</code>，內容是建置溯源資訊，不屬於信任鏈。全部資產列在 <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.3.0" rel="noopener">v0.3.0 Release 頁</a>。</p>
     </div>
   </section>
 
@@ -445,7 +445,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
           minisign 公鑰
         </h3>
-        <p style="color:var(--muted);margin:8px 0 14px">六個資產同一把公鑰，v0.1.0 也是這一把。</p>
+        <p style="color:var(--muted);margin:8px 0 14px">六個資產同一把公鑰，v0.1.0 與 v0.2.0 也是這一把。</p>
         <div class="code key-block">
           <button class="copy-btn" type="button" data-copy="minisign-key">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
@@ -500,7 +500,7 @@
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製</span>
             </button>
-            <pre><code id="cmd-dd-iso">dd if=duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.2.0.iso \
+            <pre><code id="cmd-dd-iso">dd if=duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.3.0.iso \
    of=/dev/sdX bs=4M conv=fsync status=progress</code></pre>
           </div>
         </div>
@@ -512,8 +512,8 @@
               <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
               <span data-copy-label>複製</span>
             </button>
-            <pre><code id="cmd-dd-wic">zstd -d duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic.zst
-dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
+            <pre><code id="cmd-dd-wic">zstd -d duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic.zst
+dd if=duduclaw-os-duduclaw-genericx86-64-v0.3.0.wic \
    of=/dev/sdX bs=4M conv=fsync status=progress</code></pre>
           </div>
         </div>
@@ -521,7 +521,7 @@ dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
 
       <ol class="steps-list" style="margin-top:24px">
         <li><strong>zstd 視窗參數</strong>：映像用 <code>--long=27</code> 壓縮。新版 zstd 解壓不必加參數；舊版如果提示視窗不足，解壓時補上 <code>--long=27</code>。</li>
-        <li><strong>目標機開機設定</strong>：韌體切到 UEFI 開機，並且關閉 Secure Boot。v0.2.0 的開機鏈未啟用 Secure Boot 簽章，下載資產仍可驗 minisign 簽章。</li>
+        <li><strong>目標機開機設定</strong>：韌體切到 UEFI 開機，並且關閉 Secure Boot。v0.3.0 的開機鏈未啟用 Secure Boot 簽章，下載資產仍可驗 minisign 簽章。</li>
         <li><strong>安裝流程</strong>：ISO 開機後是圖形安裝精靈，選碟、確認、看寫入進度、重開。第一次開機接著跑首次設定精靈。</li>
       </ol>
     </div>
@@ -566,9 +566,9 @@ dd if=duduclaw-os-duduclaw-genericx86-64-v0.2.0.wic \
       <div class="grid grid-2">
         <article class="card">
           <h3>要回舊版</h3>
-          <p style="margin:8px 0 16px">v0.1.0（2026-09-04 發布，內嵌平台 1.62.0）仍然留在 Releases，資產與驗簽方式相同，重新下載安裝即可。</p>
-          <a class="btn btn-ghost" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.1.0" rel="noopener">
-            v0.1.0 Release
+          <p style="margin:8px 0 16px">v0.2.0（2026-09-09 發布，內嵌平台 1.63.0）與 v0.1.0 仍然留在 Releases，資產與驗簽方式相同，重新下載安裝即可。</p>
+          <a class="btn btn-ghost" href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.2.0" rel="noopener">
+            v0.2.0 Release
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"></use></svg>
           </a>
         </article>

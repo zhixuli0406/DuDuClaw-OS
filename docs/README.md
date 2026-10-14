@@ -1,6 +1,6 @@
 # DuDuClaw OS Documentation
 
-> Public documentation index for DuDuClaw OS (v0.2.0, bring-up). Every
+> Public documentation index for DuDuClaw OS (v0.3.0, bring-up, embedding platform v1.73.1). Every
 > document in this repo is filed by the same TYPE × CONFIDENTIALITY rule as
 > the DuDuClaw platform repo — see [`../CLAUDE.md`](../CLAUDE.md) →
 > "Documentation Classification & Placement".

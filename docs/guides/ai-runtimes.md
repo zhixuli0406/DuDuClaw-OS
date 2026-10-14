@@ -6,10 +6,19 @@ be handed an API key and put to work without installing anything: `claude`,
 `opencode` and `vibe` are all on `PATH` at first boot, and `llama-server`
 is there for running a model locally with no network at all.
 
-The list matches the platform release the image embeds (1.63.0 in v0.2.0).
-The platform deprecated its Gemini CLI runtime in v1.67.0 and plans to
-remove it in v1.71.0; the Gemini API provider is not affected. `gemini`
-stays in this image until the OS syncs to a platform release without that
+The payload is the bundle generated on 2026-09-05
+(`DUDUCLAW_AI_RUNTIMES_DATE = "20260905"` in the recipe). v0.2.0 and v0.3.0
+ship the same bundle, so the CLI versions below did not change when v0.3.0
+moved the embedded platform from 1.63.0 to 1.73.1. Every bundled CLI is a
+runtime in platform 1.73.1's runtime catalog
+(`crates/duduclaw-core/src/runtime_catalog.rs` in the platform repo). The
+catalog also lists Kiro CLI and Google Antigravity, which the image does
+not bundle (see [Not installed](#not-installed)).
+
+The platform deprecated its Gemini CLI runtime in v1.67.0. Platform 1.73.1
+still carries it and has moved the removal to v1.74.0 (Antigravity is the
+named replacement); the Gemini API provider is not affected. `gemini` stays
+in this image until the OS syncs to a platform release without that
 runtime.
 
 This guide covers where that payload comes from, how to refresh it, where
@@ -19,19 +28,23 @@ For the product-side view of multi-runtime task delegation, see
 
 ## What is installed
 
-| Command | Package | Source | Licence |
-|---------|---------|--------|---------|
-| `claude` | `@anthropic-ai/claude-code` | npm | Proprietary (Anthropic Commercial ToS) |
-| `codex` | `@openai/codex` | npm | Apache-2.0 |
-| `gemini` | `@google/gemini-cli` | npm | Apache-2.0 |
-| `qwen` | `@qwen-code/qwen-code` | npm | Apache-2.0 (by the LICENSE file in the package; its npm metadata publishes no `license` field) |
-| `kimi` | `@moonshot-ai/kimi-code` | npm | MIT |
-| `copilot` | `@github/copilot` | npm | Proprietary (GitHub Copilot terms) |
-| `grok` | Grok Build | `x.ai/cli` | Proprietary (xAI ToS) |
-| `agent` / `cursor-agent` | Cursor agent | `downloads.cursor.com` | Proprietary (Anysphere ToS) |
-| `opencode` | OpenCode | GitHub releases | MIT |
-| `vibe` | `mistral-vibe` | PyPI | Apache-2.0 |
-| `llama-server`, `llama-cli` | llama.cpp v0.4.0 | GitHub, built from source | MIT |
+| Command | Package | Version (2026-09-05 bundle) | Source | Licence |
+|---------|---------|---------|--------|---------|
+| `claude` | `@anthropic-ai/claude-code` | 2.1.261 | npm | Proprietary (Anthropic Commercial ToS) |
+| `codex` | `@openai/codex` | 0.153.4 | npm | Apache-2.0 |
+| `gemini` | `@google/gemini-cli` | 0.58.0 | npm | Apache-2.0 |
+| `qwen` | `@qwen-code/qwen-code` | 0.23.0 | npm | Apache-2.0 (by the LICENSE file in the package; its npm metadata publishes no `license` field) |
+| `kimi` | `@moonshot-ai/kimi-code` | 0.41.0 | npm | MIT |
+| `copilot` | `@github/copilot` | 1.0.83 | npm | Proprietary (GitHub Copilot terms) |
+| `grok` | Grok Build | 1.0.13 | `x.ai/cli` | Proprietary (xAI ToS) |
+| `agent` / `cursor-agent` | Cursor agent | build 2026.09.02-c22c1a3 | `downloads.cursor.com` | Proprietary (Anysphere ToS) |
+| `opencode` | OpenCode | 1.18.29 | GitHub releases | MIT |
+| `vibe` | `mistral-vibe` | 2.25.0 | PyPI | Apache-2.0 |
+| `llama-server`, `llama-cli` | llama.cpp | recipe `llama-cpp_0.4.0.bb` | GitHub, built from source | MIT |
+
+The versions are read from the bundle's own `MANIFEST.txt` (Grok resolves
+its stable channel and Cursor its current build at generation time, so
+neither has a pin in the generator).
 
 Everything except llama.cpp lives under `/opt/duduclaw/runtimes/`, and every
 `/usr/bin` name above is a symlink to one dispatcher,
@@ -44,6 +57,15 @@ component, plus a `skipped:` line for anything that is not there.
 `/opt/duduclaw/runtimes/LICENSES/` holds each upstream's own licence text.
 
 ### Not installed
+
+**Google Antigravity (`agy`).** The platform's catalog lists it (already in
+the 1.63.0 snapshot v0.2.0 embedded, and the named replacement for the
+deprecated Gemini CLI in 1.73.1), but the 2026-09-05 bundle does not contain
+it. The catalog installs it with the vendor script
+(`https://antigravity.google/cli/install.sh`), which drops `agy` in
+`$HOME/.local/bin`; on this image that is `/data/duduclaw/.local/bin`, a path
+the gateway probes. Installing it on a running v0.3.0 image has not been
+tested.
 
 **Kiro CLI.** Not in the image, and there is deliberately no `/usr/bin/
 kiro-cli` stub: `duduclaw` decides "installed" by whether the binary

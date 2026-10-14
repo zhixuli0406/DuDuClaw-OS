@@ -8,7 +8,7 @@
 ```
 website/
 ├── index.html              首頁
-├── download.html           v0.2.0 下載頁（六個資產、驗簽、燒錄）
+├── download.html           v0.3.0 下載頁（六個資產、驗簽、燒錄）
 ├── .nojekyll               讓 GitHub Pages 原樣輸出，不跑 Jekyll
 ├── README.md               這份說明
 ├── lab/cat3d.html          品牌剪影 3D 貓的驗收頁（左＝SVG、中＝3D、右＝疊圖比對）
@@ -46,6 +46,7 @@ website/
 QEMU 版整碟映像的首次開機（示範帳號「Demo」、不設定任何 AI 授權、套用 Express 板模；深色那張
 是在精靈的外觀步驟選暗色後重開一次拍的）。畫面用 QMP `screendump` 取得，滑鼠與鍵盤用 QMP
 `input-send-event`／`send-key` 送；重拍前先用 Release 上的 `.sha256` 與 `.minisig` 核對映像。
+v0.3.0（2026-10-14 發布）還沒重拍，首頁與 alt 文字照實標成 v0.2.0 的畫面。
 手機版裁切固定取 1280×800 原圖的 `(320, 130)–(960, 800)`。WebP 用 `cwebp -q 82 -m 6`，
 AVIF 用 `avifenc -q 60 -s 4`。
 
@@ -133,17 +134,24 @@ python3 -m http.server 8000
 **3. `index.html`**
 
 - `.release-band` 那一列（版本、日期、平台版、kernel）
-- Hero 與 CTA 兩顆「下載 v0.2.0」按鈕的文字
+- Hero 與 CTA 兩顆「下載 v<版本>」按鈕的文字
 - 誠實狀態卡：驗證範圍、Secure Boot、GA 進度如果有變就一起改
 - 信任鏈區塊：某項保護從「已接好、未啟用」變成「出貨即有」時要搬過去
 
 **4. 全站搜一次舊版本號**
 
 ```bash
-grep -rn "v0\.2\.0" website/
+grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 ```
 
-確認沒有漏掉的字串，接著在本機起站點過一次六個下載連結。
+確認沒有漏掉的字串（刻意保留的舊版字樣：截圖說明與 alt、回舊版卡片、公鑰「舊版也是這一把」），接著在本機起站點過一次六個下載連結。
+
+**5. 下載頁的 QR code**
+
+`download.html` 的 QR code 編的是預設推薦資產（桌面版安裝器 ISO、真機目標）的直連網址，換版一定要重產。
+格式：version 11、錯誤修正 H、segno 自動選 mask，`qr-dots` 只畫一般模組（跳過三個定位圖案、六個對齊圖案與
+中間 `[28,40]×[28,40]` 的貓 logo 區，座標含 4 格 quiet zone），每個點寫成 `M<x> <y>h0`／`m<dx> <dy>h0`。
+用 segno 1.6.6 照這個規則重產 v0.2.0 的網址，結果與原本的 path 逐位元組相同，v0.3.0 就是照同一規則產的。
 
 ## 首頁資訊路徑（2026-10-11）
 
@@ -153,7 +161,7 @@ grep -rn "v0\.2\.0" website/
 
 - 保留原有 MDS 藍、深淺主題、字體、貓與 WebGL 互動；參考網站只用於資訊結構。
 - 移除「第一」與一般 Linux 的概括比較，將重複技術說明合併為核心能力；深入細節導向文件。
-- 工具名稱列依 `docs/guides/ai-runtimes.md` 與 `duduclaw-ai-runtimes.bb` 的 v0.2.0 打包內容，
+- 工具名稱列依 `docs/guides/ai-runtimes.md` 與 `duduclaw-ai-runtimes.bb` 的打包內容（v0.2.0 與 v0.3.0 是同一份 2026-09-05 的包），
   展示 Claude Code、Codex、Grok Build 與 Qwen Code；使用純文字、不稱合作夥伴或供應商背書，
   並提醒需自行授權，以及映像版本與現今服務狀態可能不同。
 - 六張圖集仍是 v0.2.0 在 QEMU 的實拍；交辦／接手圖示明確標為示意，沒有宣稱模型已完成任務。

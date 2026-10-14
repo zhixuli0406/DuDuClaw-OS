@@ -66,6 +66,7 @@ User-facing OS docs, authored in the platform repo and published on the docs sit
 | Document | Description |
 |----------|-------------|
 | [../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md](../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md) | Archived layer README from the Y1–Y9 bring-up waves: why three repos / why kas, UKI chain verification, disk strategy, fcitx5 dependency closure, `/data` provisioning. Dated; superseded by the CHANGELOG and the current layer README |
+| [../wiki/impl/gcp-builder-2026-10.md](../wiki/impl/gcp-builder-2026-10.md) | GCP Linux builder (n2-standard-16) setup, the v0.3.0 bake on it (timeline, peaks, pitfalls), signing kept on the maintainer's Mac via `package --no-sign` / `sign`, cost estimate, teardown |
 | [../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md](../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md) | Real-hardware acceptance checklist written for the Y6 burn package (N305 / 8845HS). Its premises predate v0.1.0 |
 | [../wiki/reports/bring-up-evidence/](../wiki/reports/bring-up-evidence/README.md) | QEMU boot and bitbake transcripts behind the bring-up "verified" claims |
 | [../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md](../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md) | Desktop-edition installer ISO walked end to end under QEMU on a Mac host (installer → first boot → lock screen); PASS table, defects found, demo video provenance |

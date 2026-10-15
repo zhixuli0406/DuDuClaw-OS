@@ -219,7 +219,37 @@
 DUDUCLAW_PERSIST_DATA_PARTUUID="@DUDUCLAW_AB_DATA_PARTUUID@"
 DUDUCLAW_PERSIST_DATA_DEV="/dev/disk/by-partuuid/${DUDUCLAW_PERSIST_DATA_PARTUUID}"
 DUDUCLAW_PERSIST_MNT="/mnt/duduclaw-persist"
-DUDUCLAW_PERSIST_SYSTEM_DIR="${DUDUCLAW_PERSIST_MNT}/duduclaw/system"
+# 2026-10-15 (rootless gateway): /data/system, not /data/duduclaw/system.
+# The gateway home now belongs to uid 1000 (duduclaw-home-owner.service),
+# and the machine-id file below is bind-mounted onto /etc/machine-id; left
+# in the home, any AI employee could rewrite the next boot's machine
+# identity. /data/system is root-owned. The old location is migrated once
+# (duduclaw_persist_migrate_legacy below) while it is still root's: this
+# module runs before anything in the main system on that first boot.
+DUDUCLAW_PERSIST_SYSTEM_DIR="${DUDUCLAW_PERSIST_MNT}/system"
+DUDUCLAW_PERSIST_LEGACY_DIR="${DUDUCLAW_PERSIST_MNT}/duduclaw/system"
+
+# Move one legacy file to the new directory if the new one has none yet.
+# Plain files only: a symlink is left alone (never followed). Same
+# filesystem, so mv is a rename. Failure is logged and ignored (fail-open,
+# same as the rest of this module: worst case is a fresh id or seed).
+duduclaw_persist_migrate_legacy() {
+	name=$1
+	old="${DUDUCLAW_PERSIST_LEGACY_DIR}/${name}"
+	new="${DUDUCLAW_PERSIST_SYSTEM_DIR}/${name}"
+	[ -e "$new" ] && return 0
+	[ -L "$old" ] && return 0
+	[ -f "$old" ] || return 0
+	# Only root's own file: once the home belongs to uid 1000, a file
+	# found here could have been planted by it. If stat is unavailable
+	# the comparison fails and nothing moves (a fresh id/seed is safe).
+	[ "$(stat -c %u "$old" 2>/dev/null)" = 0 ] || return 0
+	if mv "$old" "$new" 2>/dev/console; then
+		msg "duduclaw-persist: moved legacy ${name} to ${new}."
+	else
+		msg "duduclaw-persist: could not move legacy ${name} (non-fatal)."
+	fi
+}
 
 duduclaw_persist_enabled() {
 	# Gate at RUNTIME on the same `ro` cmdline token
@@ -292,10 +322,15 @@ duduclaw_persist_run() {
 	fi
 
 	mkdir -p "$DUDUCLAW_PERSIST_MNT"
-	if ! mount -t ext4 "$DUDUCLAW_PERSIST_DATA_DEV" "$DUDUCLAW_PERSIST_MNT" 2>/dev/console; then
+	# nosuid,nodev,noexec (2026-10-15): this module only reads and writes
+	# two small files; nothing on /data may be executed or honoured as a
+	# device or setuid file while it is mounted here.
+	if ! mount -t ext4 -o nosuid,nodev,noexec "$DUDUCLAW_PERSIST_DATA_DEV" "$DUDUCLAW_PERSIST_MNT" 2>/dev/console; then
 		msg "duduclaw-persist: mount of ${DUDUCLAW_PERSIST_DATA_DEV} (plain ext4 path) failed -- skipping machine-id/seed persistence for this boot (fail-open)."
 		return
 	fi
+	# (2026-10-15: the directory is /data/system now; the paragraph below
+	# predates that move and is otherwise unchanged.)
 	# Round-1 first-boot case: /data/duduclaw/system does not exist yet at
 	# all (recipes-duduclaw/duduclaw-firstboot/files/
 	# duduclaw-firstboot-provision.sh is what normally creates it, but
@@ -303,6 +338,8 @@ duduclaw_persist_run() {
 	# time this module ever executes). Idempotent no-op on every later
 	# boot once that directory already exists.
 	mkdir -p "$DUDUCLAW_PERSIST_SYSTEM_DIR"
+	duduclaw_persist_migrate_legacy machine-id
+	duduclaw_persist_migrate_legacy random-seed
 
 	# --- machine-id --------------------------------------------------
 	mid_file="${DUDUCLAW_PERSIST_SYSTEM_DIR}/machine-id"

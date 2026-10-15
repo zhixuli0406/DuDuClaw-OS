@@ -1,0 +1,31 @@
+# Remove pre-rootless boot entries once the running image has proved it
+# boots (rootless gateway, 2026-10-15). See
+# /usr/libexec/duduclaw/rollback-prune.sh for what is deleted and why, and
+# conf/distro/include/duduclaw-rollback-floor.inc (layer source) for the
+# trade-off: after this runs there is no way back to a root-gateway image.
+#
+# Ordering: boot-complete.target is reached only when every unit
+# RequiredBy= it succeeded, which on this image means
+# duduclaw-health-check.service (gateway /healthz + sysd liveness).
+# systemd-bless-boot.service marks the entry good after that target; this
+# unit runs after both, so it never deletes the fallback while the running
+# entry is still on probation. If the health gate fails, boot-complete.target
+# is never reached and this unit does not run.
+#
+# ConditionPathExists=: the floor file is installed only when the build
+# sets DUDUCLAW_MIN_ROLLBACK_VERSION; until the platform snapshot catches
+# up there is no file and the unit is skipped.
+[Unit]
+Description=DuDuClaw OS: delete boot entries older than the rollback floor
+ConditionPathExists=/usr/lib/duduclaw/min-rollback-version
+Requires=boot-complete.target
+After=boot-complete.target systemd-bless-boot.service
+RequiresMountsFor=/boot
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/duduclaw/rollback-prune.sh
+
+[Install]
+WantedBy=multi-user.target

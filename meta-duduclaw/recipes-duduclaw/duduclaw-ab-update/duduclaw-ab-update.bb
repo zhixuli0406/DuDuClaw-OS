@@ -28,6 +28,9 @@ SRC_URI = " \
     file://duduclaw-health-check.service \
     file://duduclaw-health-check.sh \
     file://10-ab-home.conf \
+    file://duduclaw-rollback-prune.service \
+    file://duduclaw-rollback-prune.sh \
+    file://duduclaw-updates.conf \
 "
 
 S = "${UNPACKDIR}"
@@ -47,6 +50,37 @@ do_install() {
     # flag); only its INSTALLATION is conditional.
     if [ "${DUDUCLAW_VERITY_ENABLE}" = "1" ]; then
         install -m 0644 ${UNPACKDIR}/15-duduclaw-root-verity.transfer ${D}${sysconfdir}/sysupdate.d/
+    fi
+
+    # Rollback floor pruning (rootless gateway, 2026-10-15): delete ESP
+    # entries older than DUDUCLAW_MIN_ROLLBACK_VERSION after the running
+    # entry passed the health gate. The floor file is written only when
+    # the variable is set (conf/distro/include/duduclaw-rollback-floor.inc);
+    # without it the unit's ConditionPathExists= skips it.
+    install -d ${D}${libexecdir}/duduclaw
+    install -m 0755 ${UNPACKDIR}/duduclaw-rollback-prune.sh ${D}${libexecdir}/duduclaw/rollback-prune.sh
+    install -d ${D}${systemd_system_unitdir}
+    install -m 0644 ${UNPACKDIR}/duduclaw-rollback-prune.service ${D}${systemd_system_unitdir}/duduclaw-rollback-prune.service
+    if [ -n "${DUDUCLAW_MIN_ROLLBACK_VERSION}" ]; then
+        install -d ${D}${nonarch_libdir}/duduclaw
+        echo "${DUDUCLAW_MIN_ROLLBACK_VERSION}" > ${D}${nonarch_libdir}/duduclaw/min-rollback-version
+        chmod 0644 ${D}${nonarch_libdir}/duduclaw/min-rollback-version
+    fi
+
+    # Rootless staging (2026-10-15): sysupdate installs only from the
+    # root-owned /data/system/updates that duduclaw-sysd fills after
+    # verifying signatures; gated on the same variable as the sysd flags,
+    # since the vendored v1.73.1 sysd does not stage there. See the
+    # "Rootless staging" note in each .transfer file.
+    if [ -n "${DUDUCLAW_MIN_ROLLBACK_VERSION}" ]; then
+        for t in ${D}${sysconfdir}/sysupdate.d/*.transfer; do
+            sed -i -e 's#^Path=/data/duduclaw/updates$#Path=/data/system/updates#' "$t"
+            if grep -q '^Path=/data/duduclaw' "$t"; then
+                bbfatal "$t still stages from the gateway home"
+            fi
+        done
+        install -d ${D}${nonarch_libdir}/tmpfiles.d
+        install -m 0644 ${UNPACKDIR}/duduclaw-updates.conf ${D}${nonarch_libdir}/tmpfiles.d/duduclaw-updates.conf
     fi
 
     install -d ${D}/usr/local/sbin
@@ -71,7 +105,12 @@ FILES:${PN} += " \
     /usr/local/sbin/duduclaw-health-check.sh \
     ${systemd_unitdir}/system/duduclaw-health-check.service \
     ${systemd_unitdir}/system/duduclaw-gateway.service.d/10-ab-home.conf \
+    ${systemd_system_unitdir}/duduclaw-rollback-prune.service \
+    ${libexecdir}/duduclaw/rollback-prune.sh \
 "
+# The rollback floor file exists only when DUDUCLAW_MIN_ROLLBACK_VERSION is
+# set (same conditional-FILES pattern as the verity transfer below).
+FILES:${PN} += "${@ ' ${nonarch_libdir}/duduclaw/min-rollback-version ${nonarch_libdir}/tmpfiles.d/duduclaw-updates.conf' if d.getVar('DUDUCLAW_MIN_ROLLBACK_VERSION') else ''}"
 
 # VER-V (2026-09-02): FILES var, not do_install's own install path,
 # because a file listed by do_install but omitted from every package's
@@ -99,6 +138,11 @@ FILES:${PN} += "${@ ' ${sysconfdir}/sysupdate.d/15-duduclaw-root-verity.transfer
 # file by name; without duduclaw-cli installed, systemd would still accept
 # the drop-in but it would have no unit to apply to.
 RDEPENDS:${PN} += "bash curl duduclaw-cli"
+# setpriv: the health check reads config.toml as the gateway account
+# (2026-10-15), never as root.
+RDEPENDS:${PN} += "util-linux-setpriv"
+# rollback-prune.sh asks bootctl (main systemd package) for the ESP path.
+RDEPENDS:${PN} += "systemd"
 
 # duduclaw-health-check.service is RequiredBy=boot-complete.target in its
 # own [Install] section (not WantedBy=) -- see that file's header comment
@@ -110,7 +154,9 @@ RDEPENDS:${PN} += "bash curl duduclaw-cli"
 # same way it honours WantedBy= (systemctl(1) makes no distinction in how
 # `enable` resolves either key, only in what kind of unit-file symlink it
 # writes).
-SYSTEMD_SERVICE:${PN} = "duduclaw-health-check.service"
+# duduclaw-rollback-prune.service (2026-10-15): enabled everywhere, skipped
+# by its ConditionPathExists= until a rollback floor is configured.
+SYSTEMD_SERVICE:${PN} = "duduclaw-health-check.service duduclaw-rollback-prune.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 # x86_64 only -- see files/wic/duduclaw-ab-bootdisk.wks.in's own header for

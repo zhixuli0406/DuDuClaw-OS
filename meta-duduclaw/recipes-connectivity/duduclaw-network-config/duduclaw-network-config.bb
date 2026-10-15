@@ -13,6 +13,9 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 SRC_URI = "file://25-wireless-dhcp.network"
+# D-Bus policy: the gateway account (uid 1000, rootless since 2026-10-15)
+# may call iwd. See the file's header comment.
+SRC_URI += "file://duduclaw-iwd.conf"
 
 S = "${UNPACKDIR}"
 
@@ -20,9 +23,11 @@ do_install() {
     install -d ${D}${sysconfdir}/systemd/network
     install -m 0644 ${UNPACKDIR}/25-wireless-dhcp.network \
         ${D}${sysconfdir}/systemd/network/25-wireless-dhcp.network
+    install -d ${D}${datadir}/dbus-1/system.d
+    install -m 0644 ${UNPACKDIR}/duduclaw-iwd.conf ${D}${datadir}/dbus-1/system.d/duduclaw-iwd.conf
 }
 
-FILES:${PN} += "${sysconfdir}/systemd/network/25-wireless-dhcp.network"
+FILES:${PN} += "${sysconfdir}/systemd/network/25-wireless-dhcp.network ${datadir}/dbus-1/system.d/duduclaw-iwd.conf"
 
 # RDEPENDS, not DEPENDS: this is a plain config file with no compile-time
 # relationship to iwd at all. The runtime dependency IS load-bearing though

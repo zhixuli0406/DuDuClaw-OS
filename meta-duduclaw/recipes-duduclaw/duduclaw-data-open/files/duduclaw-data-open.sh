@@ -123,7 +123,8 @@ RECOVERY_KEY_FILE="/boot/duduclaw-data-recovery-key.txt"
 # script runs BEFORE /data is mounted (that is its own job), so it cannot
 # write its status marker there directly. duduclaw-data-status.service
 # (After=data.mount, same recipe) relays this transient marker into
-# /data/duduclaw/system/tpm-status.json once /data actually exists.
+# /data/system/tpm-status.json once /data actually exists (it was
+# /data/duduclaw/system/tpm-status.json until 2026-10-15).
 STATUS_FILE="/run/duduclaw-tpm-status.json"
 
 log() {

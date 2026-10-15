@@ -1,0 +1,80 @@
+#!/bin/sh
+# Load the loopback guard for duduclaw-podman.service (2026-10-15, WP-O2).
+# Run as root from that unit's ExecStartPre (+). Exit non-zero, and the unit
+# does not start, if the rule cannot be loaded.
+#
+# Why: rootless containers reach the network through pasta, which runs as
+# uid 1000 inside this unit's cgroup and opens ordinary host sockets on the
+# container's behalf. A connection from a container to any host address
+# (127.0.0.1, the LAN IP, the pasta-mapped host address) therefore leaves
+# the host stack on `lo`, and nftables.conf accepts everything arriving on
+# lo. Without this rule a sandboxed container could reach the dashboard
+# (0.0.0.0:18789), llama-server (127.0.0.1:8080) and every other local
+# listener.
+#
+# What: nftables.conf has an empty chain `duduclaw_podman_egress` that the
+# output chain jumps to for packets leaving on lo. This script fills it in
+# one transaction (flush + add, atomic):
+#   - DNS to systemd-resolved's stub listeners (127.0.0.53 / 127.0.0.54,
+#     port 53) is allowed: pasta forwards container DNS to the host
+#     resolver, which on this image is the resolved stub;
+#   - every other packet that a socket in this cgroup sends in the
+#     ORIGINAL direction of its connection is dropped (a connection this
+#     cgroup opens towards a local address);
+#   - reply-direction packets pass, so a host program connecting INTO a
+#     port pasta publishes (Windows VM RDP on 3389, the noVNC page on 8006)
+#     still works.
+#
+# The cgroup path is matched at level 2 (system.slice/<unit>), which covers
+# podman itself, conmon, pasta and every container cgroup podman creates
+# under its delegated subtree. nft resolves the path to the cgroup's inode
+# number at load time, which is why this runs on every start of the unit
+# (the cgroup exists by then: ExecStartPre runs inside it) instead of
+# living in nftables.conf.
+#
+# `--if-present` (used by the nftables.service drop-in this recipe ships):
+# do nothing and succeed when the podman unit's cgroup does not exist, i.e.
+# Podman is not running and there is nothing to guard yet. If the cgroup
+# exists and the rule cannot be loaded, stop duduclaw-podman.service
+# (KillMode=mixed takes every container with it) and fail: after a
+# firewall reload the containers would otherwise keep running with no
+# guard at all. Without the option a missing cgroup is an error (nft
+# refuses the path), which is what the podman unit's own ExecStartPre
+# wants.
+#
+# Kernel: needs CONFIG_NFT_SOCKET and CONFIG_SOCK_CGROUP_DATA (selected by
+# CONFIG_CGROUP_BPF); both are requested by duduclaw-rootless.cfg.
+set -eu
+
+CGROUP="system.slice/duduclaw-podman.service"
+CHAIN="duduclaw_podman_egress"
+
+if [ "${1:-}" = "--if-present" ] && [ ! -d "/sys/fs/cgroup/${CGROUP}" ]; then
+	exit 0
+fi
+
+reload_mode=0
+[ "${1:-}" = "--if-present" ] && reload_mode=1
+
+load_rule() {
+nft -f - <<NFT
+flush chain inet filter ${CHAIN}
+table inet filter {
+	chain ${CHAIN} {
+		socket cgroupv2 level 2 "${CGROUP}" ip daddr { 127.0.0.53, 127.0.0.54 } udp dport 53 accept
+		socket cgroupv2 level 2 "${CGROUP}" ip daddr { 127.0.0.53, 127.0.0.54 } tcp dport 53 accept
+		socket cgroupv2 level 2 "${CGROUP}" ct direction original counter drop
+	}
+}
+NFT
+}
+
+if ! load_rule; then
+	if [ "$reload_mode" = 1 ]; then
+		echo "podman-egress-guard: could not re-add the loopback guard; stopping duduclaw-podman.service so no container runs unguarded" >&2
+		systemctl stop --no-block duduclaw-podman.service || true
+	fi
+	exit 1
+fi
+
+echo "podman-egress-guard: loopback guard loaded for ${CGROUP}" >&2

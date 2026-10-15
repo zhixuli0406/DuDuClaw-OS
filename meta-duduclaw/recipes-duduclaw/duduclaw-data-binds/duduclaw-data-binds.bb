@@ -50,6 +50,13 @@
 #             resolves under /var/lib relative to the real root, no
 #             redirection knob exists short of RootDirectory=/RootImage=
 #             sandboxing this project does not use here.
+#   docker:   REMOVED 2026-10-15. The appliance now runs rootless Podman
+#             as uid 1000 (recipes-duduclaw/duduclaw-podman), whose store
+#             is /data/system/containers/duduclaw (storage.conf
+#             rootless_storage_path, set by this layer's
+#             container-host-config bbappend), so no bind onto /var is
+#             needed and var-lib-docker.mount is gone. /data/system/docker
+#             is not deleted, so a rollback still finds it. Original note:
 #   docker:   meta-virtualization/recipes-containers/docker/docker.inc
 #             (ships upstream's own src/import/contrib/init/systemd/
 #             docker.service verbatim, no --data-root override anywhere in
@@ -123,7 +130,6 @@ SRC_URI = " \
     file://duduclaw-data-binds-early.service \
     file://var-log.mount \
     file://var-lib-iwd.mount \
-    file://var-lib-docker.mount \
     file://var-lib-waydroid.mount \
     file://var-lib-systemd-timesync.mount \
 "
@@ -141,7 +147,6 @@ do_install() {
     install -m 0644 ${UNPACKDIR}/duduclaw-data-binds-early.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${UNPACKDIR}/var-log.mount ${D}${systemd_system_unitdir}/
     install -m 0644 ${UNPACKDIR}/var-lib-iwd.mount ${D}${systemd_system_unitdir}/
-    install -m 0644 ${UNPACKDIR}/var-lib-docker.mount ${D}${systemd_system_unitdir}/
     install -m 0644 ${UNPACKDIR}/var-lib-waydroid.mount ${D}${systemd_system_unitdir}/
     install -m 0644 ${UNPACKDIR}/var-lib-systemd-timesync.mount ${D}${systemd_system_unitdir}/
 }
@@ -151,7 +156,6 @@ FILES:${PN} += " \
     ${systemd_system_unitdir}/duduclaw-data-binds-early.service \
     ${systemd_system_unitdir}/var-log.mount \
     ${systemd_system_unitdir}/var-lib-iwd.mount \
-    ${systemd_system_unitdir}/var-lib-docker.mount \
     ${systemd_system_unitdir}/var-lib-waydroid.mount \
     ${systemd_system_unitdir}/var-lib-systemd-timesync.mount \
 "
@@ -168,7 +172,7 @@ FILES:${PN} += " \
 # symlinks) the same way it already does for every other unit in this
 # layer with a non-trivial [Install] section (e.g.
 # duduclaw-secaudit-scan.timer's WantedBy=timers.target).
-SYSTEMD_SERVICE:${PN} = "duduclaw-data-binds-early.service var-log.mount var-lib-iwd.mount var-lib-docker.mount var-lib-waydroid.mount var-lib-systemd-timesync.mount"
+SYSTEMD_SERVICE:${PN} = "duduclaw-data-binds-early.service var-log.mount var-lib-iwd.mount var-lib-waydroid.mount var-lib-systemd-timesync.mount"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 # Doc-only RDEPENDS (this project's own "one explicit source of truth,

@@ -20,9 +20,18 @@
 # Yocto-side only; wiring a dashboard/os_watch consumer for this JSON
 # marker, with "無 Linux 外露" wording, is explicitly future work (see
 # duduclaw-data-open.sh's own header comment on the marker's schema).
+#
+# 2026-10-15 (rootless gateway): the destination moved from
+# /data/duduclaw/system/tpm-status.json to /data/system/tpm-status.json.
+# This unit runs as root and the gateway home now belongs to uid 1000, so
+# writing there would follow whatever uid 1000 planted at that path.
+# /data/system is root-owned; the file is 0644 so a future gateway reader
+# (none exists in the platform today) can still read it. Written to a
+# temporary name and renamed, so a symlink at the final path is replaced,
+# never followed.
 [Unit]
 Description=DuDuClaw OS: relay TPM/LUKS status marker into /data
-Documentation=commercial/docs/DESIGN-os-trust-chain-2026-09.md
+# Design reference (maintainers' private tree, not a URL): commercial/docs/DESIGN-os-trust-chain-2026-09.md
 After=data.mount
 Requisite=data.mount
 ConditionPathExists=/run/duduclaw-tpm-status.json
@@ -30,7 +39,7 @@ ConditionPathExists=/run/duduclaw-tpm-status.json
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'mkdir -p /data/duduclaw/system && cp /run/duduclaw-tpm-status.json /data/duduclaw/system/tpm-status.json'
+ExecStart=/bin/sh -c 'mkdir -p /data/system && install -m 0644 /run/duduclaw-tpm-status.json /data/system/tpm-status.json.new && mv -f /data/system/tpm-status.json.new /data/system/tpm-status.json'
 
 [Install]
 WantedBy=multi-user.target

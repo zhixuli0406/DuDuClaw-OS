@@ -5,6 +5,22 @@
 # note what actually differs on this line and why nothing else needed to
 # change.
 #
+# --- Rootless staging (2026-10-15) -----------------------------------------
+# Once the platform snapshot with the rootless gateway changes is vendored
+# (DUDUCLAW_MIN_ROLLBACK_VERSION set, conf/distro/include/
+# duduclaw-rollback-floor.inc), this recipe's do_install rewrites the
+# Path= below to /data/system/updates. The text about verification being
+# the gateway's job (os_update.rs) then no longer holds: the gateway runs
+# as uid 1000, the same uid as every AI employee, so it can neither be the
+# integrity check nor own the directory sysupdate installs from. Instead
+# duduclaw-sysd's SysupdateStageApply verb (root) empties the root-owned
+# 0700 /data/system/updates, verifies the minisign-signed SHA256SUMS,
+# copies only verified payloads in, checks that the UKI's IMAGE_VERSION is
+# at least the rollback floor and newer than the running image, and only
+# then runs systemd-sysupdate. Until that snapshot is vendored, Path= stays
+# /data/duduclaw/updates (the vendored v1.73.1 sysd does not stage into
+# /data/system/updates), and duduclaw-image-ab refuses to build an image.
+#
 # Source is a local staging directory, not a remote URL: sysupdate does NO
 # integrity or authenticity checking at all for `Type=regular-file` sources
 # (systemd's own sysupdate.d(5): "When updating no integrity or

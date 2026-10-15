@@ -14,7 +14,8 @@
 SUMMARY = "DuDuClaw OS entropy-seed cross-reboot persistence (trust chain P1 residual, VER-P)"
 DESCRIPTION = "${SUMMARY}. Companion to \
 recipes-core/initrdscripts/initramfs-module-duduclaw-persist, which LOADS \
-/data/duduclaw/system/random-seed into /dev/urandom during early boot \
+/data/system/random-seed (until 2026-10-15: /data/duduclaw/system/random-seed) \
+into /dev/urandom during early boot \
 (before /data is even mounted by the main system) -- this recipe's own \
 single oneshot unit is what keeps that seed file itself fresh: it writes \
 a new sample from /dev/urandom back to /data both once boot reaches \

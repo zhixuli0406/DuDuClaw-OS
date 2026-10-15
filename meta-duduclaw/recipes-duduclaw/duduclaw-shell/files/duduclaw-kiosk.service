@@ -81,6 +81,14 @@ RuntimeDirectory=duduclaw-kiosk
 RuntimeDirectoryMode=0750
 Environment=XDG_RUNTIME_DIR=/run/duduclaw-kiosk
 Environment=DUDUCLAW_APPLIANCE=1
+# duduclaw-comp's shell-control socket trusts a second uid as the AI-agent
+# authority (`PeerAuthority::Agent`) only when this names it. 1000 is the
+# gateway account (duduclaw-cli's useradd, fixed id); without this line a
+# rootless gateway would be refused, since comp's built-in carve-out only
+# covers root. comp hands that socket, the codrive socket and the codrive
+# token to the `duduclaw-ipc` group (0660/0640), which the kiosk user and
+# the gateway are in and duduclaw-flatpak-verify is not.
+Environment=DUDUCLAW_SHELL_CONTROL_AGENT_UID=1000
 # $HOME comes from the duduclaw-kiosk user's own passwd entry
 # (-d /data/duduclaw-kiosk, set via USERADD_PARAM in duduclaw-shell's own
 # recipe) -- one source of truth, same convention the Debian line's unit

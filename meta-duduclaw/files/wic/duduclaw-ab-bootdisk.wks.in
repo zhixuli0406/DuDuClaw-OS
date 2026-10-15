@@ -328,6 +328,16 @@ ${DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE}
 # linux-generic`) — /data is explicitly NOT a `root`-typed partition (it
 # must never be a gpt-auto root candidate).
 #
+# nosuid,nodev on /data (2026-10-15, rootless gateway): most of /data is
+# writable by uid 1000 (the gateway and every AI employee). A setuid file
+# or a device node placed there must not mean anything. Nothing on the
+# image needs either from /data: setuid helpers live in /usr, rootless
+# container layers are separate overlay mounts with their own flags (and
+# storage.conf already sets nodev), Flatpak and Waydroid content is
+# executed, not setuid (exec stays allowed; noexec would break user-
+# installed AI runtimes and Flatpak apps). Waydroid under nodev is not yet
+# re-verified (V-list).
+#
 # --use-uuid + --fsoptions + --fspassno (Y11-2, 2026-08-27): THE FIX for the
 # bug Y9-2 (same day, earlier round) reproduced live on this exact wks — with
 # neither `--use-uuid` nor `--use-label` set, wic's own `update_fstab()`
@@ -372,4 +382,4 @@ ${DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE}
 # that does, and without it this line's own GrowFileSystem bit (set below by
 # duduclaw-ab-partflags.bbclass) would silently do nothing once /data
 # actually starts mounting.
-part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --uuid="${DUDUCLAW_AB_DATA_PARTUUID}" --fsoptions=defaults,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}
+part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --uuid="${DUDUCLAW_AB_DATA_PARTUUID}" --fsoptions=defaults,nosuid,nodev,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}

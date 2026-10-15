@@ -175,5 +175,5 @@ cat > "${EARLY_DIR}/data.mount" <<-UNIT
 	What=/dev/mapper/duduclaw-data
 	Where=/data
 	Type=ext4
-	Options=defaults,x-systemd.growfs
+	Options=defaults,nosuid,nodev,x-systemd.growfs
 	UNIT

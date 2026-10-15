@@ -17,17 +17,20 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Runs as an UNPRIVILEGED member of the "duduclaw" group, not root -- this
-# is deliberate and load-bearing, not an oversight: the whole point of this
-# unit is to exercise duduclaw-polkit-flatpak's `subject.isInGroup
-# ("duduclaw")` polkit rule for real. A root-run test would not touch that
+# Runs as an UNPRIVILEGED member of the "duduclaw-flatpak" group, not root
+# (the group was "duduclaw" until 2026-10-15; the polkit rule moved to
+# `duduclaw-flatpak` when the gateway became a real uid-1000 `duduclaw`
+# account, see the rule file) -- this is deliberate and load-bearing, not
+# an oversight: the whole point of this unit is to exercise
+# duduclaw-polkit-flatpak's `subject.isInGroup("duduclaw-flatpak")` rule
+# for real. A root-run test would not touch that
 # code path the same way (root's own privilege can shadow whether the
 # polkit rule is doing anything at all) and would prove nothing about
 # "agent 裝 app 操作面" (Y3-2 ticket item 4). See the recipe's own
 # useradd comment for why this identity, not the real gateway account,
 # exists on this image today.
 User=duduclaw-flatpak-verify
-Group=duduclaw
+Group=duduclaw-flatpak
 # systemd creates/chowns this before ExecStart runs (mode 0700, owned by
 # User=/Group= above) -- avoids any do_install-time ownership ordering
 # question against a user that useradd.bbclass creates at rootfs

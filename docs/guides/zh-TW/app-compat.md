@@ -88,6 +88,8 @@ Bottles 只轉譯 Windows API，遇到近三年的 Microsoft 365、AutoCAD 2018 
 
 **這不是預裝的功能**：DuDuClaw 不隨機出貨、不代購、不代管任何 Windows 授權金鑰，也不預先下載 Windows 安裝映像。整套流程一鍵引導，但每一步都由你觸發、你確認。
 
+**v0.3.0 之後的 DuDuClaw OS 容器引擎（實驗性）**：到 v0.3.0 為止，桌面版用 root 執行的 Docker 跑這台虛擬機。v0.3.0 之後的 Yocto layer 改用 rootless Podman，以 gateway 自己的帳號（uid 1000）執行；裝置上的 `docker` 是 Podman 的相容指令，`docker compose` 由 `podman-compose` 提供。dockur/windows 容器在 rootless Podman 下能不能在真機開機，目前還沒人測過，請把這些版本上的 Windows 虛擬機當成實驗功能。在 root shell 打的 `podman`／`docker` 會連到 gateway 的 Podman（shell 設了 `CONTAINER_HOST`），拉下來的映像就是 gateway 用的那一份。
+
 ### 硬體需求
 
 | 項目 | 下限 | 建議 |

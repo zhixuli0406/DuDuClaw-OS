@@ -54,6 +54,28 @@ if [ "${HOME:-}" = "" ] || [ "${HOME}" = "/root" ]; then
     fi
 fi
 
+# Rootless gateway (2026-10-15): /data/duduclaw belongs to uid 1000, the
+# uid every AI employee runs as. A vendor CLI started as root with that
+# HOME would load settings, hooks and plugins uid 1000 can write (Claude
+# Code's settings.json hooks run shell commands), i.e. root code execution
+# for anyone who controls the gateway's uid. So a root caller is re-executed
+# as the gateway account; credentials still land in the same home. Root
+# with its own HOME (not /data/duduclaw) is left alone.
+# --no-new-privs; and without a terminal on stdin the CLI also runs in a
+# new session (setsid -w, util-linux) so nothing it starts holds the root
+# shell's tty. Interactive TUIs (claude, codex...) need the terminal and
+# keep it; there the kernel's TIOCSTI restriction (CONFIG_LEGACY_TIOCSTI=n,
+# dev.tty.legacy_tiocsti=0) is what stops hooks or MCP servers typing into
+# the root shell.
+if [ "$(id -u)" = 0 ] && [ "${HOME:-}" = /data/duduclaw ] && [ -z "${DUDUCLAW_RUNTIME_EXEC_DROPPED:-}" ]; then
+    DUDUCLAW_RUNTIME_EXEC_DROPPED=1
+    export DUDUCLAW_RUNTIME_EXEC_DROPPED
+    if [ -t 0 ]; then
+        exec setpriv --reuid=duduclaw --regid=duduclaw --init-groups --no-new-privs -- "$0" "$@"
+    fi
+    exec setsid -w setpriv --reuid=duduclaw --regid=duduclaw --init-groups --no-new-privs -- "$0" "$@"
+fi
+
 NODE_PATH="$RT/node_modules${NODE_PATH:+:$NODE_PATH}"
 export NODE_PATH
 PATH="$RT/bin:$PATH"

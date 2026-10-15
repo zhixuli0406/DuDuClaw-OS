@@ -111,6 +111,13 @@ SRC_URI:append = " file://duduclaw-waydroid-net.cfg"
 SRC_URI:append = " file://duduclaw-nftables.cfg"
 SRC_URI:append = " file://duduclaw-lsm.cfg"
 
+# --- Rootless container stack (2026-10-15, WP-O2) ------------------------
+# nft `socket` expression + cgroup v2 socket ids for the loopback guard
+# duduclaw-podman.service loads, TUN for pasta, and the nft/xt modules
+# netavark and the computer-use container's iptables use. Unscoped (both
+# machines). Reasoning per symbol in the .cfg header.
+SRC_URI:append = " file://duduclaw-rootless.cfg"
+
 # --- Trust chain P1 dm-verity (VER-V, 2026-09-02) -----------------------
 # Unscoped (both machines), same reasoning as every fragment above:
 # CONFIG_MD/BLK_DEV_DM/DM_VERITY/CRYPTO_SHA256 are compiled in

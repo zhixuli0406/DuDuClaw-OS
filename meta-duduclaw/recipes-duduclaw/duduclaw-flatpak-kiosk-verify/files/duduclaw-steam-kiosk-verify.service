@@ -25,7 +25,9 @@ Wants=duduclaw-kiosk.service
 Type=oneshot
 RemainAfterExit=yes
 User=duduclaw-flatpak-verify
-Group=duduclaw
+# duduclaw-flatpak, not duduclaw, since 2026-10-15 (same reason as
+# duduclaw-flatpak-kiosk-verify.service).
+Group=duduclaw-flatpak
 
 # XDG_RUNTIME_DIR, formalizing the Y4-2 manual fix as a declarative
 # systemd directive instead of a script-time `mkdir` -- this is the

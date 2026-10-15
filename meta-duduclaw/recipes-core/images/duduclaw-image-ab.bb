@@ -161,6 +161,19 @@ IMAGE_INSTALL:append = " duduclaw-ab-update"
 # exact verification status reached this round.
 IMAGE_INSTALL:append = " duduclaw-firstboot"
 
+# --- Default-deny firewall for both editions (2026-10-15) ------------------
+# duduclaw-firewall used to be appended only in duduclaw-image-appliance.bb,
+# so the base edition built from this recipe (the plain `installer` ISO)
+# shipped with no firewall at all while dropbear listened on port 22. It
+# lives here now; duduclaw-image-appliance.bb requires this file and gets it
+# unchanged. The ruleset allows only the dashboard port, mDNS and basic
+# ICMP inbound, plus whatever maintenance mode adds to its port set
+# (recipes-duduclaw/duduclaw-firewall/files/nftables.conf). This edition
+# has no Waydroid, so the forward-chain risk noted in that file does not
+# apply here. Kernel nftables support is already wired for both machines
+# by linux-yocto_6.18.bbappend.
+IMAGE_INSTALL:append = " duduclaw-firewall"
+
 # Y9-2 (2026-08-27): factory UKI naming + loader.conf default, so the very
 # first boot's own UKI competes in the SAME sysupdate-managed namespace as
 # every future update instead of permanently winning by static pin.
@@ -212,3 +225,29 @@ SRC_URI += "file://duduclaw-ab-loader.conf"
 UKI_FILENAME = "duduclaw-os_${DISTRO_VERSION}.efi"
 
 COMPATIBLE_MACHINE = "duduclaw-genericx86-64|duduclaw-qemux86-64"
+
+# --- No rootless image without the platform guards (2026-10-15) -----------
+# Both editions (this recipe and duduclaw-image-appliance, which requires
+# it) run the gateway as uid 1000, the uid every AI employee shares. Until
+# the vendored platform carries duduclaw-sysd's main-PID caller check,
+# rollback floor and root-side update staging, sysd would take requests
+# from any uid-1000 process and the A/B chain would install payloads from a
+# uid-1000-owned directory. DUDUCLAW_MIN_ROLLBACK_VERSION
+# (conf/distro/include/duduclaw-rollback-floor.inc) switches all of those
+# on together, and duduclaw-sysd's recipe refuses to build when it is set
+# but the vendored sysd lacks the flags. So an empty value means "the
+# guards are not there", and the image build stops here, before rootfs,
+# with no override: this branch must not produce a rootless image without
+# them. Checked at do_rootfs (not at parse time) so `bitbake -p` and
+# building other recipes keep working.
+python duduclaw_require_rootless_guards () {
+    if not (d.getVar('DUDUCLAW_MIN_ROLLBACK_VERSION') or '').strip():
+        bb.fatal("DUDUCLAW_MIN_ROLLBACK_VERSION is empty: this image runs the "
+                 "gateway as uid 1000 and needs the platform snapshot that adds "
+                 "duduclaw-sysd's --require-main-pid-of / --min-rollback-version "
+                 "and SysupdateStageApply. Refresh the snapshots "
+                 "(scripts/sync-platform.sh) and set the floor in "
+                 "conf/distro/include/duduclaw-rollback-floor.inc.")
+}
+do_rootfs[prefuncs] += "duduclaw_require_rootless_guards"
+do_rootfs[vardeps] += "DUDUCLAW_MIN_ROLLBACK_VERSION"

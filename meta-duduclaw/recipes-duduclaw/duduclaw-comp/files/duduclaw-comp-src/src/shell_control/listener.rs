@@ -76,6 +76,16 @@ pub fn spawn(
 
     let listener = UnixListener::bind(&sock_path)?;
     std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o600))?;
+    // Rootless gateway (2026-10-15): the gateway is uid 1000, not root, so
+    // the socket is shared with the `duduclaw-ipc` group (0660) when that
+    // group exists; owner-only otherwise. The SO_PEERCRED check below still
+    // decides who is Human / Agent / refused. See `crate::ipc_access`.
+    let access = crate::ipc_access::share_path(
+        &sock_path,
+        crate::ipc_access::ipc_group_gid(),
+        crate::ipc_access::SHARED_SOCKET_MODE,
+    )?;
+    log_ipc_access("shell_control", &sock_path, &access);
 
     tracing::info!(
         path = %sock_path.display(),
@@ -90,6 +100,26 @@ pub fn spawn(
         .name("shell-control".into())
         .spawn(move || accept_loop(listener, own_uid, agent_uid, shared, tx))
         .map(|_handle| ())
+}
+
+/// One log line per endpoint saying which access mode was applied, so the
+/// journal answers "why can the gateway (not) connect" directly.
+pub(crate) fn log_ipc_access(what: &str, path: &std::path::Path, access: &crate::ipc_access::Access) {
+    use crate::ipc_access::{Access, IPC_GROUP};
+    match access {
+        Access::Group { gid } => tracing::info!(
+            path = %path.display(), gid = *gid,
+            "{what}: shared with group {IPC_GROUP}"
+        ),
+        Access::Private => tracing::info!(
+            path = %path.display(),
+            "{what}: group {IPC_GROUP} not found — owner-only (a non-root gateway cannot connect)"
+        ),
+        Access::Fallback { gid, reason } => tracing::warn!(
+            path = %path.display(), gid = *gid, reason = %reason,
+            "{what}: could not hand to group {IPC_GROUP} (is this user a member?) — owner-only"
+        ),
+    }
 }
 
 fn accept_loop(
@@ -324,6 +354,17 @@ fn handle_connection(
         return;
     }
 
+    // Rootless gateway (2026-10-15): the audio verbs run here, on the socket
+    // thread, never on the compositor thread (a hung wpctl must not stall
+    // rendering). See `audio.rs`.
+    if let Some((resp, detail)) = super::audio::handle(&req) {
+        if let Some(detail) = detail {
+            shared.record(req.op_name(), Some(format!("{} {detail}", authority.audit_label())));
+        }
+        let _ = write_response(&mut writer, &resp);
+        return;
+    }
+
     tracing::debug!(op = req.op_name(), actor = ?authority, "shell_control: dispatching to the main thread");
 
     // Bridge to the calloop main thread (the only thread allowed to touch
@@ -359,6 +400,9 @@ fn write_response(writer: &mut UnixStream, resp: &ShellControlResponse) -> std::
 /// even reaches the main-thread channel" reasoning as
 /// `codrive::listener::validate`.
 pub(super) fn validate(req: &ShellControlRequest) -> Result<(), String> {
+    if let Some(result) = super::audio::validate(req) {
+        return result;
+    }
     match req {
         ShellControlRequest::ListWindows => Ok(()),
         ShellControlRequest::FocusWindow { query } => {
@@ -489,6 +533,10 @@ pub(super) fn validate(req: &ShellControlRequest) -> Result<(), String> {
         // own doc), which is the same boundary that would let a caller kill
         // and restart the shell anyway.
         ShellControlRequest::SetSessionLocked { .. } => Ok(()),
+        // Validated by `audio::validate` above.
+        ShellControlRequest::GetAudio
+        | ShellControlRequest::SetAudio { .. }
+        | ShellControlRequest::SetAudioOutput { .. } => Ok(()),
     }
 }
 

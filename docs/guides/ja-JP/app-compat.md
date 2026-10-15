@@ -145,6 +145,17 @@ Windows のライセンスキーを本体に同梱したり、代理購入した
 ンロードすることもありません。フロー全体はガイド付きですが、各ステップ
 はあなた自身がトリガーし、確認する必要があります。
 
+**v0.3.0 以降の DuDuClaw OS のコンテナエンジン(実験的)**:v0.3.0 までの
+デスクトップ版は、この仮想マシンを root で動く Docker 上で実行していまし
+た。v0.3.0 より後の Yocto レイヤーでは Docker をやめ、gateway 自身のアカ
+ウント(uid 1000)で動く rootless Podman を使います。デバイス上の `docker`
+は Podman の互換コマンドで、`docker compose` は `podman-compose` が担いま
+す。dockur/windows コンテナが rootless Podman 上で実機起動するかはまだ誰も
+検証していないため、これらのビルドでは Windows 仮想マシンを実験的機能とし
+て扱ってください。root シェルで入力した `podman`/`docker` は gateway の
+Podman に接続します(シェルが `CONTAINER_HOST` を設定するため)。そこで取得
+したイメージは gateway が使うものと同じです。
+
 ### ハードウェア要件
 
 | 項目 | 下限 | 推奨 |

@@ -106,6 +106,25 @@ comp_socket_name() {
 # whole screen coming up.
 AUDIO_WAIT_SECS="${DUDUCLAW_KIOSK_AUDIO_WAIT_SECS:-5}"
 
+# Rootless gateway (2026-10-15): PipeWire stays private to this session.
+# A PipeWire socket is all-or-nothing (any client may record the microphone
+# or attach to screen-cast streams), and the gateway now runs as uid 1000,
+# the uid every AI employee shares, which is also in the duduclaw-kiosk
+# group for this directory. So the sockets are made owner-only here, and
+# the gateway's volume control goes through duduclaw-comp's shell-control
+# verbs (get_audio / set_audio / set_audio_output), which run wpctl as this
+# user with fixed arguments. An earlier revision of this branch opened the
+# sockets to a group instead; that was withdrawn after review.
+private_audio_sockets() {
+    local sock
+    for sock in "$RUNTIME_DIR/pipewire-0" "$RUNTIME_DIR/pipewire-0-manager"; do
+        [[ -S "$sock" && ! -L "$sock" ]] || continue
+        if ! chmod 0600 "$sock" 2>/dev/null; then
+            log "WARNING: could not make $(basename "$sock") owner-only"
+        fi
+    done
+}
+
 start_audio_session() {
     local i
 
@@ -119,6 +138,7 @@ start_audio_session() {
     fi
     if [[ -S "$RUNTIME_DIR/pipewire-0" ]]; then
         log "note: PipeWire socket already present at $RUNTIME_DIR/pipewire-0 -- not starting a second daemon"
+        private_audio_sockets
         return 0
     fi
 
@@ -132,6 +152,7 @@ start_audio_session() {
     if [[ ! -S "$RUNTIME_DIR/pipewire-0" ]]; then
         log "WARNING: PipeWire produced no socket within ${AUDIO_WAIT_SECS}s -- starting WirePlumber anyway"
     fi
+    private_audio_sockets
 
     if command -v wireplumber >/dev/null 2>&1; then
         log "starting WirePlumber (PipeWire session manager; ships wpctl, which the shell drives)"

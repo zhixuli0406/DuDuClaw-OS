@@ -1,0 +1,34 @@
+# DuDuClaw OS factory reset, root side (2026-10-15, rootless gateway).
+#
+# duduclaw-sysd's FactoryReset verb writes /data/system/factory-reset.pending
+# and reboots; this oneshot does the wipe on the next boot, before anything
+# that reads or writes the wiped trees has started. The full contract (marker
+# format, what is removed, how a malformed marker fails safe) is in the
+# script's header: /usr/sbin/duduclaw-factory-reset.sh.
+#
+# ConditionPathExists=: on a normal boot the marker is absent and the unit is
+# skipped; the Before= ordering below then costs nothing. A dangling-symlink
+# marker also counts as absent here. Only root can create anything in
+# /data/system, so that is not a path for uid 1000 to suppress a reset.
+#
+# Not required by the gateway on purpose: a malformed marker or a failed wipe
+# leaves this unit failed (visible in `systemctl --failed` and the journal)
+# and the device still boots on its current data, so the dashboard stays
+# reachable. Making the gateway depend on it would turn a bad marker into a
+# device with no dashboard.
+[Unit]
+Description=DuDuClaw factory reset (wipe gateway, kiosk and container data on request)
+RequiresMountsFor=/data
+ConditionPathExists=/data/system/factory-reset.pending
+After=data.mount
+Before=duduclaw-firstboot-provision.service duduclaw-home-owner.service duduclaw-data-migrate.service
+Before=duduclaw-podman.service duduclaw-gateway.service duduclaw-kiosk.service duduclaw-secaudit-scan.service
+Before=iwd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/duduclaw-factory-reset.sh
+
+[Install]
+WantedBy=multi-user.target

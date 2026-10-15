@@ -4,7 +4,20 @@
 # ships llama.cpp's llama-server, but NO model weights. The gateway's
 # `inference.local.download` RPC fetches a curated GGUF into
 # /data/duduclaw/models, writes /data/duduclaw/llama-server.env, then
-# `systemctl restart duduclaw-llama-server`.
+# `systemctl restart duduclaw-llama-server` (since the rootless gateway,
+# 2026-10-15, that restart goes through duduclaw-sysd's LocalModelService
+# verb: the gateway is uid 1000 and cannot restart system units itself).
+#
+# ROOTLESS (2026-10-15): this unit runs as `duduclaw`, the gateway's uid.
+# The settings file is written by the gateway and so is writable by every
+# AI employee; it used to be loaded with EnvironmentFile= into a ROOT
+# process, which made `LD_PRELOAD=/data/duduclaw/evil.so` in that file a
+# root shell. Now PID 1 does not parse it at all: ExecStart is a small
+# wrapper (/usr/libexec/duduclaw/llama-server-run) that, already running
+# as uid 1000, reads only LLAMA_MODEL / LLAMA_CTX / LLAMA_PORT /
+# LLAMA_EXTRA_ARGS, validates them and execs llama-server on 127.0.0.1.
+# Nothing in this unit lets root read configuration from the gateway home.
+# The ConditionPathExists= check below is only a stat(2) by PID 1.
 #
 # WHY THIS UNIT IS INERT UNTIL A MODEL EXISTS. ConditionPathExists on the
 # env file is the whole design: llama-server with no `-m` argument exits
@@ -22,47 +35,48 @@ Documentation=https://github.com/ggml-org/llama.cpp
 # Ordering only, no Requires=: /data is the partition the env file and the
 # models live on, so starting before it is mounted is pointless -- but a
 # missing /data must leave this unit condition-failed, not failed.
-After=network.target data.mount
+After=network.target data.mount duduclaw-home-owner.service
 Wants=data.mount
 # Both conditions must hold. The env file is what the gateway writes when a
 # model has been selected; the models directory is where the weights are.
 ConditionPathExists=/data/duduclaw/llama-server.env
 ConditionPathIsDirectory=/data/duduclaw/models
 
+# StartLimit* belong in [Unit]; under [Service] systemd ignores them
+# (moved 2026-10-15, flagged by the first real-image run).
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
-# `-` prefix: absent file is not an error. Redundant with the Condition
-# above for the boot path, but this unit is also started by hand and by
-# `systemctl restart` from the gateway, and the two mechanisms disagree
-# about ordering under a race (the gateway writes the file and restarts in
-# the same breath). LLAMA_MODEL / LLAMA_CTX / LLAMA_PORT / LLAMA_EXTRA_ARGS
-# come from here; the defaults below cover a file that sets only some.
-EnvironmentFile=-/data/duduclaw/llama-server.env
-Environment=LLAMA_CTX=8192
-Environment=LLAMA_PORT=8080
-Environment=LLAMA_EXTRA_ARGS=
+User=duduclaw
+Group=duduclaw
+# No EnvironmentFile= (see the ROOTLESS note in the header): the wrapper
+# reads the gateway's settings file itself, as uid 1000, and applies the
+# defaults (ctx 8192, port 8080) for keys the file does not set.
 # --host 127.0.0.1 is not a default worth losing: this is an unauthenticated
 # HTTP API with a completion endpoint, and duduclaw-firewall's ruleset is a
 # second layer, not the first. The gateway reaches it over loopback
 # (inference.toml endpoint = http://127.0.0.1:8080/v1); nothing off-box
 # should.
 #
-# $LLAMA_EXTRA_ARGS is intentionally UNQUOTED so systemd word-splits it
-# (systemd.service(5): variable expansion in ExecStart splits on whitespace
-# unless the whole word is quoted) -- it carries multi-flag strings like
-# "-ngl 99 --flash-attn". The operator-supplied content of that variable is
-# therefore trusted input; it is written by the gateway, not by a remote
-# caller.
-ExecStart=/usr/bin/llama-server -m ${LLAMA_MODEL} -c ${LLAMA_CTX} --port ${LLAMA_PORT} --host 127.0.0.1 $LLAMA_EXTRA_ARGS
+# LLAMA_EXTRA_ARGS is split on whitespace by the wrapper (multi-flag strings
+# like "-ngl 99 --flash-attn"); --host/--port inside it are refused there.
+ExecStart=/usr/libexec/duduclaw/llama-server-run
 Restart=on-failure
 RestartSec=5
 # A model that does not fit RAM makes llama-server die during load, every
 # time, in seconds. Without a start limit that is a permanent restart loop
 # on a box nobody is watching.
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # --- Hardening ------------------------------------------------------------
+# 2026-10-15: SUPERSEDED. The process now runs as `duduclaw` (uid 1000,
+# User= above), which can read /data/duduclaw/models because it owns the
+# home. Not a dedicated account (the paragraph below wanted one): models
+# still live in the 0700 gateway home, and llama-server parsing a hostile
+# GGUF as uid 1000 gains nothing an AI employee does not already have. The
+# capability and kernel-tunable lines were added with the uid change.
+# Original text, kept as history:
 # RUNS AS ROOT, AND THAT IS A COMPROMISE THIS FILE OWES AN EXPLANATION FOR.
 # A dedicated `duduclaw-llama` account would be the right shape -- this
 # process parses attacker-influencable input (a GGUF downloaded from Hugging
@@ -95,6 +109,12 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=no
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
 # MemoryDenyWriteExecute=no is explicit, not an oversight: llama.cpp's
 # CPU backend does not JIT, but the Vulkan/GPU paths this recipe leaves the
 # door open for do map executable shader memory, and flipping this to yes

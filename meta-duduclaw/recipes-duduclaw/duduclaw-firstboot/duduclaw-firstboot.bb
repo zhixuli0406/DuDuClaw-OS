@@ -32,6 +32,9 @@ SRC_URI = " \
     file://1787540626.sh \
     file://1788591433.sh \
     file://1788717600.sh \
+    file://duduclaw-kiosk-home.conf \
+    file://duduclaw-factory-reset.sh \
+    file://duduclaw-factory-reset.service \
 "
 
 inherit systemd allarch
@@ -40,11 +43,23 @@ do_install() {
     install -d ${D}${sbindir}
     install -m 0755 ${UNPACKDIR}/duduclaw-firstboot-provision.sh ${D}${sbindir}/duduclaw-firstboot-provision.sh
     install -m 0755 ${UNPACKDIR}/duduclaw-firstboot-repart.sh ${D}${sbindir}/duduclaw-firstboot-repart.sh
+    # Factory reset, root side (2026-10-15): runs at boot when duduclaw-sysd
+    # left /data/system/factory-reset.pending. See the script's header for
+    # the marker contract.
+    install -m 0755 ${UNPACKDIR}/duduclaw-factory-reset.sh ${D}${sbindir}/duduclaw-factory-reset.sh
+    # Kiosk home ownership, applied by the provision script instead of the
+    # `chown -R` it used to run (private path, see the file's header).
+    install -d ${D}${datadir}/duduclaw/tmpfiles.d
+    install -m 0644 ${UNPACKDIR}/duduclaw-kiosk-home.conf ${D}${datadir}/duduclaw/tmpfiles.d/duduclaw-kiosk-home.conf
 
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${UNPACKDIR}/duduclaw-firstboot-repart.service ${D}${systemd_system_unitdir}/duduclaw-firstboot-repart.service
     install -m 0644 ${UNPACKDIR}/duduclaw-firstboot-provision.service ${D}${systemd_system_unitdir}/duduclaw-firstboot-provision.service
     install -m 0644 ${UNPACKDIR}/duduclaw-data-migrate.service ${D}${systemd_system_unitdir}/duduclaw-data-migrate.service
+    # Must be /usr/lib/systemd/system/duduclaw-factory-reset.service exactly:
+    # the platform side refers to it by that path. systemd_system_unitdir is
+    # /usr/lib/systemd/system on this distro (usrmerge).
+    install -m 0644 ${UNPACKDIR}/duduclaw-factory-reset.service ${D}${systemd_system_unitdir}/duduclaw-factory-reset.service
 
     # duduclaw-gateway.service.d/ drop-in -- see 10-data.conf's own header
     # for why this is a drop-in and not an edit to duduclaw-cli's unit, and
@@ -83,7 +98,7 @@ do_install() {
 # rescue-target Wants=) -- SYSTEMD_SERVICE/AUTO_ENABLE is the right
 # mechanism here, matching duduclaw-cli/duduclaw-shell/duduclaw-sysd's own
 # convention.
-SYSTEMD_SERVICE:${PN} = "duduclaw-firstboot-repart.service duduclaw-firstboot-provision.service duduclaw-data-migrate.service"
+SYSTEMD_SERVICE:${PN} = "duduclaw-firstboot-repart.service duduclaw-firstboot-provision.service duduclaw-data-migrate.service duduclaw-factory-reset.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 FILES:${PN} += " \
@@ -92,6 +107,9 @@ FILES:${PN} += " \
     ${systemd_system_unitdir}/duduclaw-firstboot-repart.service \
     ${systemd_system_unitdir}/duduclaw-firstboot-provision.service \
     ${systemd_system_unitdir}/duduclaw-data-migrate.service \
+    ${systemd_system_unitdir}/duduclaw-factory-reset.service \
+    ${sbindir}/duduclaw-factory-reset.sh \
+    ${datadir}/duduclaw/tmpfiles.d/duduclaw-kiosk-home.conf \
     ${systemd_system_unitdir}/duduclaw-gateway.service.d/10-data.conf \
     ${systemd_system_unitdir}/duduclaw-gateway.service.d/20-home.conf \
     ${nonarch_libdir}/repart.d/30-data.conf \
@@ -129,3 +147,9 @@ FILES:${PN} += " \
 # existing convention (see duduclaw-rescue.bb, which does not list
 # coreutils either).
 RDEPENDS:${PN} += "bash util-linux-findmnt util-linux-lsblk systemd"
+# 2026-10-15 (rootless gateway): the provision script refuses to run
+# without the `duduclaw` account and uses duduclaw-cli's private tmpfiles
+# file (duduclaw-cli), writes into the gateway home through setpriv
+# (util-linux-setpriv), and the kiosk tmpfiles line needs duduclaw-kiosk
+# (duduclaw-shell, already pulled in by duduclaw-cli).
+RDEPENDS:${PN} += "duduclaw-cli util-linux-setpriv"

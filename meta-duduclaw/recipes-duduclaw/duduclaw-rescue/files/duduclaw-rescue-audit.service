@@ -13,7 +13,8 @@
 # via Y8-1/Y9-1 (files/wic/duduclaw-ab-bootdisk.wks.in p4, present on
 # every A/B-layout image including duduclaw-image-appliance, the shipping
 # target). duduclaw-rescue-audit.sh now writes to
-# /data/duduclaw/audit/rescue/ (durable across an A/B slot switch, unlike
+# /data/system/audit/rescue/ (/data/duduclaw/audit/rescue/ before
+# 2026-10-15; durable across an A/B slot switch, unlike
 # root, which the update mechanism replaces wholesale), with a same-script
 # fallback to the old /var/log/duduclaw/ path if /data turns out to be
 # unavailable — see the script's own header for why the fallback exists

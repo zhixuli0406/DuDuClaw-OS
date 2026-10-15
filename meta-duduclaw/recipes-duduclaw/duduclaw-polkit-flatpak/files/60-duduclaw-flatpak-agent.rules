@@ -39,7 +39,20 @@
  * OFFICIAL alternate pattern meta-oe ships for exactly this situation —
  * not an invented workaround.
  *
- * GROUP CHOICE: "duduclaw" is the EXISTING primary group of the gateway/
+ * GROUP CHANGE (2026-10-15, rootless gateway): the rule now keys on
+ * `duduclaw-flatpak`, a group this recipe creates and puts NO service
+ * account in. The paragraph below explains the old choice of "duduclaw".
+ * Once the gateway became a real uid-1000 `duduclaw` account, keeping that
+ * group here would have let every AI employee (same uid) install, update
+ * or remove system Flatpaks with no DuDuClaw-side approval at all, and the
+ * platform has no Flatpak call today, so the grant had no user anyway.
+ * When an MCP tool wraps Flatpak behind capability_request, add the
+ * gateway to `duduclaw-flatpak` in the same change, so the grant only
+ * exists together with its approval chain. The only member today is the
+ * diagnostic duduclaw-flatpak-verify account (primary group, nologin, its
+ * units are never enabled), which exists to exercise this rule.
+ *
+ * Original GROUP CHOICE: "duduclaw" is the EXISTING primary group of the gateway/
  * agent service account (`useradd -r -g duduclaw -G netdev -u 1000 ...
  * duduclaw`, appliance/postinst.d/20-users-and-units.sh) — reused here
  * rather than inventing a new group, matching the task instruction "wheel
@@ -73,7 +86,7 @@ polkit.addRule(function(action, subject) {
         return polkit.Result.NOT_HANDLED;
     }
 
-    if (subject.isInGroup("duduclaw")) {
+    if (subject.isInGroup("duduclaw-flatpak")) {
         return polkit.Result.YES;
     }
 

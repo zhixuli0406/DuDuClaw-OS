@@ -74,6 +74,15 @@ pub fn spawn(
 
     let listener = UnixListener::bind(&sock_path)?;
     std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o600))?;
+    // Rootless gateway (2026-10-15): shared with the `duduclaw-ipc` group
+    // (0660) when it exists, owner-only otherwise. The bearer token is still
+    // what authenticates a connection. See `crate::ipc_access`.
+    let access = crate::ipc_access::share_path(
+        &sock_path,
+        crate::ipc_access::ipc_group_gid(),
+        crate::ipc_access::SHARED_SOCKET_MODE,
+    )?;
+    crate::shell_control::log_ipc_access("codrive", &sock_path, &access);
 
     if let Some(parent) = sock_path.parent() {
         if let Ok(meta) = std::fs::metadata(parent) {

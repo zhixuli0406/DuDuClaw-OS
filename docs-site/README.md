@@ -83,8 +83,8 @@ repo root:
 
 | Source | Page |
 |---|---|
-| `README.md` | `/docs/os/readme/` (zh-TW) |
-| `README.en.md` | `/docs/en/os/readme/` |
+| `README.zh-TW.md` | `/docs/os/readme/` (zh-TW) |
+| `README.md` | `/docs/en/os/readme/` |
 | `CHANGELOG.md` | `/docs/os/changelog/` |
 | `SECURITY.md` | `/docs/os/security/` |
 | `docs/README.md` | `/docs/os/` |

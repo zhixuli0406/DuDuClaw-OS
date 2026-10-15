@@ -23,7 +23,7 @@ on:
   #     - 'docs-site/**'
   #     - 'docs/**'
   #     - 'README.md'
-  #     - 'README.en.md'
+  #     - 'README.zh-TW.md'
   #     - 'CHANGELOG.md'
   #     - 'SECURITY.md'
   #     - 'scripts/build-site.sh'

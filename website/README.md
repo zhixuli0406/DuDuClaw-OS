@@ -8,7 +8,7 @@
 ```
 website/
 ├── index.html              首頁
-├── download.html           v0.3.0 下載頁（六個資產、驗簽、燒錄）
+├── download.html           v0.4.0 下載頁（六個資產、驗簽、燒錄）
 ├── favicon.svg             C1 貓 mark（深色瀏覽器介面下 ink 層轉米白）
 ├── favicon.ico             Codex 的 duduclaw-os app-icon.ico
 ├── apple-touch-icon.png    180×180，由 duduclaw-os avatar-1024.png 縮出
@@ -64,7 +64,7 @@ ink 層填 `var(--logo-ink)`（淺色海軍藍、深色米白），琥珀層固�
 QEMU 版整碟映像的首次開機（示範帳號「Demo」、不設定任何 AI 授權、套用 Express 板模；深色那張
 是在精靈的外觀步驟選暗色後重開一次拍的）。畫面用 QMP `screendump` 取得，滑鼠與鍵盤用 QMP
 `input-send-event`／`send-key` 送；重拍前先用 Release 上的 `.sha256` 與 `.minisig` 核對映像。
-v0.3.0（2026-10-14 發布）還沒重拍，首頁、圖集上方標籤與 alt 文字照實標成 v0.2.0 的畫面。
+v0.3.0（2026-10-14 發布）與 v0.4.0（2026-10-16 發布）都還沒重拍，首頁、圖集上方標籤與 alt 文字照實標成 v0.2.0 的畫面。
 
 **待辦：重拍。** 這 24 個檔案（加上 hero 用的 3 個 `launcher-mobile`）是 v0.2.0 的畫面，桌面上還是舊的緋紅貓與舊 logo。
 OS 殼層換成 C1 之後要用新的發布映像照上面的 QMP 程序重拍，三種格式與手機裁切一起重出，再把頁面上的 v0.2.0 標示改掉。
@@ -148,10 +148,10 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 `download.html` 的 QR code 編的是預設推薦資產（桌面版安裝器 ISO、真機目標）的直連網址，換版一定要重產。
 格式：version 11、錯誤修正 H、segno 自動選 mask，`qr-dots` 只畫一般模組（跳過三個定位圖案、六個對齊圖案與
 中間 `[28,40]×[28,40]` 的 logo 區，座標含 4 格 quiet zone），每個點寫成 `M<x> <y>h0`／`m<dx> <dy>h0`。
-用 segno 1.6.6 照這個規則重產 v0.2.0 的網址，結果與原本的 path 逐位元組相同，v0.3.0 就是照同一規則產的。
+用 segno 1.6.6 照這個規則重產 v0.2.0 的網址，結果與原本的 path 逐位元組相同，v0.3.0 就是照同一規則產的。v0.4.0 換版時先用同一支腳本重產 v0.3.0 的網址，確認與頁面上的 path 逐位元組相同（9979 個字元），再產 v0.4.0。
 
 中間的 logo 區放 C1 貓 mark（白色圓角方塊上的 `#mark-os`，ink 固定海軍藍），QR 本體固定白底海軍藍點，不跟主題反轉。
-`.qr-frame` 維持 200px 寬、10px 內距：2026-10-16 實測 8px 內距在 1x 螢幕上 jsQR 解不出來，10px 在 1x 與 2x、淺色與深色都解得出 v0.3.0 的 ISO 網址。
+`.qr-frame` 維持 200px 寬、10px 內距：2026-10-16 實測 8px 內距在 1x 螢幕上 jsQR 解不出來，10px 在 1x 與 2x、淺色與深色都解得出 v0.3.0 的 ISO 網址。換成 v0.4.0 後（2026-10-16）以 headless Chrome 截整頁、jsQR 1.4.0 解碼，1x／2x、淺色／深色四張都解出 v0.4.0 的 ISO 網址。
 改 QR 的尺寸或內距後，用 headless Chrome 截 `.qr-frame`，再用 jsQR 解一次確認。
 
 ## 首頁資訊路徑（2026-10-11）
@@ -162,7 +162,7 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 
 - 視覺在 2026-10-16 換成 C1（見「品牌與視覺」）；資訊路徑與文案沿用，參考網站只用於資訊結構。
 - 移除「第一」與一般 Linux 的概括比較，將重複技術說明合併為核心能力；深入細節導向文件。
-- 工具名稱列依 `docs/guides/ai-runtimes.md` 與 `duduclaw-ai-runtimes.bb` 的打包內容（v0.2.0 與 v0.3.0 是同一份 2026-09-05 的包），
+- 工具名稱列依 `docs/guides/ai-runtimes.md` 與 `duduclaw-ai-runtimes.bb` 的打包內容（v0.2.0、v0.3.0 與 v0.4.0 是同一份 2026-09-05 的包），
   展示 Claude Code、Codex、Grok Build 與 Qwen Code；使用純文字、不稱合作夥伴或供應商背書，
   並提醒需自行授權，以及映像版本與現今服務狀態可能不同。
 - 六張圖集仍是 v0.2.0 在 QEMU 的實拍；交辦／接手圖示明確標為示意，沒有宣稱模型已完成任務。

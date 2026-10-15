@@ -1,6 +1,6 @@
 # DuDuClaw OS Documentation
 
-> Public documentation index for DuDuClaw OS (v0.3.0, bring-up, embedding platform v1.73.1). Every
+> Public documentation index for DuDuClaw OS (v0.4.0, bring-up, embedding platform v1.73.4). Every
 > document in this repo is filed by the same TYPE × CONFIDENTIALITY rule as
 > the DuDuClaw platform repo — see [`../CLAUDE.md`](../CLAUDE.md) →
 > "Documentation Classification & Placement".
@@ -66,13 +66,13 @@ User-facing OS docs, authored in the platform repo and published on the docs sit
 | Document | Description |
 |----------|-------------|
 | [../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md](../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md) | Archived layer README from the Y1–Y9 bring-up waves: why three repos / why kas, UKI chain verification, disk strategy, fcitx5 dependency closure, `/data` provisioning. Dated; superseded by the CHANGELOG and the current layer README |
-| [../wiki/impl/gcp-builder-2026-10.md](../wiki/impl/gcp-builder-2026-10.md) | GCP Linux builder (n2-standard-16) setup, the v0.3.0 bake on it (timeline, peaks, pitfalls), signing kept on the maintainer's Mac via `package --no-sign` / `sign`, cost estimate, teardown |
+| [../wiki/impl/gcp-builder-2026-10.md](../wiki/impl/gcp-builder-2026-10.md) | GCP Linux builder (n2-standard-16) setup, the v0.3.0 and v0.4.0 bakes on it (timelines, peaks, pitfalls), signing kept on the maintainer's Mac via `package --no-sign` / `sign`, cost estimate, teardown |
 | [../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md](../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md) | Real-hardware acceptance checklist written for the Y6 burn package (N305 / 8845HS). Its premises predate v0.1.0 |
 | [../wiki/reports/bring-up-evidence/](../wiki/reports/bring-up-evidence/README.md) | QEMU boot and bitbake transcripts behind the bring-up "verified" claims |
-| [../wiki/reports/rootless-verification/2026-10-15.md](../wiki/reports/rootless-verification/2026-10-15.md) | First real bake + QEMU run of the rootless gateway (GCP builder, HEAD af2fc2d): V1–V25 and extra checks, the six release-blocking failures F1–F6 with their bisection, and raw guest output |
+| [../wiki/reports/rootless-verification/2026-10-15.md](../wiki/reports/rootless-verification/2026-10-15.md) | First real bake + QEMU run of the rootless gateway (GCP builder, HEAD af2fc2d): V1–V25 and extra checks, the six release-blocking failures F1–F6 with their bisection, raw guest output, and the re-verify round on 5d332c8 (35 of 36 checks passed) that cleared v0.4.0 |
 | [../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md](../wiki/eval/desktop-iso-qemu-walkthrough-2026-09-05.md) | Desktop-edition installer ISO walked end to end under QEMU on a Mac host (installer → first boot → lock screen); PASS table, defects found, demo video provenance |
 | [../wiki/eval/ai-runtimes-qemu-walkthrough-2026-09-06.md](../wiki/eval/ai-runtimes-qemu-walkthrough-2026-09-06.md) | AI-runtime bundle / local model / fine-tuning round walked under QEMU: bundled CLI versions, OOBE provider list + risk notice + real `claude setup-token` URL, `runtime.detect`, GGUF download → llama-server, dry-run fine-tune job, defects found and fixed (/lib64 loader, `linux-container`, `openai_compat` wire name) |
-| [../wiki/eval/rootless-verification-2026-10.md](../wiki/eval/rootless-verification-2026-10.md) | Checklist (not yet run) for the rootless gateway + rootless Podman change: the design's V1–V25 mapped to guest commands for the first GCP QEMU bake, preconditions (platform snapshot with P1–P12, sysd `--require-main-pid-of`), and extra checks the OS implementation added (kernel config, loopback guard, relocation, factory-reset fail-safe) |
+| [../wiki/eval/rootless-verification-2026-10.md](../wiki/eval/rootless-verification-2026-10.md) | Checklist for the rootless gateway + rootless Podman change (run on 2026-10-15; results in the rootless-verification report above): the design's V1–V25 mapped to guest commands for the first GCP QEMU bake, preconditions (platform snapshot with P1–P12, sysd `--require-main-pid-of`), and extra checks the OS implementation added (kernel config, loopback guard, relocation, factory-reset fail-safe) |
 | [../wiki/eval/fix14-launcher-footer-qemu-2026-09-08.md](../wiki/eval/fix14-launcher-footer-qemu-2026-09-08.md) | fix14 → v1.63.0 platform sync: shell snapshot (Launcher footer「⌘K 隨時喚起」), then all four platform snapshots + `duduclaw-platform-version.inc` moved to v1.63.0, baked and verified under QEMU (os-release, `duduclaw --version`, A/B UKI `duduclaw-os_1.63.0-y1-bringup.efi`); the bake log — stale detached Cargo.lock and a dependency-clobbering bump in the platform's release.sh, cargo ignoring PARALLEL_MAKE (OOM), 89 GB build-volume exhaustion — and what each taught |
 
 ---

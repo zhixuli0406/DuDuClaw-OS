@@ -7,16 +7,17 @@ be handed an API key and put to work without installing anything: `claude`,
 is there for running a model locally with no network at all.
 
 The payload is the bundle generated on 2026-09-05
-(`DUDUCLAW_AI_RUNTIMES_DATE = "20260905"` in the recipe). v0.2.0 and v0.3.0
-ship the same bundle, so the CLI versions below did not change when v0.3.0
-moved the embedded platform from 1.63.0 to 1.73.1. Every bundled CLI is a
-runtime in platform 1.73.1's runtime catalog
+(`DUDUCLAW_AI_RUNTIMES_DATE = "20260905"` in the recipe). v0.2.0, v0.3.0
+and v0.4.0 ship the same bundle, so the CLI versions below did not change
+when v0.3.0 moved the embedded platform from 1.63.0 to 1.73.1, or when
+v0.4.0 moved it to 1.73.4. Every bundled CLI is a runtime in platform
+1.73.4's runtime catalog
 (`crates/duduclaw-core/src/runtime_catalog.rs` in the platform repo). The
 catalog also lists Kiro CLI and Google Antigravity, which the image does
 not bundle (see [Not installed](#not-installed)).
 
-The platform deprecated its Gemini CLI runtime in v1.67.0. Platform 1.73.1
-still carries it and has moved the removal to v1.74.0 (Antigravity is the
+The platform deprecated its Gemini CLI runtime in v1.67.0. Platform 1.73.4
+(embedded in v0.4.0) still carries it and has moved the removal to v1.74.0 (Antigravity is the
 named replacement); the Gemini API provider is not affected. `gemini` stays
 in this image until the OS syncs to a platform release without that
 runtime.
@@ -60,11 +61,11 @@ component, plus a `skipped:` line for anything that is not there.
 
 **Google Antigravity (`agy`).** The platform's catalog lists it (already in
 the 1.63.0 snapshot v0.2.0 embedded, and the named replacement for the
-deprecated Gemini CLI in 1.73.1), but the 2026-09-05 bundle does not contain
+deprecated Gemini CLI since 1.73.1), but the 2026-09-05 bundle does not contain
 it. The catalog installs it with the vendor script
 (`https://antigravity.google/cli/install.sh`), which drops `agy` in
 `$HOME/.local/bin`; on this image that is `/data/duduclaw/.local/bin`, a path
-the gateway probes. Installing it on a running v0.3.0 image has not been
+the gateway probes. Installing it on a running v0.4.0 image has not been
 tested.
 
 **Kiro CLI.** Not in the image, and there is deliberately no `/usr/bin/
@@ -116,16 +117,22 @@ writing to `/root` would fail outright; and root is what an A/B update
 overwrites wholesale, so anything that *did* land there would vanish on the
 next update. `/data` survives both.
 
-The directory is created mode **0700, owner root** by
-`duduclaw-firstboot-provision.sh`. It holds ten vendors' live API tokens;
+The directory is mode **0700, owner `duduclaw`** (uid 1000, the account the
+gateway runs as since v0.4.0; before that it was owner root). Ownership is
+set at boot by `systemd-tmpfiles` from `duduclaw-home.conf`
+(`duduclaw-home-owner.service`), and `duduclaw-firstboot-provision.sh` uses
+the same file. It holds ten vendors' live API tokens;
 `duduclaw-kiosk`, the only other real local account, must not be able to
 read them.
 
-The one file under that home another account used to read — the Windows RemoteApp registry the kiosk shell turns into Launcher tiles — no longer lives there: `duduclaw compat windows-vm app-add` writes it to `/data/system/windows-vm/apps.toml` (root-owned, world-readable, created by `duduclaw-data-binds`), because the gateway unit and root's profile set `DUDUCLAW_WINDOWS_VM_APPS_DIR=/data/system/windows-vm`. Migration `1788717600` moves an existing registry on machines provisioned before this change.
+The one file under that home another account used to read — the Windows RemoteApp registry the kiosk shell turns into Launcher tiles — no longer lives there: `duduclaw compat windows-vm app-add` writes it to `/data/system/windows-vm/apps.toml` (owned by `duduclaw` since v0.4.0, world-readable, created by the tmpfiles file in `duduclaw-cli`), because the gateway unit and root's profile set `DUDUCLAW_WINDOWS_VM_APPS_DIR=/data/system/windows-vm`. Migration `1788717600` moves an existing registry on machines provisioned before this change.
 
 The dispatcher applies the same default for interactive use: a human
-running `claude` over SSH as root gets `HOME=/data/duduclaw` too, rather
-than scattering tokens into `/root`.
+running `claude` in a root login shell gets `HOME=/data/duduclaw` too,
+rather than scattering tokens into `/root`. Since v0.4.0 the dispatcher
+then re-executes the CLI as `duduclaw` through `setpriv --no-new-privs`, so
+hooks and MCP servers the CLI starts never run as root. (SSH is off by
+default, and no account can log in over it yet.)
 
 ### Subscription logins vs API keys
 
@@ -167,14 +174,13 @@ The dashboard's local-models page drives exactly this through the gateway's
 unauthenticated HTTP API, and the firewall is a second layer, not the
 first.
 
-Known gap: the service runs as root. A dedicated account would be correct,
-but `/data/duduclaw` is 0700 root (it holds the credentials above), and a
-0700 parent blocks traversal for any other uid no matter what mode
-`models/` has. Fixing it means either moving the model store out from
-under the credentials tree or giving `/data/duduclaw` a group and mode
-0710 — both touch the firstboot provisioner and the gateway's path
-constants together, so they belong with the local-model RPC work rather
-than with this payload.
+Since v0.4.0 the service runs as `duduclaw`, the same account as the
+gateway, and no longer loads `llama-server.env` as an `EnvironmentFile=`
+(through v0.3.0 it ran as root and read that file, which the gateway's
+account can write). `/usr/libexec/duduclaw/llama-server-run` reads the file
+as uid 1000 and accepts only the four `LLAMA_*` keys shown above:
+`LLAMA_MODEL` must be under `/data/duduclaw/models`, and `LLAMA_EXTRA_ARGS`
+may not contain `--host` or `--port`.
 
 ## Fine-tuning
 

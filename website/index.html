@@ -4,20 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DuDuClaw OS · AI 員工的 Linux 值班機</title>
-<meta name="description" content="把 x86-64 電腦變成 DuDuClaw AI 員工的值班機。從桌面交辦、檢視任務與處理核准；v0.3.0 為 pre-GA，已在 QEMU 驗證，真機尚未開機。">
+<meta name="description" content="把 x86-64 電腦變成 DuDuClaw AI 員工的值班機。從桌面交辦、檢視任務與處理核准；v0.4.0 為 pre-GA，已在 QEMU 驗證，真機尚未開機。">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="DuDuClaw OS">
 <meta property="og:locale" content="zh_TW">
 <meta property="og:title" content="DuDuClaw OS · AI 員工的 Linux 值班機">
-<meta property="og:description" content="把 x86-64 電腦變成 DuDuClaw AI 員工的值班機。從桌面交辦、檢視任務與處理核准；v0.3.0 為 pre-GA，已在 QEMU 驗證，真機尚未開機。">
+<meta property="og:description" content="把 x86-64 電腦變成 DuDuClaw AI 員工的值班機。從桌面交辦、檢視任務與處理核准；v0.4.0 為 pre-GA，已在 QEMU 驗證，真機尚未開機。">
 <meta property="og:image" content="https://os.duduclaw.dudustudio.monster/assets/brand/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="DuDuClaw OS：給人與 AI 員工共用的 Linux 桌面，pre-GA，已在 QEMU 開機驗證">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="DuDuClaw OS · AI 員工的 Linux 值班機">
-<meta name="twitter:description" content="把 x86-64 電腦變成 DuDuClaw AI 員工的值班機。從桌面交辦、檢視任務與處理核准；v0.3.0 為 pre-GA，已在 QEMU 驗證，真機尚未開機。">
+<meta name="twitter:description" content="把 x86-64 電腦變成 DuDuClaw AI 員工的值班機。從桌面交辦、檢視任務與處理核准；v0.4.0 為 pre-GA，已在 QEMU 驗證，真機尚未開機。">
 <meta name="twitter:image" content="https://os.duduclaw.dudustudio.monster/assets/brand/og.png">
 <meta name="twitter:image:alt" content="DuDuClaw OS：給人與 AI 員工共用的 Linux 桌面，pre-GA，已在 QEMU 開機驗證">
 
@@ -168,11 +168,11 @@
 
 <div class="release-band">
   <div class="wrap">
-    <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.3.0" rel="noopener">
+    <a href="https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.4.0" rel="noopener">
       <span class="dot" aria-hidden="true"></span>
-      <strong>v0.3.0</strong>
-      <span>2026-10-14</span>
-      <span>內嵌平台 1.73.1</span>
+      <strong>v0.4.0</strong>
+      <span>2026-10-16</span>
+      <span>內嵌平台 1.73.4</span>
       <span>Linux 6.18</span>
       <span>pre-GA bring-up</span>
       <svg class="icon icon-sm" aria-hidden="true"><use href="#i-arrow"></use></svg>
@@ -194,11 +194,11 @@
           <div class="hero-cta">
             <a class="btn btn-primary" href="download.html">
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
-              下載 v0.3.0
+              下載 v0.4.0
             </a>
             <a class="btn btn-ghost" href="#desktop">看看桌面</a>
           </div>
-          <p class="hero-meta">v0.3.0 pre-GA · x86-64 / UEFI · Apache-2.0<br>目前適合試用與驗證，真機尚未開機；<a href="#status">先看驗證範圍</a>。</p>
+          <p class="hero-meta">v0.4.0 pre-GA · x86-64 / UEFI · Apache-2.0<br>目前適合試用與驗證，真機尚未開機；<a href="#status">先看驗證範圍</a>。</p>
         </div>
         <figure class="hero-visual">
           <div class="frame">
@@ -208,7 +208,7 @@
               <img src="assets/screens/launcher-mobile.png" alt="v0.2.0 在 QEMU 上按 Super+K 叫出的 Launcher 局部：第一個結果是「交辦給 總管助理」，下面是應用程式、可安裝的瀏覽器與 Bottles，底部是 Dock" width="640" height="670" fetchpriority="high" decoding="async">
             </picture>
           </div>
-          <figcaption>Super+K 叫出的交辦列。v0.2.0 發布映像在 QEMU 上的實拍，v0.3.0 尚未重拍。</figcaption>
+          <figcaption>Super+K 叫出的交辦列。v0.2.0 發布映像在 QEMU 上的實拍，v0.3.0 與 v0.4.0 都尚未重拍。</figcaption>
         </figure>
       </div>
     </div>
@@ -220,11 +220,12 @@
       <div class="notice bar reveal">
         <h2 id="status-title">先確認：這還不是正式版</h2>
         <ul>
-          <li><strong>0.3.0 屬於 bring-up 階段</strong>，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動。</li>
-          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。v0.3.0 發布前，QEMU 版的整碟映像在 QEMU 開到登入畫面，兩種安裝器 ISO 開到 live 環境的自動登入、桌面工作階段有起來；安裝精靈這一版沒有跑，跑完整段安裝的紀錄仍停在 v0.1.0 與 2026-09-06 的開發版。</li>
+          <li><strong>0.4.0 屬於 bring-up 階段</strong>，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動。</li>
+          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。v0.4.0 發布前，QEMU 版的整碟映像在 QEMU 開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）；安裝精靈這一版沒有跑，跑完整段安裝的紀錄仍停在 v0.1.0 與 2026-09-06 的開發版。桌面版的測試映像另外跑了兩輪 rootless 驗證，第二輪 36 項過 35 項；從 v0.3.0 經 A/B 更新升級、需要 LLM 憑證的任務沙箱／電腦操作／Discovery 完整流程與 Windows 虛擬機都還沒驗證。</li>
+          <li><strong>v0.4.0 起 gateway 不再以 root 執行，升級是單向的</strong>。gateway 改用一般帳號 <code>duduclaw</code>，桌面版的容器改用 rootless Podman。裝置成功開過 v0.4.0 之後就回不去 v0.3.0 或更早的版本；SSH 預設關閉，目前也沒有能透過 SSH 登入的帳號。</li>
           <li><strong>發布映像沒有啟用 Secure Boot 簽章、dm-verity 與 TPM</strong>。相關 layer 已經接好，由建置 overlay 開啟；用官方映像開機前請在韌體裡關閉 Secure Boot。</li>
           <li><strong>共駕功能已經編譯進映像，但預設關閉</strong>，每個 agent 要各自開啟。凍結、交還、急停與影子工作區在開發階段驗證過：容器裡用模擬輸入，QEMU 虛擬機裡用真實鍵盤滑鼠事件，那台虛擬機跑的是早期 arm64 開發映像，不是這版 x86-64 發布映像。真實 DRM 硬體與雙螢幕還沒驗。</li>
-          <li><strong>v0.2.0 與 v0.1.0 仍留在 Releases</strong>，想回到舊版可以重新下載安裝；版本之間沒有透過 A/B 更新互轉的驗證紀錄。</li>
+          <li><strong>v0.3.0 與更早的版本仍留在 Releases</strong>，資產與驗簽方式相同；開過 v0.4.0 的裝置不能經 A/B 更新退回這些版本。版本之間經 A/B 更新升級，目前沒有驗證紀錄。</li>
         </ul>
       </div>
     </div>
@@ -234,7 +235,7 @@
   <section class="section-tight tool-strip" id="tools" aria-labelledby="tools-title">
     <div class="wrap">
       <h2 id="tools-title">桌面版內附的 AI 工具</h2>
-      <ul class="tool-brands" aria-label="v0.3.0 桌面版內附工具範例">
+      <ul class="tool-brands" aria-label="v0.4.0 桌面版內附工具範例">
         <li class="pill">Claude Code</li>
         <li class="pill">Codex</li>
         <li class="pill">Grok Build</li>
@@ -250,10 +251,10 @@
       <div class="section-head reveal">
         <span class="eyebrow">桌面</span>
         <h2>先看實際桌面</h2>
-        <p>以下六張都是 v0.2.0 發布映像在 QEMU 上的截圖（v0.3.0 還沒重拍），2026 年 10 月 7 日拍攝，映像與 Release 上的檔案核對過 SHA-256 與簽章。安裝精靈那張來自桌面版安裝器 ISO，其餘五張來自整碟映像的首次開機。帳號名稱「Demo」是示範用的，也沒有設定任何 AI 服務的授權，所以首頁還沒有任務。真機畫面目前還沒有。</p>
+        <p>以下六張都是 v0.2.0 發布映像在 QEMU 上的截圖（v0.3.0 與 v0.4.0 還沒重拍），2026 年 10 月 7 日拍攝，映像與 Release 上的檔案核對過 SHA-256 與簽章。安裝精靈那張來自桌面版安裝器 ISO，其餘五張來自整碟映像的首次開機。帳號名稱「Demo」是示範用的，也沒有設定任何 AI 服務的授權，所以首頁還沒有任務。真機畫面目前還沒有。</p>
       </div>
 
-      <p class="shot-label">v0.2.0 截圖 · v0.3.0 尚未重拍</p>
+      <p class="shot-label">v0.2.0 截圖 · v0.4.0 尚未重拍</p>
       <div class="tablist" role="tablist" aria-label="桌面畫面">
         <button role="tab" id="tab-home-light" aria-controls="panel-home-light" aria-selected="true" type="button">首頁（淺色）</button>
         <button role="tab" id="tab-home-dark" aria-controls="panel-home-dark" aria-selected="false" type="button">首頁（深色）</button>
@@ -431,7 +432,7 @@
         </article>
       </div>
 
-      <p class="shadow-foot reveal">影子工作區與共駕已編譯進 v0.3.0，預設關閉，每個 agent 各自開啟。凍結與接手曾在早期開發映像驗證，並非這版 x86-64 發布映像；真實 DRM 硬體與雙螢幕尚未驗證。<a href="#status">完整驗證範圍</a>。</p>
+      <p class="shadow-foot reveal">影子工作區與共駕已編譯進 v0.4.0，預設關閉，每個 agent 各自開啟。凍結與接手曾在早期開發映像驗證，並非這版 x86-64 發布映像；真實 DRM 硬體與雙螢幕尚未驗證。<a href="#status">完整驗證範圍</a>。</p>
     </div>
   </section>
 
@@ -441,7 +442,7 @@
       <div class="section-head reveal">
         <span class="eyebrow">核心能力</span>
         <h2>桌面、AI 工具與系統更新一起準備</h2>
-        <p>v0.3.0 桌面版內嵌 DuDuClaw 平台 1.73.1，基座為 Yocto Project 6.0 與 Linux 6.18。以下是映像內容；功能的驗證程度見狀態卡與文件。</p>
+        <p>v0.4.0 桌面版內嵌 DuDuClaw 平台 1.73.4，基座為 Yocto Project 6.0 與 Linux 6.18。以下是映像內容；功能的驗證程度見狀態卡與文件。</p>
       </div>
       <div class="grid grid-3">
         <article class="card bar reveal">
@@ -474,7 +475,7 @@
         <article class="card bar reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-refresh"></use></svg></span>
           <h3>更新系統、保留資料</h3>
-          <p>A/B 更新寫入另一個系統槽；桌面版採唯讀 root，資料另存於 <code>/data</code>。這套映像實測過套用更新與手動回滾，自動失敗回滾尚未做故障注入驗證。</p>
+          <p>A/B 更新寫入另一個系統槽；桌面版採唯讀 root，資料另存於 <code>/data</code>。先前的映像實測過套用更新與手動回滾，v0.4.0 的 A/B 升級路徑還沒驗證，自動失敗回滾也尚未做故障注入驗證。</p>
         </article>
       </div>
     </div>
@@ -515,7 +516,7 @@
             <li>同樣的 A/B 佈局與桌面殼</li>
             <li>gateway 管理後台</li>
             <li>沒有應用層、app 相容層、AI CLI 與 llama.cpp</li>
-            <li>沒有唯讀 root 與防火牆，SSH 在區網連得到</li>
+            <li>沒有唯讀 root；防火牆與桌面版相同，SSH 預設關閉</li>
             <li>屬於 bring-up 產物</li>
           </ul>
           <a class="btn btn-ghost btn-block" href="download.html#assets">看基礎版資產</a>
@@ -545,7 +546,7 @@
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-power"></use></svg></span>
           <h3>UEFI 開機</h3>
-          <p>純 legacy BIOS 的機器不在支援範圍。v0.3.0 的開機鏈未啟用 Secure Boot 簽章，開機前要在韌體裡關閉 Secure Boot。</p>
+          <p>純 legacy BIOS 的機器不在支援範圍。v0.4.0 的開機鏈未啟用 Secure Boot 簽章，開機前要在韌體裡關閉 Secure Boot。</p>
         </article>
         <article class="card reveal">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-disk"></use></svg></span>
@@ -586,7 +587,7 @@
       <div class="section-head reveal">
         <span class="eyebrow">從開機到上工</span>
         <h2>準備試用的四個步驟</h2>
-        <p>先選映像、驗簽，再依指南寫入 USB 或測試硬碟。首次設定提供圖形精靈；v0.3.0 安裝器尚未完成整段安裝驗證，請以指南與目前測試範圍為準。</p>
+        <p>先選映像、驗簽，再依指南寫入 USB 或測試硬碟。首次設定提供圖形精靈；v0.4.0 安裝器尚未完成整段安裝驗證，請以指南與目前測試範圍為準。</p>
       </div>
       <div class="steps">
         <div class="step reveal">
@@ -626,7 +627,7 @@
           <ul class="checklist" style="margin-top:12px">
             <li>
               <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
-              <span><strong>A/B 原子更新與回滾</strong>更新寫進另一槽；開機計數已接上，這套映像實測過套用與手動回滾。</span>
+              <span><strong>A/B 原子更新與回滾</strong>更新寫進另一槽；開機計數已接上；先前的映像實測過套用與手動回滾，v0.4.0 的升級路徑還沒驗證。</span>
             </li>
             <li>
               <svg class="icon ok" aria-hidden="true"><use href="#i-check"></use></svg>
@@ -641,7 +642,7 @@
         <article class="card reveal">
           <h3 class="card-title">
             <svg class="icon" aria-hidden="true"><use href="#i-clock"></use></svg>
-            已接好但 v0.3.0 未啟用
+            已接好但 v0.4.0 未啟用
           </h3>
           <ul class="checklist" style="margin-top:12px">
             <li>
@@ -660,13 +661,13 @@
         </article>
       </div>
 
-      <p class="caption trust-boundary">桌面版有唯讀 root 與防火牆，基礎版沒有；gateway 目前仍以 root 執行。共駕預設關閉，系統提供接手、急停與核准機制；這些不等於完整隔離或供應商的資料保護保證。</p>
+      <p class="caption trust-boundary">桌面版有唯讀 root，基礎版沒有；兩版都有預設拒絕的防火牆，SSH 預設關閉。v0.4.0 起 gateway 以一般帳號 <code>duduclaw</code> 執行，AI 員工跟它共用這個帳號。共駕預設關閉，系統提供接手、急停與核准機制；這些不等於完整隔離或供應商的資料保護保證。</p>
       <div class="card reveal" style="margin-top:20px">
         <h3 class="card-title">
           <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
           minisign 公鑰
         </h3>
-        <p style="margin-bottom:14px">所有 v0.3.0 資產都用這一把簽，v0.1.0、v0.2.0 也是同一把。公鑰固定寫在這裡，下載後用它驗。</p>
+        <p style="margin-bottom:14px">所有 v0.4.0 資產都用這一把簽，v0.1.0 到 v0.3.0 也是同一把。公鑰固定寫在這裡，下載後用它驗。</p>
         <div class="code key-block">
           <button class="copy-btn" type="button" data-copy="minisign-key">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"></use></svg>
@@ -683,8 +684,8 @@
     <div class="wrap">
       <div class="section-head reveal"><span class="eyebrow">常見問題</span><h2 id="faq-title">試用前，你可能想知道</h2></div>
       <div class="faq-list">
-        <details><summary>DuDuClaw OS 與 DuDuClaw 有什麼差別？</summary><p>DuDuClaw 是 AI 員工平台，可部署在既有系統；DuDuClaw OS 是內嵌平台的 Linux 映像，加上交辦桌面、視窗系統與 A/B 更新鏈。OS 版號獨立，v0.3.0 內嵌平台 1.73.1，並非平台最新版本的全部功能。</p></details>
-        <details><summary>現在適合取代日常主力機嗎？</summary><p>目前建議用可重裝的測試環境試用。v0.3.0 是 pre-GA，驗證以 QEMU 為主，真機尚未開機；安裝器整段流程、真機 GPU 與雙螢幕仍未驗證。請先看<a href="#status">目前狀態</a>。</p></details>
+        <details><summary>DuDuClaw OS 與 DuDuClaw 有什麼差別？</summary><p>DuDuClaw 是 AI 員工平台，可部署在既有系統；DuDuClaw OS 是內嵌平台的 Linux 映像，加上交辦桌面、視窗系統與 A/B 更新鏈。OS 版號獨立，v0.4.0 內嵌平台 1.73.4，並非平台最新版本的全部功能。</p></details>
+        <details><summary>現在適合取代日常主力機嗎？</summary><p>目前建議用可重裝的測試環境試用。v0.4.0 是 pre-GA，驗證以 QEMU 為主，真機尚未開機；安裝器整段流程、真機 GPU 與雙螢幕仍未驗證。請先看<a href="#status">目前狀態</a>。</p></details>
         <details><summary>需要什麼硬體？Apple Silicon 可以嗎？</summary><p>目標為支援 AVX2 的 x86-64 CPU、UEFI 與 SSD；規劃最低為 4 GB RAM、64 GB SSD，但尚無真機數據支持。arm64／Apple Silicon 不在支援範圍。官方映像開機需關閉 Secure Boot，詳見<a href="#hardware">硬體條件</a>。</p></details>
         <details><summary>需要另外準備 AI 帳號嗎？一定要連網嗎？</summary><p>雲端 CLI 需要你自己的供應商帳號或 API 金鑰，費用與使用條款依供應商而定，不包含在 OS 下載中。桌面版可另行下載本機模型供離線推理；模型下載、雲端服務與網路任務仍需要連線，基礎版不含 AI CLI 與本機推理服務。</p></details>
         <details><summary>本機資料會傳到雲端嗎？</summary><p>OS 設定、憑證與本機模型保存在本機資料分割區；但交辦給雲端模型時，提示、檔案內容與工具結果等執行所需資料可能傳給該供應商。資料去向由你配置的服務與工具決定；不能將本機部署理解成所有資料都不會出機。</p></details>
@@ -762,7 +763,7 @@
       <div class="hero-cta">
         <a class="btn btn-primary" href="download.html">
           <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
-          下載 v0.3.0
+          下載 v0.4.0
         </a>
         <a class="btn btn-ghost" href="docs/os/readme/">閱讀入門文件</a>
         <a class="btn btn-ghost" href="https://duduclaw.dudustudio.monster/" rel="noopener">了解 DuDuClaw 平台</a>

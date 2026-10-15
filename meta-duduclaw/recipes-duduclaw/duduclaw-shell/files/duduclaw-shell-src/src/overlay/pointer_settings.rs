@@ -453,10 +453,11 @@ fn shape_section(cursor: &CursorState, state: &PointerUiState, palette: ShellPal
 /// One style card: a preview tray with the three shapes, then a title/
 /// subtitle row and the selection radio.
 ///
-/// The paw card shows the paw for `default` and the SYSTEM shapes for `text`
-/// and `pointer`, because that is what the theme actually installs —
-/// 「爪印不覆蓋 pointer」是既定拍板 (a paw loses the hand's directional
-/// meaning). Drawing three paws here would misrepresent what switching does.
+/// The brand card shows the C1 brand arrow for `default` and the SYSTEM
+/// shapes for `text` and `pointer`, because that is what the theme actually
+/// installs — the brand theme never overrides `pointer` (既定拍板: a brand
+/// shape there loses the hand's "this is a link" meaning). Drawing three
+/// brand shapes here would misrepresent what switching does.
 fn shape_card(brand: bool, selected: bool, state: &PointerUiState, palette: ShellPalette, cx: &mut Context<ShellView>) -> Stateful<Div> {
     let busy = state.in_flight;
     let listener = cx.listener(move |view, _ev, _window, cx| apply_source(view, brand, cx));
@@ -783,7 +784,7 @@ mod tests {
         };
         match &state.load {
             PointerLoad::Loaded(cursor) => {
-                assert!(cursor.requested_is_brand(), "the paw card stays selected — it IS what was chosen");
+                assert!(cursor.requested_is_brand(), "the brand card stays selected — it IS what was chosen");
                 assert!(!cursor.is_brand(), "…but the previews draw what is really on screen");
                 assert!(cursor.theme_missing(), "…and the screen says why the two differ");
             }

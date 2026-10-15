@@ -197,7 +197,7 @@ pub fn avatar_circle(agent: &AgentSummary, size: gpui::Pixels) -> Div {
         .justify_center()
         .text_size(px(11.))
         .font_weight(FontWeight::BOLD)
-        .text_color(theme::alpha(theme::BRAND_FOREGROUND, 1.0))
+        .text_color(theme::alpha(theme::AVATAR_FOREGROUND, 1.0))
         .child(SharedString::from(avatar_glyph(agent)))
 }
 

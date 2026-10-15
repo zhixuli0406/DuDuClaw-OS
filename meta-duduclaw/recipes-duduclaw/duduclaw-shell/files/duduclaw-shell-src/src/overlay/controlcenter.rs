@@ -867,7 +867,7 @@ fn small_avatar(initial: &'static str, bg_hex: u32, palette: ShellPalette) -> Di
         .flex()
         .items_center()
         .justify_center()
-        .child(div().text_size(px(10.)).font_weight(FontWeight::BOLD).text_color(theme::alpha(palette.brand_foreground, 1.0)).child(initial))
+        .child(div().text_size(px(10.)).font_weight(FontWeight::BOLD).text_color(theme::alpha(palette.avatar_text(bg_hex), 1.0)).child(initial))
 }
 
 #[cfg(test)]

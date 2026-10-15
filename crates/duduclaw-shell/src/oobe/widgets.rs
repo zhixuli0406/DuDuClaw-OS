@@ -290,10 +290,10 @@ pub(crate) fn check_box(checked: bool, palette: ShellPalette) -> Div {
 /// distinct from the top-bar hairline's `rgba(255,255,255,0.10)`
 /// (`theme::dark::SURFACE_BORDER_ALPHA`) — two different translucent-white
 /// weights in the same illustration, both kept exactly as drawn — and BOTH
-/// previews' brand pill is the LIGHT theme's brand hex `#2171cc`, never
-/// `theme::dark::BRAND`'s brighter `#4390ee` (the board's own dark-preview
-/// swatch was authored with the light brand color, so that is what ships
-/// here too).
+/// previews' brand pill is the LIGHT theme's brand hex, never the dark
+/// theme's (the board's own dark-preview swatch was authored with the light
+/// brand color, so that is what ships here too). C1 identity (2026-10-16):
+/// that light brand hex is navy `#102B48` (was blue `#2171cc`).
 pub(crate) fn theme_preview(choice: ThemeChoice) -> Div {
     let (bg, bar_bg, bar_border, pane_bg, pane_border, line1, line2) = match choice {
         ThemeChoice::Light => (
@@ -317,7 +317,7 @@ pub(crate) fn theme_preview(choice: ThemeChoice) -> Div {
     };
     // Same literal in both branches on purpose — see this fn's own doc
     // comment ("both previews' brand pill is the LIGHT theme's brand hex").
-    let brand_pill = theme::alpha(0x2171cc, 1.0);
+    let brand_pill = theme::alpha(0x102b48, 1.0);
 
     div()
         .relative()

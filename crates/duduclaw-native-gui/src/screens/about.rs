@@ -103,11 +103,15 @@ pub use crate::screens::dashboard::Loadable;
 
 // ── Mark asset ────────────────────────────────────────────────────────
 //
-// Copied verbatim from `appliance/branding/png/mark-256.png` (this crate's
-// own brand mark, not third-party — no OFL/license file needed the way
-// `assets/fonts/OFL-*.txt` is needed for the bundled type faces). 256px
-// source for a crisp render at the 72px display size on a 2x/retina
-// backing store (128px source would only cover ~1.8x). `Image::from_bytes`
+// The DuDuClaw OS app icon (C1 identity, 2026-10-16): the cat mark with the
+// "OS" badge on its cream tile, derived from
+// `appliance/branding/duduclaw-os-app-icon-1024.png` by
+// `scripts/brand/derive-c1-assets.py` (this crate's own brand mark, not
+// third-party — no OFL/license file needed the way `assets/fonts/OFL-*.txt`
+// is needed for the bundled type faces). Until 2026-10-16 this was the
+// crimson circle mark (`mark-256.png`). 256px source for a crisp render at
+// the 72px display size on a 2x/retina backing store (128px source would
+// only cover ~1.8x). `Image::from_bytes`
 // needs no `AssetSource`/`with_assets(...)` registration on the `App`
 // (unlike `img("some/asset/path")`'s `Resource::Embedded` variant) — same
 // "embed the bytes directly, no runtime asset lookup" shape `main.rs`
@@ -116,7 +120,18 @@ pub use crate::screens::dashboard::Loadable;
 // in a `OnceLock` so the PNG is decoded into an `Arc<Image>` once, not once
 // per render tick (renders happen constantly, per `main.rs`'s 100ms poll
 // loop feeding `cx.notify()`).
-const MARK_PNG_BYTES: &[u8] = include_bytes!("../../assets/mark-256.png");
+const MARK_PNG_BYTES: &[u8] = include_bytes!("../../assets/duduclaw-os-app-icon-256.png");
+
+/// The bare C1 cat mark, cream ink (this crate renders dark only), for the
+/// two wordmark slots that used to show a 🐾 emoji: the sidebar's app-name
+/// row and the language picker's hero. Derived by
+/// `scripts/brand/derive-c1-assets.py`; 128px covers the 44px hero at 2x.
+const CAT_MARK_PNG_BYTES: &[u8] = include_bytes!("../../assets/duduclaw-os-mark-reverse-128.png");
+
+pub(crate) fn cat_mark_image() -> Arc<Image> {
+    static MARK: OnceLock<Arc<Image>> = OnceLock::new();
+    MARK.get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Png, CAT_MARK_PNG_BYTES.to_vec()))).clone()
+}
 
 fn mark_image() -> Arc<Image> {
     static MARK: OnceLock<Arc<Image>> = OnceLock::new();

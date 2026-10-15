@@ -217,16 +217,24 @@ fn glow_bottom_left() -> Div {
     div().absolute().bottom(px(-220.)).left(px(-120.)).w(px(720.)).h(px(720.)).rounded(px(720.)).bg(theme::alpha(0x284678, 0.28))
 }
 
-/// The mascot watermark — reuses `crate::home::{png, CAT_512}` (widened to
-/// `pub(crate)` this round, see that file's own doc comment) rather than a
-/// second `include_bytes!` of the same PNG. Same aspect-ratio derivation
-/// `home::cat_hero` uses (264:512 actual PNG dimensions): board specifies
-/// `height: 460px` at `top: 100px`, centered — width = 264/512 × 460 ≈
-/// 237.2, left = (1440 − 237.2) / 2 ≈ 601.4 for this crate's fixed 1440px
-/// dev-mode window (same "no resize handling this round" scope boundary
-/// `home::cat_hero`'s own doc comment states).
+/// The mascot watermark — reuses `crate::home::{png, MARK_512_REVERSE}`
+/// rather than a second `include_bytes!` of the same PNG. The lock screen is
+/// always dark, so it is always the cream-ink (`-reverse`) C1 mark. Board
+/// slot: `height: 460px` at `top: 100px`, centered; the C1 mark is square,
+/// so width = 460 and left = (1440 − 460) / 2 = 490 for this crate's fixed
+/// 1440px dev-mode window (same "no resize handling this round" scope
+/// boundary `home::cat_hero`'s own doc comment states). Before 2026-10-16
+/// this was the 264×512 crimson cat at 237.2×460.
+const CAT_WATERMARK_SIZE: f32 = 460.;
+
 fn cat_watermark() -> gpui::Img {
-    img(crate::home::png(crate::home::CAT_512)).absolute().top(px(100.)).left(px(601.4)).w(px(237.2)).h(px(460.)).opacity(0.10)
+    img(crate::home::png(crate::home::MARK_512_REVERSE))
+        .absolute()
+        .top(px(100.))
+        .left(px((1440. - CAT_WATERMARK_SIZE) / 2.))
+        .w(px(CAT_WATERMARK_SIZE))
+        .h(px(CAT_WATERMARK_SIZE))
+        .opacity(0.10)
 }
 
 fn clock_block(time_text: &str, date_text: &str) -> Div {
@@ -299,7 +307,8 @@ fn card_header(title: &str) -> Div {
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(img(crate::home::png(crate::home::MARK_32)).w(px(16.)).h(px(16.)).rounded(px(8.)))
+        // Dark card, so the cream-ink mark; no circular crop (C1 rule).
+        .child(img(crate::home::png(crate::home::MARK_32_REVERSE)).w(px(16.)).h(px(16.)))
         .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::alpha(0xfafafa, 0.9)).child(title.to_string()))
 }
 

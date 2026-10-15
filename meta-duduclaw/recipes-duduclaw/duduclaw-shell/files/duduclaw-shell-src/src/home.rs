@@ -110,14 +110,34 @@ use running_windows::RunningWindowsFeed;
 /// board reuses the identical two assets) — widening visibility here avoids
 /// a second `include_bytes!` of the same PNGs bloating the binary with a
 /// duplicate copy.
-pub(crate) const MARK_32: &[u8] = include_bytes!("../assets/branding/mark-32.png");
-pub(crate) const CAT_512: &[u8] = include_bytes!("../assets/branding/cat-512.png");
+///
+/// C1 identity (2026-10-16): the crimson origami cat (`cat-512.png`, 264×512)
+/// and its circular mark (`mark-32.png`) are retired. Every slot now draws
+/// the C1 cat mark, square, in two inks — navy for light surfaces, cream
+/// (`-reverse`) for dark ones, per the brand rule "never put a navy mark on
+/// a dark background". The amber tail is the same in both. These are
+/// derived files: `scripts/brand/derive-c1-assets.py` renders them from
+/// `appliance/branding/duduclaw-os-mark.svg`.
+pub(crate) const MARK_32: &[u8] = include_bytes!("../assets/branding/duduclaw-os-mark-32.png");
+pub(crate) const MARK_32_REVERSE: &[u8] = include_bytes!("../assets/branding/duduclaw-os-mark-reverse-32.png");
+pub(crate) const MARK_512: &[u8] = include_bytes!("../assets/branding/duduclaw-os-mark-512.png");
+pub(crate) const MARK_512_REVERSE: &[u8] = include_bytes!("../assets/branding/duduclaw-os-mark-reverse-512.png");
+
+/// The 32px mark in the ink that reads on `palette`'s surfaces.
+pub(crate) fn mark_32(palette: ShellPalette) -> &'static [u8] {
+    if palette.is_dark() { MARK_32_REVERSE } else { MARK_32 }
+}
+
+/// The 512px mark in the ink that reads on `palette`'s surfaces.
+pub(crate) fn mark_512(palette: ShellPalette) -> &'static [u8] {
+    if palette.is_dark() { MARK_512_REVERSE } else { MARK_512 }
+}
 
 /// WP-A4-4 (2026-08-22): memoized per asset. This is called from RENDER
 /// bodies (Home's mascot + menu-bar mark, the lockscreen's watermark +
 /// mark, OOBE's finish mark), so the previous `bytes.to_vec()` copied and
 /// re-hashed the whole PNG on every single repaint — 14.5 KB for
-/// `CAT_512` — purely to hand gpui a value it already had.
+/// the then-current `cat-512.png` — purely to hand gpui a value it already had.
 ///
 /// Correctness was never at risk (checked against the pinned gpui rev's own
 /// `Image::from_bytes`, `crates/gpui/src/platform.rs`: `id: hash(&bytes)`
@@ -267,7 +287,7 @@ pub(crate) fn desktop_content(
             820.,
             theme::alpha(0x788cc8, if palette.is_dark() { 0.08 } else { 0.12 }),
         ))
-        .child(cat_hero())
+        .child(cat_hero(palette))
         .child(workspace(palette, operator_name, cx))
         .child(home_dock::goal_cards_row(palette, notifications, task_progress))
         .child(home_dock::activity_shelf(palette, notifications))
@@ -322,19 +342,21 @@ fn blob_bottom_right(bottom: f32, right: f32, size: f32, color: gpui::Rgba) -> D
     div().absolute().bottom(px(bottom)).right(px(right)).w(px(size)).h(px(size)).rounded(px(size)).bg(color)
 }
 
-/// The mascot — `cat-512.png` is actually 264×512 (not square), so the
-/// design board's `height: 192px` implies `width: 99px` at the same aspect
-/// ratio (264/512 × 192 = 99 exactly); centered for a FIXED 1440px window
-/// (`left: (1440 - 99) / 2 = 670.5`) — this crate doesn't handle window
-/// resize/responsive centering this round (task brief: dev-mode fixed
-/// 1440×900 window).
-fn cat_hero() -> gpui::Img {
-    img(png(CAT_512))
+/// The mascot — the C1 cat mark (square). The design board's slot is
+/// `height: 192px` at `top: 486px`; the slot height is kept and the width
+/// now equals it (the retired crimson cat was 264×512, hence the old
+/// 99px width). Centered for a FIXED 1440px window (`left: (1440 - 192) /
+/// 2 = 624`) — this crate doesn't handle window resize/responsive
+/// centering this round (task brief: dev-mode fixed 1440×900 window).
+const CAT_HERO_SIZE: f32 = 192.;
+
+fn cat_hero(palette: ShellPalette) -> gpui::Img {
+    img(png(mark_512(palette)))
         .absolute()
         .top(px(486.))
-        .left(px(670.5))
-        .w(px(99.))
-        .h(px(192.))
+        .left(px((1440. - CAT_HERO_SIZE) / 2.))
+        .w(px(CAT_HERO_SIZE))
+        .h(px(CAT_HERO_SIZE))
         // Main.dc.html also applies `filter: drop-shadow(...)` — gpui has
         // no image drop-shadow filter (only a rectangular box-shadow on the
         // element's bounds, which would draw a visibly wrong-shaped box
@@ -375,12 +397,12 @@ fn menu_bar(palette: ShellPalette, notifications: &NotificationsFeed, cx: &mut C
         .border_color(border_color)
         .text_size(px(13.))
         .text_color(theme::alpha(palette.foreground, 1.0))
-        .child(menu_bar_left())
+        .child(menu_bar_left(palette))
         .child(menu_bar_ticker(palette, notifications, cx))
         .child(menu_bar_right(palette, cx))
 }
 
-fn menu_bar_left() -> Div {
+fn menu_bar_left(palette: ShellPalette) -> Div {
     div()
         .flex()
         .items_center()
@@ -391,7 +413,9 @@ fn menu_bar_left() -> Div {
                 .items_center()
                 .gap(px(6.))
                 .font_weight(FontWeight::BOLD)
-                .child(img(png(MARK_32)).w(px(16.)).h(px(16.)).rounded(px(8.)))
+                // C1: no circular crop — the brand rules forbid putting the
+                // mark inside a circle (the retired mark-32 WAS a circle).
+                .child(img(png(mark_32(palette))).w(px(16.)).h(px(16.)))
                 .child(fake_data::MENU_BRAND),
         )
         .children(fake_data::MENU_ITEMS.iter().map(|label| div().child(*label)))
@@ -760,17 +784,32 @@ mod tests {
     /// returned `Arc` is the direct evidence the memo actually hit.
     #[test]
     fn png_returns_the_same_cached_image_for_a_repeated_asset() {
-        let a = png(CAT_512);
-        let b = png(CAT_512);
+        let a = png(MARK_512);
+        let b = png(MARK_512);
         assert!(Arc::ptr_eq(&a, &b), "a repeat render must reuse the decoded asset, not rebuild it");
     }
 
     #[test]
     fn png_keeps_distinct_assets_distinct() {
-        let cat = png(CAT_512);
+        let cat = png(MARK_512);
         let mark = png(MARK_32);
         assert!(!Arc::ptr_eq(&cat, &mark));
         assert_ne!(cat.id(), mark.id(), "two different assets must not collapse onto one cache entry");
+    }
+
+    /// C1 brand rule: a navy mark never sits on a dark surface. Each theme
+    /// picks its own ink, and the two inks are different files.
+    #[test]
+    fn mark_ink_follows_the_theme() {
+        let (light, dark) = (ShellPalette::light(), ShellPalette::dark());
+        // Compared by content: a `const` byte slice has no guaranteed
+        // single address, so pointer equality would be meaningless here.
+        assert_eq!(mark_32(light), MARK_32);
+        assert_eq!(mark_32(dark), MARK_32_REVERSE);
+        assert_eq!(mark_512(light), MARK_512);
+        assert_eq!(mark_512(dark), MARK_512_REVERSE);
+        assert_ne!(MARK_32, MARK_32_REVERSE);
+        assert_ne!(MARK_512, MARK_512_REVERSE);
     }
 
     // ── WP-fix-QEMU-a: the real greeting, replacing `fake_data::GREETING`

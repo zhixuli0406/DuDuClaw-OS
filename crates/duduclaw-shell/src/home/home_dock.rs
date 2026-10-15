@@ -866,7 +866,7 @@ fn dock_agent(agent_id: &str, label: &str, status: Option<AgentDockStatus>, pale
             div()
                 .text_size(px(15.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(theme::alpha(palette.brand_foreground, 1.0))
+                .text_color(theme::alpha(theme::AVATAR_FOREGROUND, 1.0))
                 .child(initial),
         )
         .when_some(dot_hex, |tile, dot_hex| {

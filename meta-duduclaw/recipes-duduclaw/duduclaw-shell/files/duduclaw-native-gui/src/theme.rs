@@ -6,7 +6,8 @@
 // This REPLACES the previous "Calm Glass" theme (amber accent, ad-hoc
 // translucent-everything surfaces) wholesale. MDS is a flatter, mostly-OPAQUE
 // layered-surface system (app-shell → page-canvas → surface → surface-raised,
-// darkest to lightest) with a single blue brand hue (255) — not amber — and a
+// darkest to lightest) with a single brand hue (blue 255 at the time; C1 navy /
+// amber since 2026-10-16, see `BRAND`) and a
 // handful of *specific* places where Tailwind's `/NN` alpha modifier is used
 // deliberately (hover washes, `brandSubtle`, `destructive` chip fills). The
 // `alpha()` helper below exists for exactly those tokens, not as a
@@ -219,11 +220,17 @@ pub mod dark {
     pub const INPUT: u32 = 0xffffff;
     pub const INPUT_ALPHA: f32 = 0.15;
     pub const RING: u32 = 0x71717b; // oklch(0.552 0.016 285.938)
-    /// Brand = Multica blue (hue 255), NOT amber — copied verbatim per the
-    /// spec's explicit "照抄＝連 hue 一起抄藍色" decision. Swappable back to
-    /// amber later without touching any other token (single source of truth).
-    pub const BRAND: u32 = 0x4390ee; // oklch(0.65 0.16 255)
-    pub const BRAND_FOREGROUND: u32 = 0xfafafa; // oklch(0.985 0 0)
+    /// Brand = C1 amber `#CC8B2D` on dark (C1 identity, 2026-10-16; the
+    /// Multica blue `#4390ee` it replaces was the MDS spec's "照抄＝連 hue
+    /// 一起抄藍色" placeholder, documented then as swappable without touching
+    /// any other token). Amber reads as text/icon on these surfaces (6.2:1 on
+    /// `SURFACE`), and as a fill it takes C1 navy text (5.0:1) — cream or
+    /// white on amber is only 2.6:1, hence `BRAND_FOREGROUND` is navy here
+    /// and NOT the light theme's cream. Not a hex from the web spec's
+    /// semantic table: the web spec's dark `--accent-text` is the lighter
+    /// `#E0A54F`, which the shell uses as `brand_bright`.
+    pub const BRAND: u32 = 0xcc8b2d; // C1 amber
+    pub const BRAND_FOREGROUND: u32 = 0x102b48; // C1 navy
     pub const SUCCESS: u32 = 0x4aa651; // oklch(0.65 0.15 145)
     pub const WARNING: u32 = 0xcb9400; // oklch(0.7 0.16 85)
     pub const INFO: u32 = 0x0f92f7; // oklch(0.65 0.18 250)
@@ -342,8 +349,10 @@ pub mod light {
     pub const INPUT: u32 = 0xe4e4e7; // oklch(0.92 0.004 286.32)
     pub const INPUT_ALPHA: f32 = 1.0;
     pub const RING: u32 = 0x9f9fa9; // oklch(0.705 0.015 286.067)
-    pub const BRAND: u32 = 0x2171cc; // oklch(0.55 0.16 255)
-    pub const BRAND_FOREGROUND: u32 = 0xfafafa; // oklch(0.985 0 0)
+    /// C1 navy fill + cream text (14.4:1 on white), the C1 web spec's light
+    /// primary button. Was Multica blue `#2171cc` until 2026-10-16.
+    pub const BRAND: u32 = 0x102b48; // C1 navy
+    pub const BRAND_FOREGROUND: u32 = 0xf5f4f0; // C1 cream
     pub const SUCCESS: u32 = 0x1c882d; // oklch(0.55 0.16 145)
     pub const WARNING: u32 = 0xdca400; // oklch(0.75 0.16 85)
     pub const INFO: u32 = 0x0072d5; // oklch(0.55 0.18 250)
@@ -413,6 +422,14 @@ pub mod light {
 // Phase 1a is dark-only: re-export `dark`'s tokens at the module root so
 // call sites read as `theme::SURFACE`, `theme::brand()`, `theme::alpha(...)`.
 pub use dark::*;
+
+/// Initials on a coloured avatar / agent tile (the categorical
+/// `AVATAR_HUES`-style fills, never the brand fill). Until the C1 rebrand
+/// (2026-10-16) these call sites borrowed `BRAND_FOREGROUND`, which was
+/// `#fafafa` in both themes; C1 made the dark `BRAND_FOREGROUND` navy (it
+/// sits on the amber brand fill), which would be unreadable on a teal or
+/// purple avatar, so avatars get their own theme-independent token.
+pub const AVATAR_FOREGROUND: u32 = 0xfafafa;
 
 #[cfg(test)]
 mod tests {

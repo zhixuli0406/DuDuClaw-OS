@@ -174,7 +174,7 @@ fn task_row(row: &TaskProgressItem, palette: ShellPalette) -> gpui::Stateful<Div
                 .justify_center()
                 .text_size(px(11.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(theme::alpha(palette.brand_foreground, 1.0))
+                .text_color(theme::alpha(theme::AVATAR_FOREGROUND, 1.0))
                 .child(initial),
         )
         .child(div().flex_1().text_size(px(13.)).text_color(theme::alpha(palette.foreground, 1.0)).child(row.title.clone()))

@@ -70,11 +70,13 @@
 //     LIGHT value, and step 3's dark value (`0x9f9fa9`) is step 4's light
 //     value: the ladder doesn't just swap per-theme colors independently,
 //     ranks 3 and 4 literally trade hex values across the light/dark split.
-//   - `brand_bright`: the approved canvas uses a LIGHTER blue than `brand`
+//   - `brand_bright`: the approved canvas uses a LIGHTER shade than `brand`
 //     itself for on-dark-surface accent TEXT (links, "Enter 交辦" hint,
-//     badge text) — `#59a6ff`, distinct from `brand`'s `#4390ee`. Light has
-//     no equivalent second shade (its accent text IS `brand`, `#2171cc`),
-//     so `brand_bright == brand` in `light()`.
+//     badge text). C1 identity (2026-10-16): `#E0A54F`, the C1 web spec's
+//     dark `--accent-text` (8.2:1 on `#18181b`), distinct from `brand`'s
+//     amber `#CC8B2D`. Light has no equivalent second shade (its accent text
+//     IS `brand`, C1 navy `#102B48`), so `brand_bright == brand` in
+//     `light()`. (Until 2026-10-16: blue `#59a6ff` / `#4390ee` / `#2171cc`.)
 //   - `warning` / `warning_dot`: same split as `brand`/`brand_bright` but
 //     for the OPPOSITE reason — `warning` (badge/ring token, `#cb9400`
 //     dark) is NOT what the small circular alert dots (menu-bar ticker,
@@ -269,7 +271,7 @@ impl ShellPalette {
             text_faint: 0x71717b,
             foreground: theme::dark::FOREGROUND,
             brand: theme::dark::BRAND,
-            brand_bright: 0x59a6ff,
+            brand_bright: 0xe0a54f,
             brand_foreground: theme::dark::BRAND_FOREGROUND,
             ring: theme::dark::RING,
             success: theme::dark::SUCCESS,
@@ -447,14 +449,29 @@ impl ShellPalette {
         }
     }
 
-    /// The browser globe's stroke — light `#1f7ae0` (bespoke: NOT `brand`,
-    /// which is `#2171cc`) / dark `#59a6ff`, which IS `brand_bright`
-    /// exactly. Kept as one method so the asymmetry is stated once.
+    /// The browser globe's stroke — light `#1f7ae0` / dark `#59a6ff`. A
+    /// "web" blue, NOT the brand: until the C1 rebrand (2026-10-16) the dark
+    /// value happened to equal `brand_bright`, and was read from it; the
+    /// brand moved to amber and the globe stayed blue, so both are literals
+    /// now.
     pub(crate) fn icon_globe(&self) -> u32 {
         if self.dark {
-            self.brand_bright
+            0x59a6ff
         } else {
             0x1f7ae0
+        }
+    }
+
+    /// Text/initial colour for a filled avatar disc: the brand fill takes
+    /// `brand_foreground` (C1: cream on navy, navy on amber), every other
+    /// (categorical) fill takes the theme-independent near-white
+    /// `theme::AVATAR_FOREGROUND`. Before the C1 rebrand both were
+    /// `#fafafa`, so call sites could use `brand_foreground` for either.
+    pub(crate) fn avatar_text(&self, bg_hex: u32) -> u32 {
+        if bg_hex == self.brand {
+            self.brand_foreground
+        } else {
+            theme::AVATAR_FOREGROUND
         }
     }
 
@@ -487,7 +504,8 @@ impl ShellPalette {
             match kind {
                 BadgeKind::Warning => theme::alpha(0xfef3c7, 1.0),
                 BadgeKind::Success => theme::alpha(0xe9f6eb, 1.0),
-                BadgeKind::Brand => theme::alpha(0xe8f1fb, 1.0),
+                // C1 navy at ~10% over white (was blue-50 `#e8f1fb`).
+                BadgeKind::Brand => theme::alpha(0xe7eaed, 1.0),
             }
         }
     }
@@ -631,7 +649,20 @@ mod tests {
         assert_ne!(light.settings_gradient_top, dark.settings_gradient_top);
         assert_ne!(light.settings_gradient_bottom, dark.settings_gradient_bottom);
         assert_ne!(light.secondary_foreground, dark.secondary_foreground);
-        assert_eq!(light.brand_foreground, dark.brand_foreground);
+        // C1 (2026-10-16): navy fill takes cream text, amber fill takes navy
+        // text, so the two themes' brand foregrounds now differ on purpose.
+        assert_ne!(light.brand_foreground, dark.brand_foreground);
+    }
+
+    /// C1 (2026-10-16): an avatar on the brand fill must use the brand's
+    /// own foreground (navy on dark amber would otherwise get white text at
+    /// 2.6:1); any other fill keeps the near-white avatar text.
+    #[test]
+    fn avatar_text_follows_the_fill() {
+        for palette in [ShellPalette::light(), ShellPalette::dark()] {
+            assert_eq!(palette.avatar_text(palette.brand), palette.brand_foreground);
+            assert_eq!(palette.avatar_text(0x0f766e), theme::AVATAR_FOREGROUND);
+        }
     }
 
     #[test]
@@ -727,14 +758,16 @@ mod tests {
         assert_eq!(light.icon_on_colored_tile(), dark.icon_on_colored_tile());
     }
 
-    /// The two derived-from-an-existing-field cases, pinned so a future
-    /// edit to `text_secondary`/`brand_bright` can't silently desync the
-    /// icon color from the token this module's doc comment says it IS.
+    /// The derived-from-an-existing-field case, pinned so a future edit to
+    /// `text_secondary` can't silently desync the icon color from the token
+    /// this module's doc comment says it IS. The globe used to be pinned to
+    /// `brand_bright` here too; since the C1 rebrand it is a fixed web blue
+    /// and must NOT follow the brand.
     #[test]
     fn derived_icon_tints_track_their_source_field() {
         let dark = ShellPalette::dark();
         assert_eq!(dark.icon_on_neutral_gradient(), dark.text_secondary);
-        assert_eq!(dark.icon_globe(), dark.brand_bright);
+        assert_ne!(dark.icon_globe(), dark.brand_bright);
     }
 
     /// The board's own light/dark stroke pairs, transcribed. These are the

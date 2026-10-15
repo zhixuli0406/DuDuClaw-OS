@@ -74,14 +74,18 @@ shasum -a 256 -c <file>.sha256
 Artifacts are distributed only via GitHub Releases on this repo. The build
 layer supports Secure Boot signing with self-signed keys, dm-verity root
 verification and TPM2-sealed LUKS as build-time overlays; every release
-through v0.3.0 has been built without them (unsigned UKIs, no verity
+through v0.4.0 has been built without them (unsigned UKIs, no verity
 partition, no TPM stack — see the README's Trust chain section). The
 desktop edition ships with a read-only root.
 
 ## Runtime Privilege Model
 
-In the layer since 2026-10-15, both editions. Not in v0.3.0 or any
-published image yet, and not yet verified on a built image:
+Shipped in v0.4.0 (2026-10-16), both editions; v0.3.0 and earlier ran the
+gateway as root. Checked under QEMU on the qemux86-64 test variant of the
+desktop image in two rounds (the second passed 35 of 36 checks; evidence in
+`wiki/reports/rootless-verification/2026-10-15.md`). Not yet verified: the
+A/B upgrade from a v0.3.0 device, the LLM-backed container flows, and real
+hardware.
 
 - The DuDuClaw gateway, every AI CLI it runs and the local model server
   execute as the unprivileged `duduclaw` account (uid 1000) with
@@ -121,10 +125,15 @@ published image yet, and not yet verified on a built image:
   than the configured rollback floor are deleted, so neither a requested
   rollback nor systemd-boot's automatic fallback can bring back an image
   whose gateway ran as root. By design there is no way back to a
-  pre-rootless image after that. The floor is configured together with the
-  platform snapshot that supports it. Known gap: before the first rootless
+  pre-rootless image after that. The floor is `1.73.4-y1-bringup`, the
+  image version of v0.4.0 itself. Known gap: before the first rootless
   image is blessed, code running as uid 1000 on it can make its trial boots
   fail and so trigger systemd-boot's fallback to the previous image.
+- SSH (dropbear) is off by default on both editions. The dashboard's
+  maintenance mode starts it and opens port 22 in the default-deny
+  firewall; closing the window stops dropbear, ends every session and
+  closes the port. No account can log in over SSH yet (root is locked), so
+  the switch currently controls only the port.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
   do (that code is in the platform repo).

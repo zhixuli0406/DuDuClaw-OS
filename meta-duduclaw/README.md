@@ -91,25 +91,27 @@ meta-duduclaw/
 
 ### Service accounts and privileges
 
-In the layer since 2026-10-15 (rootless gateway). Not in v0.3.0, and not yet
-verified on a built image; see
-[`../wiki/eval/rootless-verification-2026-10.md`](../wiki/eval/rootless-verification-2026-10.md).
+In the layer since 2026-10-15 and shipped in v0.4.0 (rootless gateway; v0.3.0
+and earlier ran it as root). Checklist:
+[`../wiki/eval/rootless-verification-2026-10.md`](../wiki/eval/rootless-verification-2026-10.md);
+evidence from the two QEMU rounds on the qemux86-64 test image:
+[`../wiki/reports/rootless-verification/2026-10-15.md`](../wiki/reports/rootless-verification/2026-10-15.md).
 
 | Account / unit | Runs as | Notes |
 |---|---|---|
 | `duduclaw-gateway.service` | `duduclaw` (uid/gid 1000, fixed) | `NoNewPrivileges`, `RestrictNamespaces`; supplementary groups `duduclaw-ipc`, `duduclaw-kiosk`; `TMPDIR=/data/duduclaw/tmp`; `DOCKER_HOST`/`CONTAINER_HOST` point at the Podman socket |
 | `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | socket `/run/duduclaw-podman/podman.sock` (root 0711 dir); `podman system service`, `Delegate=yes` + `DelegateSubgroup=supervisor`, `KillMode=mixed` (a restart kills running sandboxes), `ProtectSystem=strict` with the gateway home read-only (`XDG_CACHE_HOME` in the store), bounding set `CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_SYS_ADMIN` (only setuid newuidmap/newgidmap can use it), no NNP, no `ProtectKernelTunables` (breaks netavark/crun), `InaccessiblePaths=` for root control sockets; store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup, re-added on firewall reloads without restarting podman |
-| `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000`; `--require-main-pid-of duduclaw-gateway.service --min-rollback-version …` are appended at build time once `DUDUCLAW_MIN_ROLLBACK_VERSION` is set |
+| `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000`; `--require-main-pid-of duduclaw-gateway.service --min-rollback-version …` are appended at build time from `DUDUCLAW_MIN_ROLLBACK_VERSION` (`1.73.4-y1-bringup` since v0.4.0) |
 | `duduclaw-home-owner.service` | root, oneshot | `systemd-tmpfiles` with `Z` over `/data/duduclaw` before anything runs as uid 1000 (replaces `chown -R`, which followed symlinks); moves root-only state (machine-id, entropy seed, rescue audit log) to `/data/system` once |
 | `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`; refuses a marker that is not root-owned or is group/world-writable |
-| `duduclaw-rollback-prune.service` | root, oneshot | after `boot-complete.target`, deletes ESP entries older than `DUDUCLAW_MIN_ROLLBACK_VERSION` (`conf/distro/include/duduclaw-rollback-floor.inc`; empty, so skipped, until the matching platform snapshot) — no way back to a pre-rootless image by design |
+| `duduclaw-rollback-prune.service` | root, oneshot | after `boot-complete.target`, deletes ESP entries older than `DUDUCLAW_MIN_ROLLBACK_VERSION` (`conf/distro/include/duduclaw-rollback-floor.inc`, `1.73.4-y1-bringup` since v0.4.0; the unit is skipped while it is empty) — no way back to a pre-rootless image by design |
 | `duduclaw-data-migrate.service`, `duduclaw-secaudit-scan.service` | `duduclaw` | they only touch the gateway's own tree |
 | `duduclaw-llama-server.service` | `duduclaw` | no `EnvironmentFile=`; `llama-server-run` reads only the four `LLAMA_*` keys from the gateway's settings file as uid 1000 and binds 127.0.0.1 |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
 
-Image builds stop at `do_rootfs` while `DUDUCLAW_MIN_ROLLBACK_VERSION` is
-empty (no platform guards yet). A/B updates install from the root-owned
-`/data/system/updates` once it is set. `/data` is mounted `nosuid,nodev`.
+A/B image builds stop at `do_rootfs` if `DUDUCLAW_MIN_ROLLBACK_VERSION` is
+empty (no platform guards). With it set, as in v0.4.0, A/B updates install
+from the root-owned `/data/system/updates`. `/data` is mounted `nosuid,nodev`.
 The iwd D-Bus policy for `duduclaw` covers only Station, Network,
 KnownNetwork, AgentManager and property reads.
 
@@ -132,10 +134,11 @@ for the budget and the refresh procedure. Secure Boot signing and
 dm-verity are enabled by the `kas/sb-signing.yml` overlay, TPM2 + LUKS by
 `kas/tpm-luks.yml`; a build without those overlays (which is what
 `scripts/release-os.sh build` does today, and what every release through
-v0.3.0 has shipped) produces unsigned UKIs, no verity partition and no TPM
+v0.4.0 has shipped) produces unsigned UKIs, no verity partition and no TPM
 stack. Release builds do chain `kas/serial1.yml` by default (SPDX off,
 `-j1`), or `kas/release-linux-builder.yml` on a large Linux builder (SPDX
-off, 8 parallel tasks; v0.3.0 was built with it) — neither overlay touches
+off, 8 parallel tasks; v0.3.0 was built with it, and so was the v0.4.0
+test build) — neither overlay touches
 the trust chain.
 
 ## Usage
@@ -272,11 +275,14 @@ See the repo-root [`CHANGELOG.md`](../CHANGELOG.md). v0.1.0 (2026-09-04) was
 the first tagged bring-up release; v0.2.0 (2026-09-09) resynced the
 embedded platform snapshot to v1.63.0; v0.3.0 (2026-10-13, published
 2026-10-14) resynced it to v1.73.1 with `duduclaw-shell` 1.65.3 and was the
-first release built on the GCP Linux builder. Every release publishes, per
-machine, all three artifact forms (the whole-disk image, the base-edition
-installer ISO, and the desktop-edition installer ISO), each signed. For
-v0.3.0 the QEMU machine's whole-disk image reached the login prompt and its
-two installer ISOs reached the live environment's automatic login under
-headless QEMU; the installer wizard was not run. The real-hardware machine
+first release built on the GCP Linux builder; v0.4.0 (2026-10-16) resynced
+it to v1.73.4 and moved the gateway to the unprivileged `duduclaw` account
+with rootless Podman (a one-way upgrade: no rollback below v0.4.0). Every
+release publishes, per machine, all three artifact forms (the whole-disk
+image, the base-edition installer ISO, and the desktop-edition installer
+ISO), each signed. For v0.4.0, as for v0.3.0, the QEMU machine's
+whole-disk image reached the login prompt and its two installer ISOs
+reached the live environment's automatic login under headless QEMU; the
+installer wizard was not run. The real-hardware machine
 (`duduclaw-genericx86-64`) was built but not booted — it has not yet been
 booted on real hardware.

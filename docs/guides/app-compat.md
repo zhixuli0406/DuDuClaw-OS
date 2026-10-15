@@ -139,13 +139,14 @@ manages any Windows license key, and it never pre-downloads a Windows
 install image. The whole flow is guided step by step, but you trigger and
 confirm every one of those steps yourself.
 
-**Container engine on DuDuClaw OS after v0.3.0 (experimental).** Through
-v0.3.0 the desktop edition ran this VM under rootful Docker. Builds of the
-Yocto layer after v0.3.0 replace Docker with rootless Podman running as the
-gateway's own account (uid 1000): `docker` on the device is Podman's
-compatibility shim and `docker compose` is provided by `podman-compose`.
-Nobody has yet booted the dockur/windows container under rootless Podman
-on real hardware, so treat the Windows VM as experimental on those builds.
+**Container engine on DuDuClaw OS v0.4.0 and later (experimental).**
+Through v0.3.0 the desktop edition ran this VM under rootful Docker. From
+v0.4.0 it uses rootless Podman running as the gateway's own account (uid
+1000): `docker` on the device is Podman's compatibility shim and `docker
+compose` is provided by `podman-compose`. Nobody has yet booted the
+dockur/windows container under rootless Podman (v0.4.0 was verified under
+QEMU without KVM, which this VM needs, and not on real hardware), so treat
+the Windows VM as experimental on v0.4.0.
 `podman`/`docker` typed in a root shell talks to the gateway's Podman (the
 shell sets `CONTAINER_HOST`), so images you pull there are the ones the
 gateway uses.

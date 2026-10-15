@@ -97,6 +97,8 @@ clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 anyhow = "1"
 libc = "0.2"
+minisign-verify = "0.2"
+sha2 = "0.10"
 
 # dev-dependencies deliberately omitted: the Yocto recipe only ever runs
 # \`cargo build --release\` (cargo.bbclass), never \`cargo test\` -- keeping
@@ -130,8 +132,27 @@ EOF
 # A real `cargo build` respects the existing lock far more conservatively
 # (only touches entries it must), so that's what prunes it here; the
 # resulting target/ is build waste, discarded immediately after.
+# The [dependencies] list above is hand-flattened, so a dependency added to
+# crates/duduclaw-sysd/Cargo.toml upstream is silently missing here until
+# someone notices the bake failing (2026-10-15: minisign-verify and sha2 for
+# SysupdateStageApply). Refuse to continue when any upstream dependency name
+# is absent from the flattened manifest.
+python3 - "$SRC_CRATE/Cargo.toml" "$OUT_DIR/Cargo.toml" <<'PY'
+import sys, tomllib
+up = tomllib.load(open(sys.argv[1], "rb")).get("dependencies", {})
+out = tomllib.load(open(sys.argv[2], "rb")).get("dependencies", {})
+missing = sorted(set(up) - set(out))
+if missing:
+    sys.exit("refresh-src.sh: flattened Cargo.toml lacks upstream dependencies: " + ", ".join(missing))
+PY
 cp "$REPO_ROOT/Cargo.lock" "$OUT_DIR/Cargo.lock"
-(cd "$OUT_DIR" && cargo build --release --offline >/dev/null 2>&1 || cd "$OUT_DIR" && cargo build --release >/dev/null)
+# Prune the copied workspace lock by building once; a failed build must stop
+# the refresh (it used to fall through, leaving an unpruned lock and target/).
+if ! (cd "$OUT_DIR" && { cargo build --release --offline >/dev/null 2>&1 || cargo build --release >/dev/null; }); then
+    rm -rf "$OUT_DIR/target"
+    echo "refresh-src.sh: cargo build of the flattened snapshot failed" >&2
+    exit 1
+fi
 rm -rf "$OUT_DIR/target"
 
 echo "Wrote $OUT_DIR (Cargo.toml flattened, Cargo.lock pruned to $(grep -c '^name = ' "$OUT_DIR/Cargo.lock") packages, src/ synced)"

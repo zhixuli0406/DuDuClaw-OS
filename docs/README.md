@@ -12,7 +12,7 @@
 | Document | Description |
 |----------|-------------|
 | <https://os.duduclaw.dudustudio.monster> | The live website and docs site (home + download pages, and this whole doc tree plus the platform repo's public docs at `/docs/`, zh-TW / en / ja) |
-| [../README.md](../README.md) · [../README.en.md](../README.en.md) | What DuDuClaw OS is, the three release artifact forms per machine, verify / flash quick start, build pipeline |
+| [../README.md](../README.md) · [../README.zh-TW.md](../README.zh-TW.md) | What DuDuClaw OS is, the three release artifact forms per machine, verify / flash quick start, build pipeline |
 | [../CHANGELOG.md](../CHANGELOG.md) | Release history (Keep a Changelog 1.1.0; the OS version line is independent of the platform) |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Where changes go, definition of done, docs-in-the-same-commit rule |
 | [../SECURITY.md](../SECURITY.md) | Vulnerability reporting, scope, release-artifact verification |

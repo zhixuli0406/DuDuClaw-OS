@@ -44,7 +44,7 @@ co-locate a higher-confidentiality doc inside a lower-confidentiality tree.
 
 | Tier | Meaning | Git state | Lives in (this repo) |
 |------|---------|-----------|----------------------|
-| **L1 Public** | Product / developer docs meant to be read from the public repo or GitHub Releases | Committed, externally published | root `README.md` / `README.en.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`; `docs/<type>/`; component READMEs co-located with what they describe (`meta-duduclaw/README.md`, `appliance/README.md`, `appliance/tests/README.md`) |
+| **L1 Public** | Product / developer docs meant to be read from the public repo or GitHub Releases | Committed, externally published | root `README.md` (English) / `README.zh-TW.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`; `docs/<type>/`; component READMEs co-located with what they describe (`meta-duduclaw/README.md`, `appliance/README.md`, `appliance/tests/README.md`) |
 | **L2 Internal** | Dev/ops material — bring-up notes, acceptance checklists, evidence transcripts, runbooks. Committed so the history is auditable, but not polished product docs | Committed (visible to collaborators) | `wiki/` |
 | **L3 Confidential** | Design docs and roadmaps, commercial plans, competitive analysis, research notes, signing keys, build output | **gitignored — never committed to this public repo** | `commercial/` and `research/` (reserved, gitignored — the OS design docs currently live in the platform maintainers' private `commercial/` tree, not here), `artifacts/`, `sb-keys/`, `meta-duduclaw/.build/` |
 

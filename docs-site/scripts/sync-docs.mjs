@@ -3,7 +3,7 @@
  * sync-docs.mjs — assemble the Starlight content tree from two repos.
  *
  * Sources
- *   1. This repo (DuDuClaw-OS): `docs/**` plus README.md / README.en.md /
+ *   1. This repo (DuDuClaw-OS): `docs/**` plus README.md (English) / README.zh-TW.md /
  *      CHANGELOG.md / SECURITY.md at the repo root.
  *   2. The platform repo (DuDuClaw): only the five public sections listed in
  *      SECTIONS below. Everything else in that repo (todo/, rfc/, adr/, …)
@@ -299,7 +299,7 @@ function resolveLink(target, sourceFile, locale, pageIndex, currentId) {
   const hit = pageIndex.get(abs);
   if (hit) {
     stats.links.rewritten += 1;
-    // Same document, different language file (README.md ↔ README.en.md):
+    // Same document, different language file (README.md ↔ README.zh-TW.md):
     // honour the language the author pointed at. Everything else stays in the
     // reader's current language.
     const wanted = hit.id === currentId && hit.locale !== locale ? hit.locale : locale;
@@ -459,8 +459,8 @@ function collectOsPages() {
   const pages = [];
 
   const rootFiles = [
-    { file: 'README.md', id: 'os/readme', locale: 'root' },
-    { file: 'README.en.md', id: 'os/readme', locale: 'en' },
+    { file: 'README.zh-TW.md', id: 'os/readme', locale: 'root' },
+    { file: 'README.md', id: 'os/readme', locale: 'en' },
     { file: 'CHANGELOG.md', id: 'os/changelog', locale: 'root' },
     { file: 'SECURITY.md', id: 'os/security', locale: 'root' },
   ];

@@ -69,7 +69,7 @@ pub fn render(_state: &RootView, _cx: &mut Context<RootView>) -> Div {
                         .mt_4()
                         .text_size(px(10.))
                         .text_color(theme::alpha(theme::MUTED_FOREGROUND, 0.7))
-                        .child("© 2026 嘟嘟數位。以 MIT／自訂授權釋出。"),
+                        .child("© 2026 Dudu Technology Ltd. 以 MIT／自訂授權釋出。"),
                 ),
         ),
     )

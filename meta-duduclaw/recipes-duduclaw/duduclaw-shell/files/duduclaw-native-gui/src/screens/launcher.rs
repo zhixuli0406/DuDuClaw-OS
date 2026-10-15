@@ -105,8 +105,9 @@
 //     the background here is a single opaque `theme::APP_SHELL` surface (the
 //     darkest MDS token, the closest in-palette match to the canvas's dark
 //     navy tone), no image, no blur. A real `cat-512.png` asset at that
-//     resolution isn't bundled in this crate either (only `assets/mark-
-//     256.png`, already used by `about.rs`) — blowing that up to the
+//     resolution isn't bundled in this crate either (only the 256px app
+//     icon `assets/duduclaw-os-app-icon-256.png`, used by `about.rs`;
+//     the board's crimson cat itself was retired 2026-10-16) — blowing that up to the
 //     canvas's 420px display width would be a visibly blurry upscale, not a
 //     faithful decorative touch, so it's omitted rather than faked.
 

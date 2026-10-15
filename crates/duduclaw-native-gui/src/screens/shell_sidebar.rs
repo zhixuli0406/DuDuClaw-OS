@@ -131,7 +131,8 @@ pub(super) fn render(state: &RootView, cx: &mut Context<RootView>) -> Stateful<D
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(div().text_size(px(18.)).child("🐾"))
+                        // C1 (2026-10-16): the cat mark replaces the 🐾 emoji.
+                        .child(gpui::img(crate::screens::about::cat_mark_image()).size(px(18.)))
                         .child(
                             div()
                                 .flex_1()

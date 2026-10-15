@@ -37,23 +37,17 @@ use crate::palette::ShellPalette;
 use crate::oobe::widgets;
 use crate::oobe::{OobeFlow, PrivacyToggle, TemplateChoice};
 
-/// ICON-3 (2026-08-23): this step's header art is the ORIGAMI CAT at 72px
-/// tall, not the 40×40 circular paw mark it was between 2026-08-21 and this
-/// round. `OOBE-KeySteps.dc.html`'s 完成 artboard draws `cat-256.png` at
-/// `height: 72px`, and the operator's ruling ④ settled the one open question
-/// that board left ("72px 維持還是放大？") in favour of keeping 72.
+/// ICON-3 (2026-08-23): this step's header art is the brand cat at 72px
+/// tall (`OOBE-KeySteps.dc.html`'s 完成 artboard; the operator's ruling ④
+/// kept 72 rather than enlarging it).
 ///
-/// Reuses `home::CAT_512` rather than adding a `cat-256` const of its own:
-/// it is the same artwork at 2× the pixels (264×512 vs 132×256, both 33:64),
-/// already embedded in this binary for the lockscreen watermark, and
-/// oversampling 512→72 costs nothing at render time while a second
-/// `include_bytes!` of the same picture would cost a duplicate copy in the
-/// binary. Width is derived from the PNG's real aspect (264/512 × 72 ≈
-/// 37.1), the same derivation `home::cat_hero` and `lockscreen::render::
-/// cat_watermark` already do — gpui sizes an `img()` by the box you give it,
-/// so passing only a height would stretch it.
-const CAT_HEIGHT: f32 = 72.;
-const CAT_WIDTH: f32 = 264. / 512. * CAT_HEIGHT;
+/// C1 identity (2026-10-16): the art is now the square C1 cat mark, in the
+/// ink that reads on the current theme (`home::mark_512`), so 72×72. Reuses
+/// the 512px mark already embedded for Home rather than a second
+/// `include_bytes!`; oversampling 512→72 costs nothing at render time. gpui
+/// sizes an `img()` by the box you give it, so both sides stay explicit.
+/// (Until 2026-10-16: the 264×512 crimson cat at 37.1×72.)
+const CAT_SIZE: f32 = 72.;
 
 pub(super) fn render(flow: &OobeFlow, wired_online: bool) -> Div {
     let s = flow.selections();
@@ -116,7 +110,7 @@ pub(super) fn render(flow: &OobeFlow, wired_online: bool) -> Div {
         .flex_col()
         .items_center()
         .gap(px(20.))
-        .child(img(home::png(home::CAT_512)).w(px(CAT_WIDTH)).h(px(CAT_HEIGHT)))
+        .child(img(home::png(home::mark_512(palette))).w(px(CAT_SIZE)).h(px(CAT_SIZE)))
         .child(widgets::title(t(locale, Key::FinishTitle), palette))
         .child(widgets::subtitle(t(locale, Key::FinishSubtitle), palette))
         .child(widgets::card(rows, palette))

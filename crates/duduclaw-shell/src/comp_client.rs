@@ -151,7 +151,7 @@ pub struct CursorState {
 }
 
 impl CursorState {
-    /// Whether the brand (paw) theme is what is being DRAWN. Anything else —
+    /// Whether the brand cursor theme is what is being DRAWN. Anything else —
     /// including `"system"` and including a value from a future comp this
     /// build doesn't know — is not brand.
     pub fn is_brand(&self) -> bool {
@@ -884,7 +884,7 @@ mod tests {
         let json = r#"{"ok":true,"cursor":{"source":"system","requested":"brand","theme":"Adwaita","size":24,"effective_size":24}}"#;
         let cursor = serde_json::from_str::<CompResponse>(json).unwrap().cursor.expect("cursor");
         assert!(!cursor.is_brand(), "what is DRAWN is the system theme");
-        assert!(cursor.requested_is_brand(), "what was CHOSEN is the paw theme");
+        assert!(cursor.requested_is_brand(), "what was CHOSEN is the brand theme");
         assert!(cursor.theme_missing());
     }
 

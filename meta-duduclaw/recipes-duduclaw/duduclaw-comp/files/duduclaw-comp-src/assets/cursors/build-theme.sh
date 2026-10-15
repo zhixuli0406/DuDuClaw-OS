@@ -56,7 +56,7 @@
 # a hotspot expressed as a fraction of 24 stays a WHOLE pixel at every output
 # size — no per-size rounding, no tip drift:
 #
-#   default          tip of the claw, unit (3,3)   -> size/8   = 3 / 4 / 6 / 8
+#   default          tip of the arrow, unit (3,3)  -> size/8   = 3 / 4 / 6 / 8
 #   grab / grabbing  centre of the paw, unit (12,12) -> size/2  = 12/16/24/32
 #
 # `grab`/`grabbing` share a hotspot on purpose: pressing the button must not
@@ -64,18 +64,26 @@
 # `openhand`/`closedhand` convention — while dragging, the pointer IS the
 # thing being carried.
 #
-# ── Colours ───────────────────────────────────────────────────────────────
+# ── Colours (C1 identity, 2026-10-16) ─────────────────────────────────────
 #
-#   fill    #E85055  brand crimson (appliance/branding/duduclaw-cat.svg's
-#                    torso gradient mid-tone — the mascot's own colour)
-#   outline #1C1917  stone-900 (CLAUDE.md palette), 1.2 units => 1.2 px at
-#                    size 24 and proportionally more above it
+#   body    #102B48  navy, the C1 ink colour (appliance/branding/
+#                    duduclaw-os-mark.svg's `ink` layer)
+#   halo    #F5F4F0  cream, 2.0u round-join stroke under the body => a 1 px
+#                    halo at size 24 and proportionally more above it
+#   tail    #CC8B2D  amber, the C1 accent; default.svg only, on the lower
+#                    stem (the cat mark's navy-body-plus-amber-tail split)
 #
-# Dark-outline-around-a-coloured-fill is the research note's prescription and
-# it is what makes the cursor survive an arbitrary background: on white the
-# crimson fill carries (3.7:1), on black the crimson fill still carries
-# (5.7:1), and on a red-ish background the stone-900 outline carries (4.4:1).
-# No single-colour cursor has that property.
+# Dark-body-inside-a-light-halo is what makes the cursor survive an
+# arbitrary background: on white/cream the navy body carries (14.4:1 /
+# 13.1:1), on black/the OS's own #0B1E33 the cream halo carries (19.1:1 /
+# 15.3:1), and on a mid-grey both carry about 3.6:1 each from opposite
+# sides. No single-colour cursor has that property. The amber tail is
+# decoration only; the pointing tip is navy-in-cream at every size.
+#
+# Until 2026-10-16 this theme was a crimson paw with a stone-900
+# outline for every shape, the default arrow included. The C1 rebrand
+# retired that mascot; default went back to a standard arrow (precision
+# first), grab/grabbing kept the paw geometry in the new colours.
 #
 # ── Why the OUTPUT is committed to git as well as the masters ─────────────
 #
@@ -178,7 +186,7 @@ done
 cat > "$OUT/index.theme" <<EOF
 [Icon Theme]
 Name=$THEME_NAME
-Comment=DuDuClaw OS brand paw cursors
+Comment=DuDuClaw OS brand cursors
 Inherits=Adwaita
 EOF
 

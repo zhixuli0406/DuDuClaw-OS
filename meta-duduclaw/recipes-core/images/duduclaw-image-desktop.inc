@@ -323,3 +323,10 @@ IMAGE_INSTALL:append = " kernel-modules"
 # Xwayland` on a booted image to test against, and there is no reason for
 # the two to block on the same commit.
 IMAGE_INSTALL:append = " xwayland"
+
+# --- Boot splash (C1 identity, 2026-10-16) ---------------------------------
+# Plymouth + the duduclaw theme + the kernel arguments it needs, for every
+# image that carries this desktop stack. Everything about it, including why
+# it is rootfs-only and why the cmdline gets `splash` but not `quiet`, is in
+# the included file's own header.
+require recipes-core/images/duduclaw-image-splash.inc

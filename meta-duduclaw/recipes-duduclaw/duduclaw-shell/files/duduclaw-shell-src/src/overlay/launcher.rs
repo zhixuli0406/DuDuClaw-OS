@@ -264,13 +264,16 @@ fn delegate_section(palette: ShellPalette, agent: Option<&crate::gateway_client:
     // light — brand-tinted `rgba(67,144,238,0.12)` bg / `rgba(67,144,238,
     // 0.35)` border dark. Hint pill: bg `#ffffff` / border `#cfe0f5` / text
     // `brand` light — bg `rgba(67,144,238,0.15)` / border `rgba(67,144,
-    // 238,0.40)` / text `brand_bright` (`#59a6ff`) dark.
+    // 238,0.40)` / text `brand_bright` (`#59a6ff`) dark. C1 identity
+    // (2026-10-16): the light literals moved from blue tints to C1 navy
+    // tints (`#e7eaed` bg ~10%, `#cfd5da` border ~20% over white); the dark
+    // side follows `brand`/`brand_bright`, now amber.
     let dark = palette.is_dark();
-    let card_bg = if dark { theme::alpha(palette.brand, 0.12) } else { theme::alpha(0xe8f1fb, 1.0) };
-    let card_border = if dark { theme::alpha(palette.brand, 0.35) } else { theme::alpha(0xcfe0f5, 1.0) };
+    let card_bg = if dark { theme::alpha(palette.brand, 0.12) } else { theme::alpha(0xe7eaed, 1.0) };
+    let card_border = if dark { theme::alpha(palette.brand, 0.35) } else { theme::alpha(0xcfd5da, 1.0) };
     let plan_text = theme::alpha(palette.text_secondary, 1.0);
     let hint_bg = if dark { theme::alpha(palette.brand, 0.15) } else { theme::alpha(palette.surface_raised, 1.0) };
-    let hint_border = if dark { theme::alpha(palette.brand, 0.40) } else { theme::alpha(0xcfe0f5, 1.0) };
+    let hint_border = if dark { theme::alpha(palette.brand, 0.40) } else { theme::alpha(0xcfd5da, 1.0) };
     let hint_text = if dark { theme::alpha(palette.brand_bright, 1.0) } else { theme::alpha(palette.brand, 1.0) };
 
     div().pt(px(10.)).px(px(12.)).pb(px(4.)).flex().flex_col().child(section_label(fake_data::LAUNCHER_SECTION_DELEGATE, palette)).child(
@@ -296,7 +299,7 @@ fn delegate_section(palette: ShellPalette, agent: Option<&crate::gateway_client:
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::alpha(palette.brand_foreground, 1.0))
+                            .text_color(theme::alpha(theme::AVATAR_FOREGROUND, 1.0))
                             .child(initial),
                     ),
             )

@@ -96,7 +96,8 @@ pub fn render(_state: &RootView, cx: &mut Context<RootView>) -> Div {
                         .flex_col()
                         .items_center()
                         .gap_2()
-                        .child(div().text_size(px(44.)).child("🐾"))
+                        // C1 (2026-10-16): the cat mark replaces the 🐾 emoji.
+                        .child(gpui::img(crate::screens::about::cat_mark_image()).size(px(44.)))
                         .child(
                             // "詳情 hero 標題" scale (spec §2 type table): text-2xl
                             // font-semibold — the largest defined size, used here

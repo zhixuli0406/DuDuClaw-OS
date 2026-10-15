@@ -29,8 +29,9 @@
 // They deliberately live in THIS repo, not in `commercial/` — that tree is
 // a separate nested git repo AND gitignored here, so an `include_bytes!`
 // pointing into it would build on this machine and fail everywhere else.
-// Same reasoning `home.rs`'s `MARK_32`/`CAT_512` already record for the
-// branding PNGs (which resolve to `appliance/branding/png/`).
+// Same reasoning `home.rs`'s `MARK_32`/`MARK_512` record for the branding
+// PNGs (vendored in this crate's `assets/branding/`, derived from
+// `appliance/branding/` by `scripts/brand/derive-c1-assets.py`).
 //
 // Naming rule: one file per DEPICTED SHAPE, kebab-case, named for what the
 // icon draws rather than where it happens to be used (`folder.svg`, not
@@ -234,19 +235,21 @@ pub(crate) const BELL: &str = "icons/bell.svg";
 pub(crate) const CHART_BARS: &str = "icons/chart-bars.svg";
 pub(crate) const ALERT_TRIANGLE: &str = "icons/alert-triangle.svg";
 
-/// The pointer-settings cursor previews. Each real cursor is two colours (a
-/// dark outline around a light/brand interior), so each is a stacked
+/// The pointer-settings cursor previews. Each system cursor is two colours
+/// (a dark outline around a light interior), so each is a stacked
 /// outline+fill PAIR — the same technique the shipping cursor artwork itself
-/// uses (two `<use>` passes) and the same one this module already documents
-/// for the boards' multi-colour icons.
+/// uses (stacked passes) and the same one this module already documents
+/// for the boards' multi-colour icons. The brand arrow (C1 identity,
+/// 2026-10-16) is three colours, so it is a halo+body+tail TRIPLE.
 pub(crate) const CURSOR_ARROW_OUTLINE: &str = "icons/cursor-arrow-outline.svg";
 pub(crate) const CURSOR_ARROW_FILL: &str = "icons/cursor-arrow-fill.svg";
 pub(crate) const CURSOR_TEXT_HALO: &str = "icons/cursor-text-halo.svg";
 pub(crate) const CURSOR_TEXT_CORE: &str = "icons/cursor-text-core.svg";
 pub(crate) const CURSOR_HAND_OUTLINE: &str = "icons/cursor-hand-outline.svg";
 pub(crate) const CURSOR_HAND_FILL: &str = "icons/cursor-hand-fill.svg";
-pub(crate) const CURSOR_PAW_OUTLINE: &str = "icons/cursor-paw-outline.svg";
-pub(crate) const CURSOR_PAW_FILL: &str = "icons/cursor-paw-fill.svg";
+pub(crate) const CURSOR_BRAND_ARROW_HALO: &str = "icons/cursor-brand-arrow-halo.svg";
+pub(crate) const CURSOR_BRAND_ARROW_BODY: &str = "icons/cursor-brand-arrow-body.svg";
+pub(crate) const CURSOR_BRAND_ARROW_TAIL: &str = "icons/cursor-brand-arrow-tail.svg";
 
 // ── CP-2 wave-2 (2026-08-31): launcher compat-tile icons ─────────────────
 // Board: `commercial/design/duduclaw-launcher-compat-icons/Main.html`. Same
@@ -333,8 +336,9 @@ const ICONS: &[(&str, &[u8])] = &[
     (CURSOR_TEXT_CORE, include_bytes!("../assets/icons/cursor-text-core.svg")),
     (CURSOR_HAND_OUTLINE, include_bytes!("../assets/icons/cursor-hand-outline.svg")),
     (CURSOR_HAND_FILL, include_bytes!("../assets/icons/cursor-hand-fill.svg")),
-    (CURSOR_PAW_OUTLINE, include_bytes!("../assets/icons/cursor-paw-outline.svg")),
-    (CURSOR_PAW_FILL, include_bytes!("../assets/icons/cursor-paw-fill.svg")),
+    (CURSOR_BRAND_ARROW_HALO, include_bytes!("../assets/icons/cursor-brand-arrow-halo.svg")),
+    (CURSOR_BRAND_ARROW_BODY, include_bytes!("../assets/icons/cursor-brand-arrow-body.svg")),
+    (CURSOR_BRAND_ARROW_TAIL, include_bytes!("../assets/icons/cursor-brand-arrow-tail.svg")),
     // ── CP-2 wave-2 (2026-08-31) ──────────────────────────────────────────
     (BOTTLES_PAIR, include_bytes!("../assets/icons/bottles-pair.svg")),
     (WINDOW_BEHIND, include_bytes!("../assets/icons/window-behind.svg")),
@@ -777,28 +781,38 @@ pub(crate) enum CursorShape {
     Default,
     /// The I-beam. Identical in both cards.
     Text,
-    /// The pointing hand. Identical in both cards: 「爪印不覆蓋 pointer」是
-    /// 既定拍板 (a paw loses the hand's directional meaning).
+    /// The pointing hand. Identical in both cards: the brand theme never
+    /// overrides `pointer` (既定拍板 from the paw era: a brand shape there
+    /// would lose the hand's "this is a link" meaning).
     Pointer,
 }
 
 /// A cursor preview's layers. These are the ONLY icons in this module whose
 /// colours are IDENTITY, never themed: they depict real cursor artwork,
 /// which looks the same on every background by design (that is the entire
-/// point of a dark outline around a light interior). `brand_theme` picks the
-/// paw over the arrow for `CursorShape::Default` and changes nothing else.
+/// point of an outline around a contrasting interior). `brand_theme` picks
+/// the C1 brand arrow (navy body, cream halo, amber tail) over the system
+/// arrow for `CursorShape::Default` and changes nothing else.
 pub(crate) fn cursor_shape_layers(shape: CursorShape, brand_theme: bool) -> Vec<Layer> {
     /// The cursor artwork's outline, `#1C1917` — the shipping asset's own
     /// value (`crates/duduclaw-comp/assets/cursors/svg/default.svg`).
     const CURSOR_OUTLINE: u32 = 0x1c1917;
     /// The system arrow / I-beam halo interior.
     const CURSOR_WHITE: u32 = 0xffffff;
-    /// DuDuClaw's brand crimson — the paw's fill, same shipping asset.
-    const CURSOR_BRAND: u32 = 0xe85055;
+    /// The brand arrow's three colours, same shipping asset
+    /// (`crates/duduclaw-comp/assets/cursors/svg/default.svg`): C1 cream
+    /// halo, navy body, amber tail.
+    const BRAND_HALO: u32 = 0xf5f4f0;
+    const BRAND_BODY: u32 = 0x102b48;
+    const BRAND_TAIL: u32 = 0xcc8b2d;
 
     match (shape, brand_theme) {
         (CursorShape::Default, false) => vec![(CURSOR_ARROW_OUTLINE, CURSOR_OUTLINE), (CURSOR_ARROW_FILL, CURSOR_WHITE)],
-        (CursorShape::Default, true) => vec![(CURSOR_PAW_OUTLINE, CURSOR_OUTLINE), (CURSOR_PAW_FILL, CURSOR_BRAND)],
+        (CursorShape::Default, true) => vec![
+            (CURSOR_BRAND_ARROW_HALO, BRAND_HALO),
+            (CURSOR_BRAND_ARROW_BODY, BRAND_BODY),
+            (CURSOR_BRAND_ARROW_TAIL, BRAND_TAIL),
+        ],
         (CursorShape::Text, _) => vec![(CURSOR_TEXT_HALO, CURSOR_WHITE), (CURSOR_TEXT_CORE, CURSOR_OUTLINE)],
         (CursorShape::Pointer, _) => vec![(CURSOR_HAND_OUTLINE, CURSOR_OUTLINE), (CURSOR_HAND_FILL, CURSOR_WHITE)],
     }
@@ -1086,15 +1100,17 @@ mod tests {
     }
 
     /// The pointer-settings cursor previews. Two layers each (outline +
-    /// fill), both registered, and — the load-bearing part — the brand theme
-    /// changes ONLY the default arrow: 「爪印不覆蓋 pointer」是既定拍板, and
-    /// the same is true of the I-beam.
+    /// fill) for the system shapes, three (halo + body + tail) for the C1
+    /// brand arrow, all registered, and — the load-bearing part — the brand
+    /// theme changes ONLY the default arrow: it never overrides `pointer`
+    /// (既定拍板), and the same is true of the I-beam.
     #[test]
     fn only_the_default_cursor_shape_changes_with_the_brand_theme() {
         for shape in [CursorShape::Default, CursorShape::Text, CursorShape::Pointer] {
             for brand in [false, true] {
                 let layers = cursor_shape_layers(shape, brand);
-                assert_eq!(layers.len(), 2, "{shape:?} (brand={brand}) is not an outline+fill pair");
+                let expected = if shape == CursorShape::Default && brand { 3 } else { 2 };
+                assert_eq!(layers.len(), expected, "{shape:?} (brand={brand}) has the wrong layer count");
                 for (key, _) in &layers {
                     assert!(bytes(key).is_some(), "{shape:?} maps to unregistered key {key}");
                 }
@@ -1105,14 +1121,16 @@ mod tests {
         assert_eq!(cursor_shape_layers(CursorShape::Pointer, false), cursor_shape_layers(CursorShape::Pointer, true));
     }
 
-    /// A cursor's two layers must never be the same colour, or the artwork
-    /// collapses into a flat silhouette and the outline disappears.
+    /// Adjacent layers of a cursor must never be the same colour, or the
+    /// artwork collapses into a flat silhouette and the outline disappears.
     #[test]
     fn each_cursor_previews_outline_and_fill_are_different_colours() {
         for shape in [CursorShape::Default, CursorShape::Text, CursorShape::Pointer] {
             for brand in [false, true] {
                 let layers = cursor_shape_layers(shape, brand);
-                assert_ne!(layers[0].1, layers[1].1, "{shape:?} (brand={brand}) would render as one flat colour");
+                for pair in layers.windows(2) {
+                    assert_ne!(pair[0].1, pair[1].1, "{shape:?} (brand={brand}) would render as one flat colour");
+                }
             }
         }
     }

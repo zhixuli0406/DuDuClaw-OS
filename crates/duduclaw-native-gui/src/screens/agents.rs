@@ -375,7 +375,7 @@ pub(super) fn avatar_with_status(
                 .justify_center()
                 .text_size(px((f32::from(diameter) * 0.4).max(10.0)))
                 .font_weight(gpui::FontWeight::BOLD)
-                .text_color(theme::alpha(theme::BRAND_FOREGROUND, 1.0))
+                .text_color(theme::alpha(theme::AVATAR_FOREGROUND, 1.0))
                 .child(glyph),
         )
         .child(

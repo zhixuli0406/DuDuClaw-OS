@@ -47,6 +47,7 @@ meta-duduclaw/
 ├── recipes-core/
 │   ├── images/                              # image recipes + shared .inc payload sets (see "Images")
 │   ├── initrdscripts/ os-release/ systemd/
+│   └── plymouth/                            # bbappend: rootfs-only, duduclaw theme as default (see "Boot splash")
 ├── recipes-duduclaw/                        # duduclaw-cli / -sysd / -comp / -shell: vendored *-src/ snapshot
 │                                            #   + refresh-src.sh each; plus OS glue recipes: ab-update,
 │                                            #   firstboot, data-binds, data-open, persist-seed, firewall,
@@ -54,6 +55,7 @@ meta-duduclaw/
 │                                            #   flatpak-offline-repo, flatpak-setup, flatpak-kiosk-verify, polkit-flatpak,
 │                                            #   compat-runners, steam-devices, ai-runtimes, llama-server,
 │                                            #   podman (rootless engine for the gateway, desktop edition)
+│                                            #   boot-splash (Plymouth theme)
 ├── recipes-containers/container-host-config/ # bbappend: overlay storage + rootless containers.conf drop-in
 ├── recipes-ai/llama-cpp/                    # llama.cpp v0.4.0 — llama-server / llama-cli (CPU build)
 ├── recipes-kernel/linux/                    # linux-yocto 6.18 bbappend + per-machine config fragments
@@ -120,7 +122,7 @@ the gateway has no Flatpak rights. `duduclaw-cli` ships
 the gateway with `setpriv --reuid=duduclaw --regid=duduclaw --init-groups`.
 
 Shared payload sets:
-`duduclaw-image-{data,flatpak,desktop,compat,runtimes}.inc`;
+`duduclaw-image-{data,flatpak,desktop,compat,runtimes,splash}.inc`;
 read-only root wiring: `duduclaw-ro-root.inc`.
 `duduclaw-image-runtimes.inc` (the AI payload: `nodejs` + `nodejs-npm`,
 `duduclaw-ai-runtimes`, `llama-cpp`, `duduclaw-llama-server`) is required
@@ -213,6 +215,51 @@ docker exec -u 1000 duduclaw-yocto bash -c \
 Do not run two kas configs concurrently in one build dir: they rewrite the
 same `build/conf/local.conf` and bitbake fails with cascading
 "metadata not deterministic" errors.
+
+### Boot splash
+
+Every image that carries the desktop stack (everything above except
+`duduclaw-image-minimal`) shows a Plymouth splash from 2026-10-16 on: the
+C1 cat mark in cream and amber on `#0B1E33` with a small amber spinner,
+and the same theme draws a passphrase prompt if anything asks for one
+through `systemd-ask-password`. Before that the image had no splash at all.
+
+| Piece | Where |
+|---|---|
+| Plymouth itself | meta-oe `plymouth_24.004.60.bb` (oe-core at the pinned commit has none) + `recipes-core/plymouth/plymouth_%.bbappend`: no `initrd` PACKAGECONFIG, only the `text`/`details` fallback themes built, `plymouthd.defaults` → `Theme=duduclaw` |
+| Theme + drop-ins | `recipes-duduclaw/duduclaw-boot-splash/` (two-step theme; images from `scripts/brand/derive-c1-assets.py`) |
+| Image + kernel args | `recipes-core/images/duduclaw-image-splash.inc` (required by `duduclaw-image-desktop.inc`); slot B in `duduclaw-image-ab.bb`, the live medium in `duduclaw-image-live.bb` |
+
+How it behaves, and why it is built the way it is:
+
+- **Rootfs only.** The initramfs is oe-core's busybox `initramfs-framework`,
+  not a systemd/dracut initrd, and meta-oe's `plymouth-initrd` needs dracut
+  (meta-initramfs, not in this build). The splash starts from the real root
+  through `plymouth-start.service`, a moment after the kernel hands over;
+  firmware, systemd-boot (`timeout 0`) and the initramfs look exactly as
+  before.
+- **Kernel arguments:** `splash plymouth.ignore-serial-consoles`, appended to
+  the product UKI, the slot-B UKI and the live boot entry. The second one is
+  required: the only `console=` is `ttyS0`, and with a serial console
+  present plymouth falls back to text mode on every display. `quiet` is
+  deliberately not added, so the serial boot log that `release-os.sh smoke`
+  and the bring-up transcripts read stays as it was.
+- **Fail-safe.** Nothing in the initramfs changed; `plymouth-start` is only
+  wanted by `sysinit.target`, so a splash that fails or finds no display is
+  a failed unit and boot continues. The kiosk (`duduclaw-kiosk.service`) is
+  ordered after `plymouth-quit.service` (a 20-second-capped oneshot whose
+  failure is ignored) because plymouthd holds DRM master until it quits;
+  it is not ordered after `plymouth-quit-wait.service`, which has no
+  timeout. The rescue UKI boots with `plymouth.enable=0`, and the rescue
+  shell runs `plymouth quit` before taking `tty1` as a backstop.
+- **Turning it off:** there is no boot menu to edit (`timeout 0`), so it is
+  a build-time switch: `DUDUCLAW_SPLASH_CMDLINE = "plymouth.enable=0"` in
+  `local.conf` (the include sets it with `?=`).
+
+Status: written and statically reviewed on 2026-10-16; **not yet built
+with bitbake and not yet booted in QEMU**. The QEMU smoke test is serial-only
+(`nographic`) and would not show the splash anyway; checking it needs a
+graphical QEMU run or a QMP screendump.
 
 ### Boot under QEMU
 

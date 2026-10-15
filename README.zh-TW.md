@@ -1,3 +1,5 @@
+![DuDuClaw OS：人和 AI agent 共用的 Linux 桌面](docs/assets/brand/duduclaw-os-readme-banner.png)
+
 # DuDuClaw OS
 
 <div align="center">

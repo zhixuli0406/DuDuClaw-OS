@@ -26,6 +26,7 @@
 | [../appliance/tests/README.md](../appliance/tests/README.md) | VM acceptance-test helper library (QMP screendump, serial expect-login, OCR screen assertions) | Frozen with the line |
 | [../website/README.md](../website/README.md) | The zero-build marketing site (home + download pages): screenshot pipeline, interactive modules, what to update on a new release, Cloud Run deploy and custom-domain notes | Current |
 | [../docs-site/README.md](../docs-site/README.md) | The documentation site (Astro + Starlight) that publishes this tree and the platform repo's public docs at `/docs/`: how to run it, the public whitelist, the three-locale layout, and the sync script | Current |
+| `../appliance/branding/` + `../scripts/brand/derive-c1-assets.py` | The OS's C1 brand masters (cat mark SVG, "OS" app icon PNG/ICO) and the script that derives every in-tree raster from them: mark PNGs in navy and cream ink, the shell's branding PNGs, the native GUI's About icon and the Plymouth boot-splash images. The README banner lives in `assets/brand/` | Current |
 | `../deploy/cloudrun/` + `../scripts/deploy-cloudrun.sh` | Cloud Run container for the public site (nginx, CSP/cache headers, extra MIME types) and the build-and-deploy script; one-time domain mapping notes live in `../website/README.md` | Current |
 
 Recipe-level behaviour is documented in each `.bb` / `.bbclass` header

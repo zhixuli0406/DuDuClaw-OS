@@ -7,7 +7,11 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Added
+- **README 首屏加上桌面截圖**：中英兩份 README 第一段說明後面放桌面版首頁截圖（`website/assets/screens/home-dark.png`，與官網共用），圖說標明是 v0.2.0 畫面、v0.3.0 尚未重拍。
+
 ### Changed
+- **README 改以英文為主**：`README.md` 換成英文版，繁中版移到 `README.zh-TW.md`，兩份頂端互相切換（反轉 0.1.0 前「改以繁體中文為主」的決定，讓 GitHub 首頁對海外讀者可讀，與平台 repo 一致）。文件站對應同步：`docs-site/scripts/sync-docs.mjs` 改讀 `README.zh-TW.md` 產生 `/docs/os/readme/`、`README.md` 產生 `/docs/en/os/readme/`，網址不變；`docs-site/README.md`、`docs/README.md`、`CLAUDE.md` 與 `pages.yml` 的路徑註解一併更新。本機 `astro build` 確認兩個語言頁的內容與截圖正確。
 - **文件與官網改成 v0.3.0 的事實**（`README.md`、`README.en.md`、`meta-duduclaw/README.md`、`SECURITY.md`、`docs/README.md`）：版本徽章、狀態列、信任鏈與測試範圍從 v0.2.0 改到 v0.3.0。測試範圍照 Release 與 `wiki/impl/gcp-builder-2026-10.md` 寫：qemux86-64 整碟映像在無頭 QEMU（TCG、無 KVM）開到登入畫面，同機型兩個安裝器 ISO 開到 live 環境的自動登入；安裝精靈沒有跑；genericx86-64 只建置、沒有開機；沒有真機。Secure Boot／dm-verity／TPM 在 v0.3.0 仍未啟用：建置用的是 `kas/release-linux-builder.yml`，沒有疊加 `sb-signing.yml`／`tpm-luks.yml`；2026-10-14 拆開兩個發布 wic 查證，兩槽 UKI、rescue UKI 與 systemd-boot 的 PE 簽章表都是空的、ESP 沒有 enroll 金鑰、GPT 沒有 verity 分割、UKI initrd 沒有 tpm2／cryptsetup。`meta-duduclaw/README.md` 原本寫「QEMU 機型三種產物都開機驗證過」，與 v0.2.0 的實際紀錄不符，一併改正。
 - **`docs/guides/ai-runtimes.md`**：拿掉「清單對應映像內嵌的平台版本（v0.2.0 為 1.63.0）」。v0.3.0 與 v0.2.0 用的是同一份 2026-09-05 產生的 AI runtime 包（recipe 的 `DUDUCLAW_AI_RUNTIMES_DATE` 兩版都是 `20260905`），表格補上各 CLI 的版本（取自包內 `MANIFEST.txt`）；十個 CLI 都在平台 1.73.1 的 runtime catalog 裡。Gemini CLI runtime 的移除版本照 1.73.1 快照改為 v1.74.0（原寫 v1.71.0）；「未內建」補上 Google Antigravity（`agy`），在 v0.3.0 映像上安裝它沒有測過。README 的 AI 工具鏈段落同步。
 - **官網換成 v0.3.0**（`website/`）：`site.js` 的 `RELEASE`（版本、日期 2026-10-14、平台 1.73.1、上一版 v0.2.0、`downloadBase` 與六個資產的檔名、位元組、大小），下載頁與首頁的版本列、標題、按鈕、狀態卡、測試範圍徽章、`dd` 範例檔名與回舊版卡片（改指 v0.2.0）。下載頁的 QR code 原本編的是 v0.2.0 的 ISO 網址，改用同一套規則重產（version 11、錯誤修正 H，規則寫在 `website/README.md`；用同規則重產 v0.2.0 網址與原 path 逐位元組相同）。首頁六張截圖仍是 v0.2.0 的畫面，說明文字標明 v0.3.0 還沒重拍。全部 18 個資產網址與兩個 Release 頁以 `curl -sIL` 確認都是 200，資產的 Content-Length 與 Release 記錄的大小相同。本機 `scripts/build-site.sh` 建置後，全站內部連結與錨點檢查 0 個斷掉；headless Chromium 在桌機 1440 與手機 390 寬度開下載頁，沒有 console 錯誤、沒有水平捲動，QR code 截圖以 jsQR 解出的正是 v0.3.0 的 ISO 網址。

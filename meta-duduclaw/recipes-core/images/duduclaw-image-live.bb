@@ -165,6 +165,13 @@ LABELS_LIVE = "boot"
 # do_bootimg the same way — bitbake will not detect the change on its own.
 APPEND = "console=${KERNEL_CONSOLE}"
 
+# Boot splash (C1, 2026-10-16): same arguments as the installed system's UKI
+# (DUDUCLAW_SPLASH_CMDLINE, recipes-core/images/duduclaw-image-splash.inc,
+# pulled in through duduclaw-image-desktop.inc above). Per the note just
+# above, a change to the live boot entry may need `bitbake -c bootimg -f
+# duduclaw-image-live` before do_bootimg notices it.
+APPEND:append = " ${DUDUCLAW_SPLASH_CMDLINE}"
+
 # No `inherit uki`, no IMAGE_CLASSES:append = " uki", no WKS_FILE — this
 # image never goes through wic or the signed-UKI chain. Its kernel+initrd
 # are plain deployed artifacts that image-live.bbclass's do_bootimg copies

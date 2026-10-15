@@ -98,6 +98,14 @@ UKI_CMDLINE = "rootwait root=PARTUUID=${DUDUCLAW_AB_ROOTA_PARTUUID} console=${KE
 # is still the empty `_empty` reserved slot).
 UKI_SLOTB_CMDLINE = "rootwait root=PARTUUID=${DUDUCLAW_AB_ROOTB_PARTUUID} console=${KERNEL_CONSOLE}"
 
+# Boot splash (C1, 2026-10-16): the slot-B twin of duduclaw-image-splash.inc's
+# `UKI_CMDLINE:append`, so both slots boot with the same splash arguments.
+# Appended HERE, next to the definition, not from that inc: the dual-sign
+# class fails the build when UKI_SLOTB_CMDLINE is empty (no root= to bake),
+# and an append from a generic inc would turn an image that forgot to define
+# it into a non-empty, root-less cmdline that passes that guard.
+UKI_SLOTB_CMDLINE:append = " ${DUDUCLAW_SPLASH_CMDLINE}"
+
 # See duduclaw-ab-partflags.bbclass's own comment for what these control and
 # why the inherited defaults (calibrated for duduclaw-image.bb's ~1.2G
 # rootfs) are almost certainly too small for THIS specific image once it

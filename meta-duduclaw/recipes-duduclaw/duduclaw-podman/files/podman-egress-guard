@@ -34,9 +34,13 @@
 #
 # `--if-present` (used by the nftables.service drop-in this recipe ships):
 # do nothing and succeed when the podman unit's cgroup does not exist, i.e.
-# Podman is not running and there is nothing to guard yet. Without the
-# option a missing cgroup is an error (nft refuses the path), which is what
-# the podman unit's own ExecStartPre wants.
+# Podman is not running and there is nothing to guard yet. If the cgroup
+# exists and the rule cannot be loaded, stop duduclaw-podman.service
+# (KillMode=mixed takes every container with it) and fail: after a
+# firewall reload the containers would otherwise keep running with no
+# guard at all. Without the option a missing cgroup is an error (nft
+# refuses the path), which is what the podman unit's own ExecStartPre
+# wants.
 #
 # Kernel: needs CONFIG_NFT_SOCKET and CONFIG_SOCK_CGROUP_DATA (selected by
 # CONFIG_CGROUP_BPF); both are requested by duduclaw-rootless.cfg.
@@ -49,6 +53,10 @@ if [ "${1:-}" = "--if-present" ] && [ ! -d "/sys/fs/cgroup/${CGROUP}" ]; then
 	exit 0
 fi
 
+reload_mode=0
+[ "${1:-}" = "--if-present" ] && reload_mode=1
+
+load_rule() {
 nft -f - <<NFT
 flush chain inet filter ${CHAIN}
 table inet filter {
@@ -59,5 +67,14 @@ table inet filter {
 	}
 }
 NFT
+}
+
+if ! load_rule; then
+	if [ "$reload_mode" = 1 ]; then
+		echo "podman-egress-guard: could not re-add the loopback guard; stopping duduclaw-podman.service so no container runs unguarded" >&2
+		systemctl stop --no-block duduclaw-podman.service || true
+	fi
+	exit 1
+fi
 
 echo "podman-egress-guard: loopback guard loaded for ${CGROUP}" >&2

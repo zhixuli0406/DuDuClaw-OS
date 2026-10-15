@@ -29,8 +29,18 @@
   PAM). Use:
 
   ```sh
-  as_gw()    { setpriv --reuid=duduclaw --regid=duduclaw --init-groups -- "$@"; }
-  as_kiosk() { setpriv --reuid=duduclaw-kiosk --regid=duduclaw-kiosk --init-groups -- "$@"; }
+  as_gw()    { ( cd /data/duduclaw && setpriv --reuid=duduclaw --regid=duduclaw --init-groups -- \
+                 env HOME=/data/duduclaw USER=duduclaw LOGNAME=duduclaw "$@" ); }
+  as_kiosk() { ( cd /data/duduclaw-kiosk && setpriv --reuid=duduclaw-kiosk --regid=duduclaw-kiosk --init-groups -- \
+                 env HOME=/data/duduclaw-kiosk USER=duduclaw-kiosk LOGNAME=duduclaw-kiosk "$@" ); }
+
+  HOME/USER/LOGNAME and the working directory matter: without them podman
+  reads root's ~/.config and looks up subuids for "root" (seen on the first
+  run). The test image's BusyBox has no `pkill`, `comm`, `timeout`,
+  `head -c`, `netstat` or `install`, and `systemd-analyze` is not in the
+  image: use `kill $(pidof …)` or `ps | grep`, `grep -vxF -f`, a background
+  job plus `sleep`/`kill`, `dd bs=N count=1`, `ss`, and `touch` + `chown` +
+  `chmod`. Python is not on the image either.
   ```
 
 - **A/B rounds.** V13 needs two images: v0.3.0 (root gateway) installed
@@ -58,6 +68,25 @@
   both cases and failed identically at exec with EINVAL, also in a unit
   with no hardening at all, so that environment could not settle the
   question: V8 must. All of this needs repeating on the real image.
+
+- **First real-image run done (2026-10-15):**
+  [`../reports/rootless-verification/2026-10-15.md`](../reports/rootless-verification/2026-10-15.md).
+  32 PASS, 8 PASS only with workarounds, 5 FAIL rows from six root causes
+  F1–F6, 22 not run. Fixed in the layer afterwards (commit after that
+  report): store directory in tmpfiles.d + `-` on ReadWritePaths (F1),
+  podman bounding set `CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_SYS_ADMIN`
+  (F2), `XDG_CACHE_HOME` in the store (F3), no `ProtectKernelTunables` on
+  the podman unit (F4), `CONFIG_CFS_BANDWIDTH=y` (F5), `KillMode=mixed`
+  and no PartOf/Requires on nftables.service (F6), `nft_chain_nat` in
+  modules-load, empty gateway bounding set. netavark's bridge network
+  works once F4 is fixed, so the pasta-mode fallback (platform P11) is not
+  needed. **Re-verify run, out of the box with no workaround drop-ins:**
+  V4, V6–V8 (including `--cpus` and `cat /sys/fs/cgroup/cpu.max` in the
+  container), V8b, V20, V22, V24, a factory reset followed by a container
+  run (F1 after reset), `systemctl restart nftables` and `systemctl restart
+  duduclaw-podman` with a container running (F6: unit comes back, container
+  is gone, guard chain has three rules), gateway `CapInh`/`CapBnd` all zero,
+  plus the rows the first run left NOT RUN.
 
 ## 1. Design checks V1–V25
 
@@ -99,7 +128,7 @@
 | Loopback guard fails closed | `systemctl stop duduclaw-podman`; temporarily move the guard aside (`mount --bind /bin/false /usr/libexec/duduclaw/podman-egress-guard`); `systemctl start duduclaw-podman`; undo | the unit refuses to start |
 | Guard survives a firewall reload | with a container running: `systemctl reload nftables`, then `systemctl restart nftables`; `nft list chain inet filter duduclaw_podman_egress` after each; `systemctl cat nftables` | rules present again after both (re-added by the `50-duduclaw-podman-guard.conf` drop-in); the drop-in is listed |
 | sysctl | `sysctl fs.protected_hardlinks fs.protected_symlinks kernel.yama.ptrace_scope` | `1 1 1` |
-| Ordering | `systemd-analyze critical-chain duduclaw-gateway.service`; `systemctl show -p After duduclaw-podman.service` | home-owner before podman/gateway; no ordering-cycle messages in `journalctl -b \| grep -i cycle` |
+| Ordering | `systemctl show -p After duduclaw-podman.service duduclaw-gateway.service`; `journalctl -b \| grep -ci 'ordering cycle'` (`systemd-analyze` is not in the image) | home-owner before podman/gateway; no ordering-cycle messages in `journalctl -b \| grep -i cycle` |
 | Relocation | first boot of the new image over v0.3.0: `journalctl -b -u duduclaw-home-owner \| grep relocate`; `dmesg \| grep duduclaw-persist` | seed, machine-id and rescue audit moved to `/data/system`; machine-id unchanged across the update |
 | Factory reset fail-safe | write `garbage` to `/data/system/factory-reset.pending`, reboot | nothing wiped, marker kept, `duduclaw-factory-reset.service` failed with the "malformed" line; dashboard still reachable |
 | modules-load | `systemctl status systemd-modules-load` | active, no "Failed to find module" |
@@ -108,7 +137,7 @@
 | setuid strip side effects | in a Flatpak app (Chromium), open a file through the file chooser; `ls -l /run/duduclaw-kiosk/doc 2>&1`; `journalctl -b \| grep -iE 'fusermount\|launch-helper'` | portal file access works, or the failure is recorded and fusermount3 goes on the allowlist with a reason in duduclaw-image-compat.inc |
 | sysd flags (after the snapshot refresh) | `systemctl cat duduclaw-sysd \| grep ExecStart`; from an agent shell (uid 1000, not the gateway's MainPID) `curl -sS --http0.9 --unix-socket /run/duduclaw/sysd.sock http://localhost/` and a real verb request | ExecStart carries `--require-main-pid-of duduclaw-gateway.service --min-rollback-version <floor>`; the agent-shell request is refused, the dashboard's own reboot still works |
 | Rollback floor prune | with `DUDUCLAW_MIN_ROLLBACK_VERSION` set to this image's DISTRO_VERSION, update from v0.3.0 and let the new entry get blessed; `ls /boot/EFI/Linux`; `journalctl -b -u duduclaw-rollback-prune`; repeat the update once more (rootless → newer rootless) | after bless the v0.3.0 entry is gone, the running entry and the rescue UKI remain; the second update keeps the previous rootless entry (≥ floor) as a fallback; before bless (first boot of the new entry, health gate not passed) nothing was deleted |
-| Factory reset trust | `install -o duduclaw -m 0644 /dev/null /data/system/factory-reset.pending` is impossible as uid 1000 (`as_gw touch /data/system/factory-reset.pending` → EACCES); as root create a marker owned by uid 1000, reboot | uid 1000 cannot create it; the uid-1000-owned marker is refused, nothing wiped |
+| Factory reset trust | `as_gw touch /data/system/factory-reset.pending` → EACCES; as root `touch` the marker, `chown duduclaw` it, write `clear_network=0` into it, reboot | uid 1000 cannot create it; the uid-1000-owned marker is refused, nothing wiped |
 | Local model server | `systemctl show -p User duduclaw-llama-server`; download a model from the dashboard and start it; `ss -ltnp \| grep 8080`; then as uid 1000 append `LD_PRELOAD=/data/duduclaw/x.so` and `LLAMA_EXTRA_ARGS=--host 0.0.0.0` to `llama-server.env` and restart via the dashboard | runs as duduclaw on 127.0.0.1 only; `LD_PRELOAD` has no effect (ignored key), the `--host` line makes the wrapper refuse to start with a clear journal line |
 | Update staging (after the snapshot refresh) | `grep ^Path= /etc/sysupdate.d/*.transfer`; `ls -ld /data/system/updates`; run an update from the dashboard; as uid 1000 try to write into `/data/system/updates`; feed an update with a bad signature | all transfers read `/data/system/updates` (0700 root); the good update applies; uid 1000 gets EACCES; the bad one is refused by sysd before sysupdate runs |
 | Image refuses to build without guards | `bitbake duduclaw-image-ab` with `DUDUCLAW_MIN_ROLLBACK_VERSION` empty | stops at `do_rootfs` with the "needs the platform snapshot" message |

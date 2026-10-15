@@ -61,6 +61,11 @@
 [Unit]
 Description=DuDuClaw privileged system helper (Yocto bring-up)
 
+# StartLimit* belong in [Unit]; under [Service] systemd ignores them
+# (moved 2026-10-15, flagged by the first real-image run).
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=root
@@ -69,8 +74,6 @@ RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/duduclaw-sysd --allowed-uid 1000
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

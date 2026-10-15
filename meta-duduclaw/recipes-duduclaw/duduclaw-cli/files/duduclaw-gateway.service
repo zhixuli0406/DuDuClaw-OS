@@ -244,6 +244,18 @@ PrivateTmp=yes
 ProtectSystem=full
 ReadWritePaths=-/data -/run/duduclaw-gateway
 RestrictNamespaces=yes
+# No capabilities at all (2026-10-15, after the first real-image run): the
+# gateway binds 18789 (unprivileged), talks to sysd, comp and podman over
+# Unix sockets and never needs a capability, and NoNewPrivileges already
+# stops it gaining any. The run showed CapInh 0x200100 (CAP_SETPCAP,
+# CAP_SYS_ADMIN) on the gateway with empty permitted/effective/ambient
+# sets; the most likely source is systemd's executor keeping those two
+# while it installs seccomp filters before dropping to User= (not
+# confirmed). An empty bounding set removes the question: no capability can
+# be held, inherited or regained in this tree. Re-check CapInh/CapBnd on
+# the re-verify run.
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target

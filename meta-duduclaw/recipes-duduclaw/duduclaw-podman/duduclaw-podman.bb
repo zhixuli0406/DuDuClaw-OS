@@ -37,11 +37,10 @@ do_install() {
     # before sockets.target).
     install -d ${D}${nonarch_libdir}/tmpfiles.d
     install -m 0644 ${UNPACKDIR}/duduclaw-podman.conf ${D}${nonarch_libdir}/tmpfiles.d/duduclaw-podman.conf
-    # Store dirs on /data: private path, applied by the service itself
-    # after /data is mounted (same convention as duduclaw-cli's
-    # duduclaw-home.conf).
-    install -d ${D}${datadir}/duduclaw/tmpfiles.d
-    install -m 0644 ${UNPACKDIR}/duduclaw-containers.conf ${D}${datadir}/duduclaw/tmpfiles.d/duduclaw-containers.conf
+    # Store dirs on /data: generic tmpfiles.d since the first real-image
+    # run (F1), so they exist before the unit's namespace is set up; the
+    # unit's ExecStartPre re-applies the same file after a factory reset.
+    install -m 0644 ${UNPACKDIR}/duduclaw-containers.conf ${D}${nonarch_libdir}/tmpfiles.d/duduclaw-containers.conf
 
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${UNPACKDIR}/duduclaw-podman-profile.sh ${D}${sysconfdir}/profile.d/duduclaw-podman.sh
@@ -66,7 +65,7 @@ FILES:${PN} += " \
     ${systemd_system_unitdir}/duduclaw-podman.service \
     ${libexecdir}/duduclaw/podman-egress-guard \
     ${nonarch_libdir}/tmpfiles.d/duduclaw-podman.conf \
-    ${datadir}/duduclaw/tmpfiles.d/duduclaw-containers.conf \
+    ${nonarch_libdir}/tmpfiles.d/duduclaw-containers.conf \
     ${sysconfdir}/profile.d/duduclaw-podman.sh \
     ${nonarch_libdir}/modules-load.d/duduclaw-containers.conf \
     ${systemd_system_unitdir}/nftables.service.d/50-duduclaw-podman-guard.conf \

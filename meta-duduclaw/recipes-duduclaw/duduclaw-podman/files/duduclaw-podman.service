@@ -1,4 +1,6 @@
-# Rootless Podman API service for the DuDuClaw gateway (2026-10-15, WP-O2).
+# Rootless Podman API service for the DuDuClaw gateway (2026-10-15, WP-O2;
+# corrected after the first real-image run, wiki/reports/
+# rootless-verification/2026-10-15.md, findings F1-F6).
 #
 # `podman system service` as uid 1000 (`duduclaw`), activated by
 # duduclaw-podman.socket. A system unit with User=, not a user unit: there
@@ -6,72 +8,93 @@
 #
 # Threat model: AI employees run as the same uid as this service and can
 # reach its API, and this unit cannot have NoNewPrivileges (newuidmap and
-# newgidmap must keep their setuid bit working here). Through the libpod API
-# a caller can make podman execute an arbitrary host binary (an absolute
-# OCI runtime path) inside this unit, as uid 1000. So this unit is
+# newgidmap must keep their setuid bit working here). So this unit is
 # hardened as if uid 1000 code already runs in it:
-#   - the image ships no setuid/setgid binary except newuidmap/newgidmap
-#     (duduclaw-image-compat.inc strips the rest and fails the build if one
-#     survives);
-#   - CapabilityBoundingSet keeps only CAP_SETUID/CAP_SETGID: a setuid-root
-#     exec in this unit (newuidmap/newgidmap, the only setuid files left)
-#     gains at most those two on the host, which is what they need to
-#     write another process's uid_map/gid_map. Capabilities inside a
+#   - the image ships no setuid/setgid binary except newuidmap/newgidmap,
+#     and no file capabilities (duduclaw-image-compat.inc strips the rest
+#     and fails the build if anything survives);
+#   - CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE
+#     CAP_SYS_ADMIN (F2, bisected on the real image): the bounding set only
+#     matters for a setuid-root exec, i.e. newuidmap/newgidmap, which open
+#     /proc/<pid>/uid_map of another process owned by uid 1000 (needs
+#     CAP_DAC_OVERRIDE as euid 0) and write a multi-range map (the kernel
+#     requires CAP_SETUID/CAP_SETGID and, for the opener of that file,
+#     CAP_SYS_ADMIN in the parent user namespace). With only SETUID/SETGID
+#     the open fails with EACCES, with DAC_OVERRIDE added the write fails
+#     with EPERM; all four make it work, CAP_SETFCAP is not needed. Holding
+#     SYS_ADMIN in the bounding set is acceptable because nothing else in
+#     the image can raise privilege on exec (no other setuid file, no fcaps)
+#     and uid-1000 processes in this unit start with empty permitted and
+#     effective sets (podman runs with CapEff 0). Capabilities inside a
 #     container are a different matter: a process that creates a user
-#     namespace gets a full capability set scoped to that namespace
-#     regardless of this bounding set, so containers keep NET_ADMIN etc.
-#     there, and none of it applies to host resources;
-#   - InaccessiblePaths hides the root control sockets this unit has no
-#     business with (systemd's private socket, the system D-Bus socket,
-#     duduclaw-sysd's /run/duduclaw, the kiosk runtime dir): a program run
-#     through the API cannot even try them;
+#     namespace gets a full set scoped to that namespace regardless of this
+#     bounding set, valid for namespaced resources only;
+#   - InaccessiblePaths hides root control sockets this unit has no
+#     business with (systemd's private socket and varlink endpoints, the
+#     system D-Bus socket, duduclaw-sysd's /run/duduclaw, the kiosk runtime
+#     dir, udev's control socket);
 #   - RestrictSUIDSGID blocks creating new setuid/setgid files;
 #   - ProtectSystem=strict with three writable paths: the store, the shared
 #     runtime dir and the gateway's TMPDIR (bind-mount sources the gateway
-#     creates for containers live there).
+#     creates for containers live there). The gateway home stays read-only
+#     for this unit: XDG_CACHE_HOME points into the store (F3: podman writes
+#     $XDG_CACHE_HOME/containers, short-name-alias lock included).
+#   - NOT ProtectKernelTunables (F4): it makes /proc/sys read-only and
+#     overmounts parts of /proc, so netavark cannot set ip_forward in the
+#     rootless network namespace ("Read-only file system") and the kernel
+#     refuses crun's fresh /proc mount for a container ("VFS: Mount too
+#     revealing"). Without it, netavark's bridge network and egress work, so
+#     the sandbox keeps `--network bridge` (no pasta-mode fallback needed).
 # What stays: kernel attack surface reachable from an unprivileged user
 # namespace (netfilter, overlayfs and similar have had LPE bugs there).
 #
 # cgroups: Delegate=yes alone is not enough. With cgroup v2's
 # no-internal-process rule, `podman system service` sitting in the unit's
-# root cgroup makes --memory/--pids-limit/--cpus silently ineffective
-# (podman reports success, the container has no limits). DelegateSubgroup=
-# supervisor moves this process into a child cgroup and the limits take
-# effect. Measured on Fedora 42 / systemd 257 / podman 5.8 (container
-# OOM-killed under --memory 32m only with the subgroup); not yet on this
-# image (systemd 259.5), see V8 in wiki/eval/rootless-verification-2026-10.md.
+# root cgroup makes --memory/--pids-limit/--cpus silently ineffective.
+# DelegateSubgroup=supervisor moves this process into a child cgroup and
+# the limits take effect (confirmed on the real image: 32m container
+# OOM-killed, exit 137; without the subgroup memory.max=max). --cpus also
+# needs CONFIG_CFS_BANDWIDTH (duduclaw-rootless.cfg, F5).
 #
-# KillMode=process: restarting this service does not kill running
-# containers (conmon and the containers stay in the unit's cgroup); the
-# gateway's own sweep cleans up leftovers.
+# KillMode=mixed + TimeoutStopSec (F6): stopping or restarting this unit
+# tears down everything in its cgroup, delegated container subtrees
+# included: SIGTERM to podman, SIGKILL to the rest (conmon, pasta, the
+# catatonit pause process, every container). Containers here are
+# disposable sandboxes and the gateway recreates them, so a podman restart
+# kills running sandboxes on purpose. The earlier KillMode=process left
+# those processes behind; with Delegate=yes the unit cgroup then still had
+# populated children and controllers enabled, so systemd could not place a
+# new executor in it ("Failed to spawn executor: Device or resource busy")
+# and the unit stayed down until the containers exited. It also kept the
+# old pause process, whose stale user namespace the next podman joined.
 #
 # Host loopback guard (ExecStartPre, runs as root via "+"): pasta opens its
 # host-side sockets as this unit, so a container can reach anything that
 # listens on the host (the dashboard on 0.0.0.0:18789, llama-server on
 # 127.0.0.1:8080) over loopback, and nftables.conf's `iif lo accept`
 # would let it in. The guard script loads a rule that drops loopback
-# connections this unit's cgroup initiates. It runs on every start because
-# nftables resolves the cgroup path to the cgroup's inode number when the
-# rule is loaded; a static rule in nftables.conf could not even be loaded
-# at boot (this cgroup does not exist yet) and would go stale after a
-# restart. If the guard cannot be loaded, this unit does not start: no
-# containers rather than unguarded containers.
+# connections this unit's cgroup initiates, on every start (nft resolves
+# the cgroup path to an inode when the rule is loaded). If it cannot be
+# loaded, this unit does not start. A firewall reload or restart re-adds
+# the rule through this recipe's nftables.service drop-in
+# (50-duduclaw-podman-guard.conf) WITHOUT touching this unit: there is no
+# PartOf=/Requires= on nftables.service any more (Requires= and PartOf=
+# would propagate a firewall restart into a podman restart, F6), only
+# Wants= + After= for boot ordering. Running `nft -f /etc/nftables.conf` by
+# hand bypasses the drop-in; use systemctl.
 #
-# nftables.conf begins with `flush ruleset`, so the rule has to come back
-# whenever the firewall is (re)loaded: this recipe's nftables.service
-# drop-in (50-duduclaw-podman-guard.conf) re-runs the guard in the same job,
-# right after the ruleset loads, so containers that outlive a podman
-# restart (KillMode=process) are not left unguarded. PartOf= additionally
-# restarts this unit with the firewall. Running `nft -f
-# /etc/nftables.conf` by hand bypasses both; use systemctl.
-#
-# ExecStartPre (+) also creates the store directory (private tmpfiles file,
-# never applied by the generic boot-time tmpfiles run).
+# The store directory comes from tmpfiles.d/duduclaw-containers.conf at
+# boot (systemd-tmpfiles-setup, after /data is mounted) and again from the
+# ExecStartPre below, which matters after a factory reset removed it later
+# in the same boot. ReadWritePaths= carries a "-" so a missing store makes
+# namespace setup skip it instead of failing (F1: without the "-", even the
+# "+" ExecStartPre died at step NAMESPACE, before it could create the
+# directory); ExecStart gets its own namespace, set up after that.
 [Unit]
 Description=Rootless Podman API for the DuDuClaw gateway (uid 1000)
-Requires=duduclaw-podman.socket duduclaw-home-owner.service nftables.service
+Requires=duduclaw-podman.socket duduclaw-home-owner.service
+Wants=nftables.service
 After=duduclaw-podman.socket duduclaw-home-owner.service duduclaw-factory-reset.service nftables.service
-PartOf=nftables.service
 
 [Service]
 Type=exec
@@ -79,23 +102,26 @@ User=duduclaw
 Group=duduclaw
 Delegate=yes
 DelegateSubgroup=supervisor
-KillMode=process
+KillMode=mixed
+TimeoutStopSec=30
 Environment=XDG_RUNTIME_DIR=/run/duduclaw-gateway
 Environment=HOME=/data/duduclaw
+# Podman's cache (short-name aliases and their lock, blob info cache) goes
+# into the store, so the gateway home can stay read-only here (F3).
+Environment=XDG_CACHE_HOME=/data/system/containers/duduclaw/.cache
 # Image pulls stage layers in TMPDIR (default /var/tmp, read-only here).
 Environment=TMPDIR=/data/duduclaw/tmp
-ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/share/duduclaw/tmpfiles.d/duduclaw-containers.conf
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/duduclaw-containers.conf
 ExecStartPre=+/usr/libexec/duduclaw/podman-egress-guard
 ExecStart=/usr/bin/podman system service --time=0
 Restart=on-failure
 RestartSec=5
 
 ProtectSystem=strict
-ReadWritePaths=/data/system/containers/duduclaw /run/duduclaw-gateway /data/duduclaw/tmp
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+ReadWritePaths=-/data/system/containers/duduclaw /run/duduclaw-gateway /data/duduclaw/tmp
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_SYS_ADMIN
 RestrictSUIDSGID=yes
 ProtectKernelModules=yes
-ProtectKernelTunables=yes
 InaccessiblePaths=-/run/systemd/private -/run/dbus/system_bus_socket -/run/duduclaw -/run/duduclaw-kiosk
 # systemd's varlink endpoints and udev's control socket (root IPC this unit
 # never uses). InaccessiblePaths= takes no globs, so they are listed; "-"
@@ -105,7 +131,8 @@ InaccessiblePaths=-/run/systemd/private -/run/dbus/system_bus_socket -/run/duduc
 # Unverified on the image which of these exist; V8 records `ls /run/systemd`
 # and that podman still works.
 InaccessiblePaths=-/run/systemd/userdb -/run/systemd/io.systemd.ManagedOOM -/run/systemd/io.systemd.Hostname -/run/systemd/io.systemd.Machine -/run/systemd/io.systemd.Credentials -/run/systemd/io.systemd.Import -/run/systemd/io.systemd.sysext -/run/systemd/io.systemd.Login -/run/systemd/io.systemd.BootControl -/run/systemd/netif/io.systemd.Network -/run/udev/control
-# Deliberately absent: NoNewPrivileges=yes (would break newuidmap).
+# Deliberately absent: NoNewPrivileges=yes (would break newuidmap) and
+# ProtectKernelTunables=yes (breaks netavark and crun, F4).
 
 [Install]
 # Started on demand by the socket; no WantedBy of its own.

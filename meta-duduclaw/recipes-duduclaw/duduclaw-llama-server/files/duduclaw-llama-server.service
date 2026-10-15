@@ -42,6 +42,11 @@ Wants=data.mount
 ConditionPathExists=/data/duduclaw/llama-server.env
 ConditionPathIsDirectory=/data/duduclaw/models
 
+# StartLimit* belong in [Unit]; under [Service] systemd ignores them
+# (moved 2026-10-15, flagged by the first real-image run).
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=duduclaw
@@ -63,8 +68,6 @@ RestartSec=5
 # A model that does not fit RAM makes llama-server die during load, every
 # time, in seconds. Without a start limit that is a permanent restart loop
 # on a box nobody is watching.
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # --- Hardening ------------------------------------------------------------
 # 2026-10-15: SUPERSEDED. The process now runs as `duduclaw` (uid 1000,

@@ -31,7 +31,7 @@
 # never followed.
 [Unit]
 Description=DuDuClaw OS: relay TPM/LUKS status marker into /data
-Documentation=commercial/docs/DESIGN-os-trust-chain-2026-09.md
+# Design reference (maintainers' private tree, not a URL): commercial/docs/DESIGN-os-trust-chain-2026-09.md
 After=data.mount
 Requisite=data.mount
 ConditionPathExists=/run/duduclaw-tpm-status.json

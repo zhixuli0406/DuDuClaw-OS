@@ -161,7 +161,10 @@ pub(crate) fn run_login_session(jwt: String, runtime: &'static str, tx: Sender<C
     let stream = ws_rpc::call_then_stream_events(
         &jwt,
         "auth.cli_login.start",
-        json!({ "runtime": runtime }),
+        // Platform v1.74.0+ refuses a start without this flag. The OOBE only
+        // reaches here after the risk checkbox (RuntimeAuthRiskAck) is ticked;
+        // `runtime_auth.rs` tests keep 開始登入 disabled until then.
+        json!({ "runtime": runtime, "accept_subscription_risk": true }),
         STREAM_BUDGET,
         |payload| {
             match payload.get("session_id").and_then(|v| v.as_str()) {

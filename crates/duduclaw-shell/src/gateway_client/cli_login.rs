@@ -13,7 +13,8 @@
 // TODO's own §4 sequencing says WP-C's live check waits on WP-A/WP-B landing.
 //
 // ── The RPCs this module depends on ──────────────────────────────────────
-//   auth.cli_login.start  {runtime}            -> {session_id, runtime,
+//   auth.cli_login.start  {runtime, accept_subscription_risk: true}
+//                                              -> {session_id, runtime,
 //                                                  program, remote_safe,
 //                                                  hint, status}
 //   auth.cli_login.status {session_id}         -> {session_id, status}

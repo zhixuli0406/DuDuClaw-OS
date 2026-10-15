@@ -138,10 +138,15 @@ default, and no account can log in over it yet.)
 
 API keys are the supported path and the default recommendation. Signing a
 consumer subscription (Claude Pro/Max, ChatGPT, Google, Copilot, …) into a
-third-party product is a vendor-terms question, not a technical one:
-Anthropic and Google have blocked consumer subscription tokens from
-third-party products server-side since March 2026, and accounts have been
-suspended for it. The OOBE shows that risk and requires an explicit
+third-party product is a vendor-terms question:
+[Anthropic's policy](https://code.claude.com/docs/en/legal-and-compliance)
+does not let third-party products route requests through Claude subscription
+credentials and may be enforced without notice, and Google's
+[Gemini CLI terms](https://geminicli.com/docs/resources/tos-privacy/) and
+[Antigravity terms](https://antigravity.google/terms) (section 6) say
+third-party software accessing the service through a subscription sign-in may
+get the account suspended or terminated. OpenAI's and xAI's positions are
+unclear; their terms still apply. The OOBE shows that risk and requires an explicit
 acknowledgement before offering a subscription login.
 
 ## Local models

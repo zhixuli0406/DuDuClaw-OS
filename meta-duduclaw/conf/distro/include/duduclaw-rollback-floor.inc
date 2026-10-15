@@ -10,13 +10,11 @@
 #                      fallback (3 failed boots of an unblessed entry) cannot
 #                      bring back a root gateway either.
 #
-# EMPTY ON PURPOSE until the platform snapshot catches up. The vendored
-# duduclaw-sysd (platform v1.73.1) knows neither flag and clap refuses an
-# unknown argument, so sysd would not start. duduclaw-sysd's do_install
-# fails the build if this is set while the vendored source lacks either
-# flag. TODO(platform-sync): in the commit that moves the snapshots to the
-# platform release carrying the rootless gateway changes, set this to that
-# build's own DISTRO_VERSION, literally, once.
+# Set 2026-10-15 to the first rootless build's DISTRO_VERSION, literally,
+# in the same commit that moved the snapshots to platform v1.73.4 (the
+# release carrying the rootless gateway changes). duduclaw-sysd's
+# do_install still fails the build if the vendored source lacks either
+# flag.
 #
 # Which version string: the one in the UKI, not the repo-root VERSION file.
 # sysd reads the target entry's embedded os-release IMAGE_VERSION and the
@@ -50,4 +48,4 @@
 # no longer return to any pre-rootless image, by sysd rollback or by
 # sd-boot fallback. Recovering from a bad rootless release means shipping a
 # fixed newer one (or the rescue entry, which these rules never touch).
-DUDUCLAW_MIN_ROLLBACK_VERSION ?= ""
+DUDUCLAW_MIN_ROLLBACK_VERSION ?= "1.73.4-y1-bringup"

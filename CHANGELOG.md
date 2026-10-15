@@ -35,6 +35,23 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - 以上 gateway 去 root 與容器堆疊的項目都還沒在建好的映像上建置或開機。做過的只有靜態檢查（`bash -n`／`sh -n`）與容器裡的行為測試：tmpfiles 設定（systemd 259 的 `systemd-tmpfiles`）、工廠重置（21 個情境）、`relocate-root-state.sh`（8 個）與回滾清理（16 個），後三者在 Alpine 的 busybox 上跑；Podman unit 的硬化組合在 systemd 257 容器裡確認不會隱含 `NoNewPrivileges`、`ExecStartPre=+` 執行時 unit 的 cgroup 已存在。審查後加的 comp 音量 verb 在 Linux 容器裡跑過 `cargo test`。
 
 ### Changed
+- **平台快照同步到 v1.73.4（1.73.1→1.73.4，`scripts/sync-platform.sh`）**：`duduclaw-cli`／`duduclaw-sysd` 快照自平台重新 vendor（`duduclaw-comp`／`duduclaw-shell` 自本 repo `crates/` 重新快照），`duduclaw-platform-version.inc` 1.73.1→1.73.4（連動 `DISTRO_VERSION`、os-release `VERSION_ID`、UKI 檔名、A/B loader 項），兩個平台 recipe 改名 `_1.73.4.bb`。crates.io 依賴集合有變（duduclaw-cli duduclaw-sysd），`*-crates.inc` 已重生。OS 自己的 release 版本（`VERSION`）不受影響。
+  帶進的平台 commit：
+    - b8d16c87 chore: bump v1.73.4
+    - 11837055 Merge pull request #127 from zhixuli0406/docs/next-os-image-qualifiers
+    - e87e08ba docs: say the rootless notes apply from the next DuDuClaw OS image
+    - a6b75534 Merge pull request #126 from zhixuli0406/docs/sysd-verb-count
+    - cd199bfe docs: duduclaw-sysd has 18 fixed commands, not 17
+    - 102f7a00 Merge pull request #125 from zhixuli0406/feat/os-rootless-platform
+    - 4a9b689c fix(sysd): remove leftover staging directories at the start of each stage
+    - f25d7641 Merge origin/main (v1.73.3) into feat/os-rootless-platform
+    - 7d058585 fix(sysd): serialise update verbs, verify before placing, openat source; e2e tests
+    - 0f2dbd6f feat(audio): drive volume through comp's shell_control verbs on the appliance
+    - 6a9ed425 feat(sysd): verify and stage OS updates as root (SysupdateStageApply)
+    - d008345c fix(sysd): pidfd-based main-process check, bounded verification, Type #1 guard
+    - f3704a78 feat(sysd): refuse rollbacks to images older than a configured floor
+    - 01dbab46 feat(os): route the os_* MCP tools to sysd through the gateway
+    - 351680b6 fix(sysd,container): address the security review of the rootless platform work
 - **文件與官網改成 v0.3.0 的事實**（`README.md`、`README.en.md`、`meta-duduclaw/README.md`、`SECURITY.md`、`docs/README.md`）：版本徽章、狀態列、信任鏈與測試範圍從 v0.2.0 改到 v0.3.0。測試範圍照 Release 與 `wiki/impl/gcp-builder-2026-10.md` 寫：qemux86-64 整碟映像在無頭 QEMU（TCG、無 KVM）開到登入畫面，同機型兩個安裝器 ISO 開到 live 環境的自動登入；安裝精靈沒有跑；genericx86-64 只建置、沒有開機；沒有真機。Secure Boot／dm-verity／TPM 在 v0.3.0 仍未啟用：建置用的是 `kas/release-linux-builder.yml`，沒有疊加 `sb-signing.yml`／`tpm-luks.yml`；2026-10-14 拆開兩個發布 wic 查證，兩槽 UKI、rescue UKI 與 systemd-boot 的 PE 簽章表都是空的、ESP 沒有 enroll 金鑰、GPT 沒有 verity 分割、UKI initrd 沒有 tpm2／cryptsetup。`meta-duduclaw/README.md` 原本寫「QEMU 機型三種產物都開機驗證過」，與 v0.2.0 的實際紀錄不符，一併改正。
 - **`docs/guides/ai-runtimes.md`**：拿掉「清單對應映像內嵌的平台版本（v0.2.0 為 1.63.0）」。v0.3.0 與 v0.2.0 用的是同一份 2026-09-05 產生的 AI runtime 包（recipe 的 `DUDUCLAW_AI_RUNTIMES_DATE` 兩版都是 `20260905`），表格補上各 CLI 的版本（取自包內 `MANIFEST.txt`）；十個 CLI 都在平台 1.73.1 的 runtime catalog 裡。Gemini CLI runtime 的移除版本照 1.73.1 快照改為 v1.74.0（原寫 v1.71.0）；「未內建」補上 Google Antigravity（`agy`），在 v0.3.0 映像上安裝它沒有測過。README 的 AI 工具鏈段落同步。
 - **官網換成 v0.3.0**（`website/`）：`site.js` 的 `RELEASE`（版本、日期 2026-10-14、平台 1.73.1、上一版 v0.2.0、`downloadBase` 與六個資產的檔名、位元組、大小），下載頁與首頁的版本列、標題、按鈕、狀態卡、測試範圍徽章、`dd` 範例檔名與回舊版卡片（改指 v0.2.0）。下載頁的 QR code 原本編的是 v0.2.0 的 ISO 網址，改用同一套規則重產（version 11、錯誤修正 H，規則寫在 `website/README.md`；用同規則重產 v0.2.0 網址與原 path 逐位元組相同）。首頁六張截圖仍是 v0.2.0 的畫面，說明文字標明 v0.3.0 還沒重拍。全部 18 個資產網址與兩個 Release 頁以 `curl -sIL` 確認都是 200，資產的 Content-Length 與 Release 記錄的大小相同。本機 `scripts/build-site.sh` 建置後，全站內部連結與錨點檢查 0 個斷掉；headless Chromium 在桌機 1440 與手機 390 寬度開下載頁，沒有 console 錯誤、沒有水平捲動，QR code 截圖以 jsQR 解出的正是 v0.3.0 的 ISO 網址。

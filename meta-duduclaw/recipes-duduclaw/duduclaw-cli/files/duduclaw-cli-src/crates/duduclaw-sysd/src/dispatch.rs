@@ -3,18 +3,24 @@
 //! Every `Command::new(...)` argument here is a literal, exactly the
 //! discipline `duduclaw-gateway/src/device_ops.rs` documents for its own
 //! `SystemDeviceOps` — this module is that same rule applied on the root
-//! side of the privilege boundary. The only caller-supplied value that
-//! ever reaches a spawned process is [`SysdRequest::Hostname`]'s `set`
-//! field, and it is passed via `Command::arg()` (never a shell), so its
-//! content can only ever be *the hostname value*, never *which command
-//! runs*.
+//! side of the privilege boundary. Caller-supplied values that reach a
+//! spawned process (`Hostname`'s `set`, `SetTimezone`'s `timezone`,
+//! `NetworkWiredConfig`'s `interface`) pass a character whitelist that
+//! forbids a leading `-` and are placed after a literal `--`, via
+//! `Command::arg()` (never a shell): their content can only ever be *the
+//! value*, never *which command runs* nor *an option* (`hostnamectl -H
+//! <host>` would run ssh as root). The caller is treated as hostile: see
+//! the threat-model section of `protocol.rs`.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 use tokio::process::Command;
 
-use crate::protocol::{MAX_HOSTNAME_LEN, MAX_TIMEZONE_LEN, SysdError, SysdOpOutput, SysdRequest};
+use crate::protocol::{
+    FACTORY_RESET_MARKER, FACTORY_RESET_UNIT_FILE, GATEWAY_HOME_DIR, LOCAL_MODEL_UNIT, LocalModelAction, MAX_HOSTNAME_LEN, MAX_TIMEZONE_LEN, SSH_PORT,
+    SSH_UNITS, SysdError, SysdOpOutput, SysdRequest,
+};
 
 /// Absolute path to `systemd-sysupdate`.
 ///
@@ -97,22 +103,26 @@ const MAX_DNS_ENTRIES: usize = 3;
 /// deleting one file.
 const KIOSK_HOME_DIR: &str = "/data/duduclaw-kiosk";
 
-/// Directory whose CONTENTS are iwd's persisted Wi-Fi credential files
-/// (`/data/network/iwd`, 0700 root:root — see
-/// `appliance/mkosi.extra/usr/lib/tmpfiles.d/duduclaw-network.conf`). The
-/// directory itself is left in place (tmpfiles recreates it unconditionally
-/// every boot); only the credential files inside are removed, mirroring
+/// Directories whose CONTENTS are iwd's persisted Wi-Fi credential files,
+/// one per OS line: `/data/system/iwd` on the Yocto line (DuDuClaw-OS
+/// `meta-duduclaw/recipes-duduclaw/duduclaw-data-binds/files/
+/// var-lib-iwd.mount`) and `/data/network/iwd` on the Debian line
+/// (`appliance/mkosi.extra/usr/lib/tmpfiles.d/duduclaw-network.conf`), both
+/// 0700 root:root. Until 2026-10 only the Debian path was listed, so on
+/// Yocto images "clear network settings" deleted nothing. The directories
+/// themselves are left in place (tmpfiles recreates them every boot); only
+/// the credential files inside are removed, mirroring
 /// `duduclaw-gateway/src/device_ops.rs`'s own `wipe_dir_contents` for
 /// `home_dir` — same "the mount point survives, what's inside does not"
 /// discipline this module's [`wipe_dir_contents`] below implements.
-const NETWORK_CREDENTIALS_DIR: &str = "/data/network/iwd";
+const NETWORK_CREDENTIALS_DIRS: [&str; 2] = ["/data/system/iwd", "/data/network/iwd"];
 
 /// Remove every entry directly under `dir` (not `dir` itself). Missing
 /// `dir` is not an error (nothing to wipe) — mirrors
 /// `duduclaw-gateway/src/device_ops.rs`'s identically-named helper for
 /// `home_dir`; this is that same discipline applied on the root side of
 /// the privilege boundary, for the two paths ([`KIOSK_HOME_DIR`],
-/// [`NETWORK_CREDENTIALS_DIR`]) the unprivileged gateway process cannot
+/// [`NETWORK_CREDENTIALS_DIRS`]) the unprivileged gateway process cannot
 /// reach on its own.
 fn wipe_dir_contents(dir: &Path) -> std::io::Result<()> {
     let entries = match std::fs::read_dir(dir) {
@@ -157,6 +167,11 @@ async fn run(mut cmd: Command) -> DispatchResult {
 /// `SysdRequest::FactoryReset`'s doc comment) and must not be silently
 /// skipped just because a later step also happened to fail.
 async fn dispatch_factory_reset() -> DispatchResult {
+    // The gateway home first, and fail-closed: a reset that could not wipe
+    // the gateway's data must not reboot into a box that still holds it
+    // (the same contract the gateway-side wipe had before it moved here).
+    wipe_gateway_home(Path::new(GATEWAY_HOME_DIR))
+        .map_err(|e| SysdError::io(format!("wiping {GATEWAY_HOME_DIR} failed: {e}")))?;
     let kiosk_wipe_warn = match wipe_dir_contents(Path::new(KIOSK_HOME_DIR)) {
         Ok(()) => String::new(),
         Err(e) => format!("\n[warn] wiping {KIOSK_HOME_DIR} failed: {e}"),
@@ -183,26 +198,215 @@ async fn dispatch_factory_reset() -> DispatchResult {
     })
 }
 
-/// Wipe the CONTENTS of [`NETWORK_CREDENTIALS_DIR`] — see that constant's
-/// doc comment for what lives there and why the directory entry itself
-/// survives. Unlike the kiosk-home wipe in [`dispatch_factory_reset`], a
-/// failure here is returned as a hard `Err` rather than folded into a
-/// `[warn]` note: this verb only ever runs when an operator explicitly
-/// opted in to "一併清除網路設定", and the gateway-side caller
-/// (`SysdDeviceOps::factory_reset`) treats that opt-in as fail-closed —
-/// silently downgrading a real failure to a warning would let the operator
-/// walk away believing saved Wi-Fi credentials are gone when they are not.
+/// One update-related operation at a time (`SysupdateStageApply`,
+/// `SysupdateApply`, `UpdateRollback`, `ClearExhaustedUpdateTarget`): a
+/// second request while one runs is refused at once, never queued, so
+/// concurrent (possibly forged) calls cannot empty each other's staging
+/// directory or change boot entries mid-install.
+static UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn begin_update_op(lock: &'static tokio::sync::Mutex<()>) -> Result<tokio::sync::MutexGuard<'static, ()>, SysdError> {
+    lock.try_lock()
+        .map_err(|_| SysdError::new("busy", "another update operation is in progress; try again when it has finished"))
+}
+
+/// Plain `SysupdateApply` installs whatever the image's sysupdate source
+/// holds without verification; on an image with a rollback floor (a
+/// non-root gateway) only the verified `SysupdateStageApply` may install.
+fn plain_sysupdate_allowed(floor: &crate::rollback_floor::RollbackFloor) -> Result<(), SysdError> {
+    if *floor == crate::rollback_floor::RollbackFloor::Off {
+        Ok(())
+    } else {
+        Err(SysdError::unsupported(
+            "sysupdate_apply is disabled on this image; use sysupdate_stage_apply (verified install)",
+        ))
+    }
+}
+
+/// `SysupdateStageApply`: resolve the destination slot and the running
+/// version, verify and stage the release as root (`staged_update::stage`,
+/// blocking work on a blocking thread), install it, then empty the staging
+/// directory whatever happened.
+async fn dispatch_sysupdate_stage_apply() -> DispatchResult {
+    use crate::staged_update::{DEST_DIR, SOURCE_DIR, reset_dir, stage};
+    let dest = Path::new(DEST_DIR);
+    let staged = tokio::task::spawn_blocking(|| -> Result<crate::release::ReleaseFiles, String> {
+        let current = crate::release::current_root_device()?;
+        let slots = crate::release::read_slot_entries(Path::new(crate::release::BY_PARTLABEL_DIR))?;
+        let destination = crate::release::pick_destination_slot(&slots, &current)?;
+        let dest_partuuid =
+            crate::release::partuuid_of(Path::new(crate::release::BY_PARTUUID_DIR), &destination.device)?;
+        stage(
+            Path::new(SOURCE_DIR),
+            Path::new(DEST_DIR),
+            crate::release::OS_IMAGE_UPDATE_PUBKEY,
+            crate::release::machine_arch(),
+            &dest_partuuid,
+            crate::rollback_floor::floor(),
+            running_image_version().as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| SysdError::io(format!("staging task failed: {e}")))
+    .and_then(|r| r.map_err(|why| SysdError::unsupported(format!("update refused: {why}"))));
+    let release = match staged {
+        Ok(release) => release,
+        Err(e) => {
+            if let Err(wipe) = reset_dir(dest) {
+                tracing::warn!("could not empty {DEST_DIR}: {wipe}");
+            }
+            return Err(e);
+        }
+    };
+    let mut cmd = Command::new(SYSTEMD_SYSUPDATE_BIN);
+    cmd.arg("update");
+    let result = run(cmd).await;
+    if let Err(wipe) = reset_dir(dest) {
+        tracing::warn!("could not empty {DEST_DIR}: {wipe}");
+    }
+    let out = result?;
+    Ok(SysdOpOutput { stdout: format!("verified and staged {}\n{}", release.version, out.stdout), ..out })
+}
+
+/// Which factory-reset path this image supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetPath {
+    /// Write the marker and reboot; the OS oneshot wipes at next boot.
+    Deferred,
+    /// Wipe now, then reboot (images without the oneshot).
+    Immediate,
+}
+
+fn reset_path(oneshot_unit_present: bool) -> ResetPath {
+    if oneshot_unit_present { ResetPath::Deferred } else { ResetPath::Immediate }
+}
+
+/// The marker's exact content (see `SysdRequest::FactoryResetV2`).
+fn marker_content(clear_network: bool) -> &'static str {
+    if clear_network { "clear_network=1\n" } else { "clear_network=0\n" }
+}
+
+/// Write `marker` atomically: a fresh temp file next to it (mode 0600, not
+/// following links), fsync, rename over the marker, fsync the directory.
+fn write_reset_marker(marker: &Path, clear_network: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = marker.parent().ok_or_else(|| std::io::Error::other("marker has no directory"))?;
+    let tmp = dir.join(".factory-reset.pending.tmp");
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&tmp)?;
+    file.write_all(marker_content(clear_network).as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, marker)?;
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// `FactoryResetV2` (and the legacy `FactoryReset`, as `clear_network:
+/// false`): see the verb's doc comment for both paths.
+async fn dispatch_factory_reset_v2(clear_network: bool) -> DispatchResult {
+    match reset_path(Path::new(FACTORY_RESET_UNIT_FILE).exists()) {
+        ResetPath::Deferred => {
+            write_reset_marker(Path::new(FACTORY_RESET_MARKER), clear_network)
+                .map_err(|e| SysdError::io(format!("writing {FACTORY_RESET_MARKER} failed: {e}")))?;
+            let mut reboot_cmd = Command::new("systemctl");
+            reboot_cmd.arg("reboot");
+            let reboot = run(reboot_cmd).await?;
+            Ok(SysdOpOutput {
+                stdout: format!("factory reset scheduled for the next boot\n{}", reboot.stdout),
+                ..reboot
+            })
+        }
+        ResetPath::Immediate => {
+            if clear_network {
+                dispatch_clear_network_credentials().await?;
+            }
+            dispatch_factory_reset().await
+        }
+    }
+}
+
+/// Wipe the contents of the gateway home `dir` (a closed constant in
+/// production, a temp dir in tests). Root runs this inside a directory the
+/// unprivileged gateway owns, so the directory itself must be a real
+/// directory, not a symlink planted to redirect the wipe; a missing
+/// directory is nothing to wipe. Entries are never followed:
+/// [`wipe_dir_contents`] removes a symlink entry as a link, and
+/// `remove_dir_all` does not follow links inside the tree.
+fn wipe_gateway_home(dir: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => Err(std::io::Error::other(
+            "the gateway home is not a plain directory; refusing to wipe through it",
+        )),
+        Ok(_) => wipe_dir_contents(dir),
+    }
+}
+
+/// `systemctl <stop|restart> duduclaw-llama-server.service`: both elements
+/// literals, the verb picked by the closed [`LocalModelAction`].
+fn local_model_argv(action: LocalModelAction) -> [&'static str; 2] {
+    [action.systemctl_verb(), LOCAL_MODEL_UNIT]
+}
+
+async fn dispatch_local_model_service(action: LocalModelAction) -> DispatchResult {
+    let mut cmd = Command::new("systemctl");
+    cmd.args(local_model_argv(action));
+    run(cmd).await
+}
+
+/// Wipe the CONTENTS of every existing directory in
+/// [`NETWORK_CREDENTIALS_DIRS`] — see that constant's doc comment for what
+/// lives there and why the directory entries themselves survive. Unlike the
+/// kiosk-home wipe in [`dispatch_factory_reset`], a failure here is returned
+/// as a hard `Err` rather than folded into a `[warn]` note: this verb only
+/// ever runs when an operator explicitly opted in to "一併清除網路設定", and
+/// the gateway-side caller (`SysdDeviceOps::factory_reset`) treats that
+/// opt-in as fail-closed — silently downgrading a real failure to a warning
+/// would let the operator walk away believing saved Wi-Fi credentials are
+/// gone when they are not. For the same reason, finding none of the
+/// directories is an error, not "nothing to clear".
 async fn dispatch_clear_network_credentials() -> DispatchResult {
-    match wipe_dir_contents(Path::new(NETWORK_CREDENTIALS_DIR)) {
-        Ok(()) => Ok(SysdOpOutput {
+    let dirs: Vec<&Path> = NETWORK_CREDENTIALS_DIRS.iter().map(Path::new).collect();
+    match clear_credential_dirs(&dirs) {
+        Ok(cleared) => Ok(SysdOpOutput {
             success: true,
-            stdout: format!("cleared {NETWORK_CREDENTIALS_DIR}"),
+            stdout: format!("cleared {}", cleared.join(", ")),
             stderr: String::new(),
         }),
-        Err(e) => Err(SysdError::io(format!(
-            "clearing {NETWORK_CREDENTIALS_DIR} failed: {e}"
-        ))),
+        Err(e) => Err(SysdError::io(e)),
     }
+}
+
+/// Wipe the contents of each directory in `dirs` that exists and return the
+/// ones cleared. Errors when one cannot be wiped or none exists.
+fn clear_credential_dirs(dirs: &[&Path]) -> Result<Vec<String>, String> {
+    let mut cleared = Vec::new();
+    for dir in dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        wipe_dir_contents(dir).map_err(|e| format!("clearing {} failed: {e}", dir.display()))?;
+        cleared.push(dir.display().to_string());
+    }
+    if cleared.is_empty() {
+        let listed: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        return Err(format!(
+            "no network credential directory found (looked for {})",
+            listed.join(", ")
+        ));
+    }
+    Ok(cleared)
 }
 
 /// `hostnamectl set-hostname <name>`. Rejects an empty or over-length
@@ -210,18 +414,41 @@ async fn dispatch_clear_network_credentials() -> DispatchResult {
 /// `Command::arg()` is already injection-safe regardless of content, this
 /// check exists purely to refuse an obviously-wrong request early.
 async fn dispatch_hostname(name: &str) -> DispatchResult {
+    let host = validate_hostname_syntax(name)?;
+    let mut cmd = Command::new("hostnamectl");
+    cmd.args(["set-hostname", "--", host]);
+    run(cmd).await
+}
+
+/// RFC 1123 host name: at most [`MAX_HOSTNAME_LEN`] bytes, dot-separated
+/// labels of 1..=63 ASCII letters, digits and `-`, no label starting or
+/// ending with `-`. The caller may be an agent (see `protocol.rs`), so this
+/// is a whitelist: until 2026-10 only the length was checked and a value
+/// such as `-Hroot@host` reached `hostnamectl` as an option (its `-H`
+/// connects over ssh). The value is also placed after `--`.
+pub(crate) fn validate_hostname_syntax(name: &str) -> Result<&str, SysdError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(SysdError::bad_request("hostname value must not be empty"));
     }
-    if trimmed.chars().count() > MAX_HOSTNAME_LEN {
+    if trimmed.len() > MAX_HOSTNAME_LEN {
         return Err(SysdError::bad_request(format!(
-            "hostname value exceeds {MAX_HOSTNAME_LEN} chars"
+            "hostname value exceeds {MAX_HOSTNAME_LEN} bytes"
         )));
     }
-    let mut cmd = Command::new("hostnamectl");
-    cmd.args(["set-hostname", trimmed]);
-    run(cmd).await
+    let label_ok = |label: &str| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    };
+    if !trimmed.split('.').all(label_ok) {
+        return Err(SysdError::bad_request(
+            "hostname must be letters, digits and '-' in dot-separated labels (no leading or trailing '-')",
+        ));
+    }
+    Ok(trimmed)
 }
 
 /// Pure syntax check for a `SetTimezone { timezone }` value — no
@@ -270,6 +497,16 @@ pub(crate) fn validate_timezone_syntax(tz: &str) -> Result<&str, SysdError> {
             "timezone value has too many path segments",
         ));
     }
+    // Every IANA zone segment starts with a letter or digit; requiring it
+    // keeps a value from ever reading as an option (`-H…`) or a hidden name.
+    if !trimmed
+        .split('/')
+        .all(|seg| seg.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric()))
+    {
+        return Err(SysdError::bad_request(
+            "each timezone segment must start with a letter or digit",
+        ));
+    }
     Ok(trimmed)
 }
 
@@ -311,7 +548,7 @@ async fn dispatch_set_timezone(timezone: &str) -> DispatchResult {
         ));
     }
     let mut cmd = Command::new("timedatectl");
-    cmd.args(["set-timezone", tz]);
+    cmd.args(["set-timezone", "--", tz]);
     run(cmd).await
 }
 
@@ -366,23 +603,29 @@ pub(crate) fn validate_interface_syntax(iface: &str) -> Result<&str, SysdError> 
             "interface name may only contain letters, digits, '_' and '-'",
         ));
     }
+    // Never an option to `networkctl reconfigure` (also placed after `--`).
+    if !trimmed.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric()) {
+        return Err(SysdError::bad_request(
+            "interface name must start with a letter or digit",
+        ));
+    }
     Ok(trimmed)
 }
 
-/// Whitelist check: `<root>/<iface>` must canonicalize to a path still
-/// contained under the canonicalized root — the same containment
-/// discipline [`timezone_exists`] uses, applied to `/sys/class/net`'s
-/// per-interface symlinks. `root` is a parameter so tests can point this
-/// at a temp dir instead of the real sysfs tree.
+/// Whitelist check: `<root>/<iface>` must be an entry directly in `root`.
+/// `iface` already passed [`validate_interface_syntax`] (no `/`, no `.`), so
+/// the join cannot leave `root`. The entry itself is not followed: in real
+/// sysfs every `/sys/class/net/<iface>` is a symlink into `/sys/devices/…`,
+/// so the former "canonicalized target stays under the root" check could
+/// never pass on a real host and refused every interface. `root` is a
+/// parameter so tests can point this at a temp dir instead of the real
+/// sysfs tree.
 fn interface_exists(root: &Path, iface: &str) -> bool {
-    let root_canon = match root.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    match root.join(iface).canonicalize() {
-        Ok(p) => p.starts_with(&root_canon),
-        Err(_) => false,
+    if validate_interface_syntax(iface).is_err() {
+        return false;
     }
+    let candidate = root.join(iface);
+    candidate.parent() == Some(root) && std::fs::symlink_metadata(&candidate).is_ok()
 }
 
 /// Parse `"<ipv4>/<prefix>"` (the `NetworkWiredConfig.address` shape). An
@@ -581,7 +824,7 @@ async fn dispatch_network_wired_config(
     // already succeeded by this point, and losing that success behind a
     // generic error would be misleading.
     let mut reconfigure_cmd = Command::new("networkctl");
-    reconfigure_cmd.args(["reconfigure", iface]);
+    reconfigure_cmd.args(["reconfigure", "--", iface]);
     let (reconfigure_success, reconfigure_stdout, reconfigure_stderr) =
         match reconfigure_cmd.output().await {
             Ok(out) => (
@@ -933,7 +1176,7 @@ async fn dispatch_update_rollback() -> DispatchResult {
     // happily "roll back" — marking a bad entry bad again and spending a
     // reboot to end up exactly where it started. Refusing is the honest
     // answer, and it is the T7 case.
-    let (_dir, entries) = read_esp_entries().await?;
+    let (dir, entries) = read_esp_entries().await?;
     match running_entry_name() {
         Some(running) => {
             check_rollback_target(&entries, &running).map_err(SysdError::unsupported)?
@@ -948,6 +1191,36 @@ async fn dispatch_update_rollback() -> DispatchResult {
             ));
         }
         None => {}
+    }
+
+    // Rollback floor (`--min-rollback-version`): every entry this could end
+    // up booting must carry a known version at or above the floor, read from
+    // the UKI itself (`rollback_floor`). Checked before any tier marks or
+    // renames anything, so a refusal leaves the ESP untouched.
+    let floor = crate::rollback_floor::floor();
+    if *floor != crate::rollback_floor::RollbackFloor::Off {
+        let running = running_entry_name();
+        let versions: Vec<(&str, Result<crate::rollback_floor::OsVersion, String>)> =
+            crate::rollback_floor::rollback_candidates(&entries, running.as_deref())
+                .into_iter()
+                .map(|name| (name.as_str(), crate::rollback_floor::entry_version(&dir, name)))
+                .collect();
+        crate::rollback_floor::check_floor(floor, &versions).map_err(SysdError::unsupported)?;
+        // Type #1 entries cannot be verified as strictly: refuse while any exist.
+        let type1 = crate::rollback_floor::esp_root_of(&dir)
+            .ok_or_else(|| "the ESP root could not be determined".to_string())
+            .and_then(crate::rollback_floor::type1_entries_present);
+        match type1 {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(SysdError::unsupported(
+                    "refusing to roll back: the ESP holds Type #1 boot entries (loader/entries/*.conf) whose \
+                     version cannot be verified"
+                        .to_string(),
+                ));
+            }
+            Err(why) => return Err(SysdError::unsupported(format!("refusing to roll back: {why}"))),
+        }
     }
 
     let note = match state {
@@ -1212,6 +1485,328 @@ async fn dispatch_clear_exhausted_update_target(version: &str) -> DispatchResult
     })
 }
 
+// ── Maintenance-mode SSH ────────────────────────────────────
+
+/// The OS firewall's nftables table and the named set its input chain
+/// accepts TCP ports from (`tcp dport @maintenance_tcp_ports accept`,
+/// DuDuClaw-OS `meta-duduclaw/recipes-duduclaw/duduclaw-firewall/files/
+/// nftables.conf`, added 2026-10). The set starts empty, so nothing extra
+/// is reachable until maintenance mode adds a port.
+const FIREWALL_FAMILY: &str = "inet";
+const FIREWALL_TABLE: &str = "filter";
+const MAINTENANCE_PORT_SET: &str = "maintenance_tcp_ports";
+/// The firewall's config file. When it exists the image is meant to filter,
+/// so a missing table means the firewall failed to load, not that there is
+/// no firewall.
+const FIREWALL_CONFIG: &str = "/etc/nftables.conf";
+
+/// What systemd says about a unit. Anything other than a clear answer is
+/// `Unknown`, which callers must not read as "not installed".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnitLoad {
+    Loaded,
+    NotFound,
+    Unknown(String),
+}
+
+fn parse_load_state(success: bool, stdout: &str, stderr: &str) -> UnitLoad {
+    if !success {
+        return UnitLoad::Unknown(format!("systemctl show failed: {}", stderr.trim()));
+    }
+    match stdout.trim() {
+        // A masked unit can still be running; stopping it must be attempted.
+        "loaded" | "masked" => UnitLoad::Loaded,
+        "not-found" => UnitLoad::NotFound,
+        other => UnitLoad::Unknown(format!("unexpected LoadState {other:?}")),
+    }
+}
+
+async fn unit_load_state(unit: &str) -> UnitLoad {
+    let mut cmd = Command::new("systemctl");
+    cmd.args(["show", "--property=LoadState", "--value", unit]);
+    match cmd.output().await {
+        Ok(out) => parse_load_state(
+            out.status.success(),
+            &String::from_utf8_lossy(&out.stdout),
+            &String::from_utf8_lossy(&out.stderr),
+        ),
+        Err(e) => UnitLoad::Unknown(format!("failed to spawn systemctl: {e}")),
+    }
+}
+
+/// Firewall presence. `Unknown` blocks opening and is reported on close.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Firewall {
+    Absent,
+    Present,
+    Unknown(String),
+}
+
+/// `table_found`: `Some(true)` table listed, `Some(false)` nft said it does
+/// not exist, `None` nft is not installed. `other_error` carries any other
+/// failure.
+fn classify_firewall(table_found: Option<bool>, other_error: Option<String>, config_exists: bool) -> Firewall {
+    if let Some(e) = other_error {
+        return Firewall::Unknown(e);
+    }
+    match (table_found, config_exists) {
+        (Some(true), _) => Firewall::Present,
+        (Some(false), false) | (None, false) => Firewall::Absent,
+        (Some(false), true) => Firewall::Unknown(format!(
+            "{FIREWALL_CONFIG} exists but table {FIREWALL_FAMILY} {FIREWALL_TABLE} is not loaded (did nftables.service fail?)"
+        )),
+        (None, true) => Firewall::Unknown(format!("{FIREWALL_CONFIG} exists but nft is not installed")),
+    }
+}
+
+/// nft reports a missing table, set or element with an ENOENT error line.
+fn nft_says_missing(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .any(|line| line.trim_start().starts_with("Error: No such file or directory"))
+}
+
+/// The cgroup v2 root marker. A session cgroup directory that does not exist
+/// means "no sessions" only on a v2 host; anywhere else the path says nothing.
+const CGROUP_V2_MARKER: &str = "/sys/fs/cgroup/cgroup.controllers";
+
+async fn firewall_state() -> Firewall {
+    let config_exists = Path::new(FIREWALL_CONFIG).exists();
+    let mut cmd = Command::new("nft");
+    cmd.args(["list", "table", FIREWALL_FAMILY, FIREWALL_TABLE]);
+    match cmd.output().await {
+        Ok(out) if out.status.success() => classify_firewall(Some(true), None, config_exists),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if nft_says_missing(&stderr) {
+                classify_firewall(Some(false), None, config_exists)
+            } else {
+                classify_firewall(None, Some(format!("nft list table failed: {}", stderr.trim())), config_exists)
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => classify_firewall(None, None, config_exists),
+        Err(e) => classify_firewall(None, Some(format!("failed to spawn nft: {e}")), config_exists),
+    }
+}
+
+fn ssh_port_element() -> String {
+    format!("{{ {SSH_PORT} }}")
+}
+
+async fn firewall_set_element(verb: &str) -> Result<(), String> {
+    let mut cmd = Command::new("nft");
+    cmd.args([verb, "element", FIREWALL_FAMILY, FIREWALL_TABLE, MAINTENANCE_PORT_SET])
+        .arg(ssh_port_element());
+    match cmd.output().await {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+        Err(e) => Err(format!("failed to spawn nft: {e}")),
+    }
+}
+
+/// `Some(true)` when the maintenance set holds [`SSH_PORT`], `Some(false)`
+/// when it does not or the set does not exist, `None` when the answer could
+/// not be read.
+async fn firewall_port_open() -> Option<bool> {
+    let mut cmd = Command::new("nft");
+    cmd.args(["-j", "list", "set", FIREWALL_FAMILY, FIREWALL_TABLE, MAINTENANCE_PORT_SET]);
+    let out = cmd.output().await.ok()?;
+    if !out.status.success() {
+        return nft_says_missing(&String::from_utf8_lossy(&out.stderr)).then_some(false);
+    }
+    set_json_has_port(&String::from_utf8_lossy(&out.stdout), SSH_PORT)
+}
+
+/// Read `nft -j list set` output. `None` when it is not the expected shape.
+fn set_json_has_port(raw: &str, port: u16) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let set = value
+        .get("nftables")?
+        .as_array()?
+        .iter()
+        .find_map(|entry| entry.get("set"))?;
+    let Some(elems) = set.get("elem") else { return Some(false) };
+    Some(elems.as_array()?.iter().any(|e| e.as_u64() == Some(u64::from(port))))
+}
+
+/// Number of processes anywhere under a cgroup v2 directory; a directory
+/// that does not exist holds none.
+fn cgroup_process_count(dir: &Path) -> std::io::Result<usize> {
+    let mut count = match std::fs::read_to_string(dir.join("cgroup.procs")) {
+        Ok(procs) => procs.lines().filter(|l| !l.trim().is_empty()).count(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            count += cgroup_process_count(&entry.path())?;
+        }
+    }
+    Ok(count)
+}
+
+/// Kill every session process under `cgroup` and wait until none is left.
+/// `cgroup.kill` (Linux 5.14+) kills the whole subtree atomically.
+async fn end_ssh_sessions(cgroup: &Path) -> Result<(), String> {
+    if !cgroup.is_dir() {
+        if Path::new(CGROUP_V2_MARKER).exists() {
+            return Ok(());
+        }
+        return Err(format!(
+            "{} is missing and this host is not on cgroup v2, so open SSH sessions cannot be checked",
+            cgroup.display()
+        ));
+    }
+    if let Err(e) = std::fs::write(cgroup.join("cgroup.kill"), "1") {
+        return Err(format!("writing {}/cgroup.kill failed: {e}", cgroup.display()));
+    }
+    for _ in 0..20 {
+        match cgroup_process_count(cgroup) {
+            Ok(0) => return Ok(()),
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            Err(e) => return Err(format!("reading {} failed: {e}", cgroup.display())),
+        }
+    }
+    match cgroup_process_count(cgroup) {
+        Ok(0) => Ok(()),
+        Ok(n) => Err(format!("{n} SSH session process(es) still running under {}", cgroup.display())),
+        Err(e) => Err(format!("reading {} failed: {e}", cgroup.display())),
+    }
+}
+
+/// Open the firewall port first, then start the unit, so a firewall that
+/// cannot be opened never leaves a listening server the operator cannot
+/// reach. A failed unit start takes the port back out.
+async fn dispatch_ssh_start() -> DispatchResult {
+    let mut chosen = None;
+    for candidate in SSH_UNITS {
+        match unit_load_state(candidate.unit).await {
+            UnitLoad::Loaded => {
+                chosen = Some(candidate);
+                break;
+            }
+            UnitLoad::NotFound => continue,
+            UnitLoad::Unknown(e) => {
+                return Err(SysdError::io(format!("could not check {}: {e}", candidate.unit)));
+            }
+        }
+    }
+    let unit = chosen.ok_or_else(|| SysdError::unsupported("this image has no SSH server unit"))?;
+
+    let firewall = match firewall_state().await {
+        Firewall::Present => true,
+        Firewall::Absent => false,
+        Firewall::Unknown(e) => return Err(SysdError::io(format!("firewall state unknown, not opening SSH: {e}"))),
+    };
+    if firewall {
+        if let Err(e) = firewall_set_element("add").await {
+            return Err(SysdError::io(format!(
+                "could not open tcp/{SSH_PORT} in the firewall; it has no {MAINTENANCE_PORT_SET} set \
+                 (DuDuClaw OS images built before 2026-10 and the Debian appliance line lack it): {e}"
+            )));
+        }
+    }
+
+    let mut cmd = Command::new("systemctl");
+    cmd.args(["start", unit.unit]);
+    let started = run(cmd).await;
+    let failed = !matches!(&started, Ok(out) if out.success);
+    if failed {
+        let rollback = if firewall {
+            match firewall_set_element("delete").await {
+                Ok(()) => String::new(),
+                Err(e) => format!("; closing tcp/{SSH_PORT} again failed: {e}"),
+            }
+        } else {
+            String::new()
+        };
+        return match started {
+            Ok(out) => Ok(SysdOpOutput { stderr: format!("{}{rollback}", out.stderr.trim()), ..out }),
+            Err(e) => Err(SysdError::io(format!("{}{rollback}", e.message))),
+        };
+    }
+    let started = started?;
+    let firewall_note = if firewall {
+        format!("opened tcp/{SSH_PORT} in the firewall")
+    } else {
+        "no firewall on this image".to_string()
+    };
+    Ok(SysdOpOutput { stdout: format!("started {}; {firewall_note}", unit.unit), ..started })
+}
+
+/// Stop every loaded SSH unit, end its sessions, close the firewall port,
+/// then check what is actually left. Each step runs even if an earlier one
+/// failed; anything unclear counts as a problem, never as "closed".
+async fn dispatch_ssh_stop() -> DispatchResult {
+    let mut problems: Vec<String> = Vec::new();
+    let mut done: Vec<String> = Vec::new();
+
+    for unit in SSH_UNITS {
+        match unit_load_state(unit.unit).await {
+            UnitLoad::NotFound => continue,
+            UnitLoad::Unknown(e) => {
+                problems.push(format!("could not check {}: {e}", unit.unit));
+                continue;
+            }
+            UnitLoad::Loaded => {}
+        }
+        let mut cmd = Command::new("systemctl");
+        cmd.args(["stop", unit.unit]);
+        match cmd.output().await {
+            Ok(out) if out.status.success() => done.push(format!("stopped {}", unit.unit)),
+            Ok(out) => problems.push(format!(
+                "systemctl stop {} failed: {}",
+                unit.unit,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+            Err(e) => problems.push(format!("failed to spawn systemctl: {e}")),
+        }
+        if let Some(cgroup) = unit.session_cgroup {
+            match end_ssh_sessions(Path::new(cgroup)).await {
+                Ok(()) => {}
+                Err(e) => problems.push(e),
+            }
+        }
+        if let Some(pattern) = unit.sessions {
+            // Clears the now-empty session units; whether sessions really
+            // ended was judged from the cgroup above.
+            let mut cmd = Command::new("systemctl");
+            cmd.args(["stop", pattern]);
+            let _ = cmd.output().await;
+        }
+        let mut cmd = Command::new("systemctl");
+        cmd.args(["is-active", unit.unit]);
+        match cmd.output().await {
+            Ok(out) => match String::from_utf8_lossy(&out.stdout).trim() {
+                "inactive" | "failed" => {}
+                state => problems.push(format!("{} is still {state:?} after stop", unit.unit)),
+            },
+            Err(e) => problems.push(format!("failed to spawn systemctl: {e}")),
+        }
+    }
+
+    match firewall_state().await {
+        Firewall::Absent => {}
+        Firewall::Unknown(e) => problems.push(format!("firewall state unknown: {e}")),
+        Firewall::Present => {
+            // Removing a port that is not there fails; the read below decides.
+            let _ = firewall_set_element("delete").await;
+            match firewall_port_open().await {
+                Some(false) => done.push(format!("tcp/{SSH_PORT} not open in the firewall")),
+                Some(true) => problems.push(format!("tcp/{SSH_PORT} is still open in the firewall")),
+                None => problems.push("could not read the firewall's maintenance port set".to_string()),
+            }
+        }
+    }
+
+    Ok(SysdOpOutput {
+        success: problems.is_empty(),
+        stdout: if done.is_empty() { "nothing was open".to_string() } else { done.join("; ") },
+        stderr: problems.join("; "),
+    })
+}
+
 /// Dispatch one already-authorized, already-parsed request to its
 /// hardcoded command sequence.
 pub async fn dispatch(req: &SysdRequest) -> DispatchResult {
@@ -1232,13 +1827,23 @@ pub async fn dispatch(req: &SysdRequest) -> DispatchResult {
             run(cmd).await
         }
         SysdRequest::SysupdateApply => {
+            let _guard = begin_update_op(&UPDATE_LOCK)?;
+            plain_sysupdate_allowed(crate::rollback_floor::floor())?;
             let mut cmd = Command::new(SYSTEMD_SYSUPDATE_BIN);
             cmd.arg("update");
             run(cmd).await
         }
+        SysdRequest::SysupdateStageApply => {
+            let _guard = begin_update_op(&UPDATE_LOCK)?;
+            dispatch_sysupdate_stage_apply().await
+        }
         SysdRequest::BootAssessmentStatus => bless_boot("status").await,
-        SysdRequest::UpdateRollback => dispatch_update_rollback().await,
-        SysdRequest::FactoryReset => dispatch_factory_reset().await,
+        SysdRequest::UpdateRollback => {
+            let _guard = begin_update_op(&UPDATE_LOCK)?;
+            dispatch_update_rollback().await
+        }
+        SysdRequest::FactoryReset => dispatch_factory_reset_v2(false).await,
+        SysdRequest::FactoryResetV2 { clear_network } => dispatch_factory_reset_v2(*clear_network).await,
         SysdRequest::ClearNetworkCredentials => dispatch_clear_network_credentials().await,
         SysdRequest::Hostname { set } => dispatch_hostname(set).await,
         SysdRequest::SetTimezone { timezone } => dispatch_set_timezone(timezone).await,
@@ -1260,18 +1865,14 @@ pub async fn dispatch(req: &SysdRequest) -> DispatchResult {
             .await
         }
         SysdRequest::ClearExhaustedUpdateTarget { version } => {
+            // A malformed value is refused before the lock is even tried.
+            validate_update_version_syntax(version)?;
+            let _guard = begin_update_op(&UPDATE_LOCK)?;
             dispatch_clear_exhausted_update_target(version).await
         }
-        SysdRequest::SshServiceStart => {
-            let mut cmd = Command::new("systemctl");
-            cmd.args(["start", "ssh.service"]);
-            run(cmd).await
-        }
-        SysdRequest::SshServiceStop => {
-            let mut cmd = Command::new("systemctl");
-            cmd.args(["stop", "ssh.service"]);
-            run(cmd).await
-        }
+        SysdRequest::SshServiceStart => dispatch_ssh_start().await,
+        SysdRequest::SshServiceStop => dispatch_ssh_stop().await,
+        SysdRequest::LocalModelService { action } => dispatch_local_model_service(*action).await,
     }
 }
 
@@ -1279,6 +1880,92 @@ pub async fn dispatch(req: &SysdRequest) -> DispatchResult {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn clear_credential_dirs_wipes_every_existing_line_and_refuses_when_none_exist() {
+        let root = tempfile::tempdir().unwrap();
+        let yocto = root.path().join("system/iwd");
+        let debian = root.path().join("network/iwd");
+        std::fs::create_dir_all(&yocto).unwrap();
+        std::fs::write(yocto.join("home.psk"), "secret").unwrap();
+
+        let cleared = clear_credential_dirs(&[&yocto, &debian]).unwrap();
+        assert_eq!(cleared, vec![yocto.display().to_string()]);
+        assert!(yocto.is_dir(), "the directory itself survives");
+        assert_eq!(std::fs::read_dir(&yocto).unwrap().count(), 0);
+
+        let missing = root.path().join("nowhere");
+        let err = clear_credential_dirs(&[&missing, &debian]).unwrap_err();
+        assert!(err.contains("no network credential directory found"), "{err}");
+    }
+
+    #[test]
+    fn maintenance_set_json_is_read_by_element_not_by_substring() {
+        let open = r#"{"nftables":[{"metainfo":{"version":"1.1.6"}},{"set":{"family":"inet","name":"maintenance_tcp_ports","table":"filter","type":"inet_service","handle":4,"elem":[22]}}]}"#;
+        assert_eq!(set_json_has_port(open, 22), Some(true));
+        // An empty set has no "elem" key at all.
+        let empty = r#"{"nftables":[{"metainfo":{"version":"1.1.6"}},{"set":{"family":"inet","name":"maintenance_tcp_ports","table":"filter","type":"inet_service","handle":4}}]}"#;
+        assert_eq!(set_json_has_port(empty, 22), Some(false));
+        // 2222 must not count as 22.
+        let other = r#"{"nftables":[{"set":{"name":"maintenance_tcp_ports","elem":[2222,80]}}]}"#;
+        assert_eq!(set_json_has_port(other, 22), Some(false));
+        assert_eq!(set_json_has_port("not json", 22), None);
+        assert_eq!(set_json_has_port(r#"{"nftables":[{"metainfo":{}}]}"#, 22), None);
+    }
+
+    #[test]
+    fn ssh_units_prefer_dropbear_and_only_it_has_sessions() {
+        assert_eq!(SSH_UNITS[0].unit, "dropbear.socket");
+        assert_eq!(SSH_UNITS[0].sessions, Some("dropbear@*.service"));
+        assert_eq!(
+            SSH_UNITS[0].session_cgroup,
+            Some("/sys/fs/cgroup/system.slice/system-dropbear.slice")
+        );
+        assert_eq!(SSH_UNITS[1].unit, "ssh.service");
+        assert_eq!(SSH_UNITS[1].sessions, None);
+        assert_eq!(ssh_port_element(), "{ 22 }");
+    }
+
+    #[test]
+    fn only_a_clear_not_found_means_the_unit_is_absent() {
+        assert_eq!(parse_load_state(true, "loaded\n", ""), UnitLoad::Loaded);
+        assert_eq!(parse_load_state(true, "masked\n", ""), UnitLoad::Loaded);
+        assert_eq!(parse_load_state(true, "not-found\n", ""), UnitLoad::NotFound);
+        // A D-Bus timeout or empty output is not "no SSH server".
+        assert!(matches!(parse_load_state(false, "", "Failed to connect to bus"), UnitLoad::Unknown(_)));
+        assert!(matches!(parse_load_state(true, "", ""), UnitLoad::Unknown(_)));
+        assert!(matches!(parse_load_state(true, "error\n", ""), UnitLoad::Unknown(_)));
+    }
+
+    #[test]
+    fn a_configured_firewall_that_did_not_load_is_unknown_not_absent() {
+        assert_eq!(classify_firewall(Some(true), None, true), Firewall::Present);
+        assert_eq!(classify_firewall(Some(false), None, false), Firewall::Absent);
+        assert_eq!(classify_firewall(None, None, false), Firewall::Absent);
+        assert!(matches!(classify_firewall(Some(false), None, true), Firewall::Unknown(_)));
+        assert!(matches!(classify_firewall(None, None, true), Firewall::Unknown(_)));
+        assert!(matches!(
+            classify_firewall(None, Some("permission denied".into()), false),
+            Firewall::Unknown(_)
+        ));
+        assert!(nft_says_missing("Error: No such file or directory\nlist table inet filter"));
+        assert!(!nft_says_missing("Error: Operation not permitted"));
+        assert!(!nft_says_missing("Error: Could not process rule: No such file or directory"));
+    }
+
+    #[test]
+    fn cgroup_process_count_walks_the_whole_subtree() {
+        let root = tempfile::tempdir().unwrap();
+        let slice = root.path().join("system-dropbear.slice");
+        assert_eq!(cgroup_process_count(&slice).unwrap(), 0, "missing cgroup holds nothing");
+        let session = slice.join("dropbear@0-10.0.0.2:22-10.0.0.9:50000.service");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(slice.join("cgroup.procs"), "").unwrap();
+        std::fs::write(session.join("cgroup.procs"), "4242\n4243\n").unwrap();
+        assert_eq!(cgroup_process_count(&slice).unwrap(), 2);
+        std::fs::write(session.join("cgroup.procs"), "").unwrap();
+        assert_eq!(cgroup_process_count(&slice).unwrap(), 0);
+    }
 
     #[test]
     fn bless_status_is_classified_by_whole_word() {
@@ -1477,6 +2164,149 @@ mod tests {
         let long = "a".repeat(MAX_HOSTNAME_LEN + 1);
         let result = dispatch_hostname(&long).await;
         assert!(matches!(result, Err(e) if e.kind == "bad_request"));
+    }
+
+    /// P12: the caller may be an agent. Option-shaped, multi-byte, spaced or
+    /// otherwise non-RFC-1123 values never reach `hostnamectl`.
+    #[tokio::test]
+    async fn hostname_is_a_whitelisted_rfc1123_name() {
+        for ok in ["duty-box-01", "a", "box.lan", "  duty-box  ", "x1.y-2.z3"] {
+            assert!(validate_hostname_syntax(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "-Hroot@evil",
+            "--host=root@evil",
+            "-M",
+            "box -H evil",
+            "box;reboot",
+            "box\nx",
+            "盒子",
+            "a..b",
+            ".lan",
+            "box.",
+            "-box",
+            "box-",
+            "a_b",
+            &"a".repeat(64),
+        ] {
+            let result = dispatch_hostname(bad).await;
+            assert!(matches!(result, Err(e) if e.kind == "bad_request"), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn value_carrying_argv_puts_the_value_after_a_double_dash() {
+        // Needles assembled at runtime so this test's own text cannot match.
+        let source = include_str!("dispatch.rs");
+        let q = '"';
+        for (verb, value) in [("set-hostname", "host"), ("set-timezone", "tz"), ("reconfigure", "iface")] {
+            let needle = format!("args([{q}{verb}{q}, {q}--{q}, {value}])");
+            assert!(source.contains(&needle), "{needle}");
+        }
+    }
+
+    /// H1: update operations are serialised; a second one while the first
+    /// holds the lock is refused immediately (busy), and the first is not
+    /// disturbed.
+    #[test]
+    fn update_operations_are_refused_while_one_runs() {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let first = begin_update_op(&LOCK).unwrap();
+        match begin_update_op(&LOCK) {
+            Err(e) => assert_eq!(e.kind, "busy"),
+            Ok(_) => panic!("a second update operation must be refused"),
+        }
+        drop(first);
+        assert!(begin_update_op(&LOCK).is_ok());
+    }
+
+    /// The real verbs take the shared lock: while one update operation runs,
+    /// a second stage/apply/rollback/clear is refused as busy before doing
+    /// anything (no other test in this crate dispatches these verbs).
+    #[tokio::test]
+    async fn concurrent_update_verbs_are_refused_as_busy() {
+        let held = begin_update_op(&UPDATE_LOCK).unwrap();
+        for req in [
+            SysdRequest::SysupdateStageApply,
+            SysdRequest::SysupdateApply,
+            SysdRequest::UpdateRollback,
+            SysdRequest::ClearExhaustedUpdateTarget { version: "0.5.0".into() },
+        ] {
+            match dispatch(&req).await {
+                Err(e) => assert_eq!(e.kind, "busy", "{req:?}"),
+                Ok(out) => panic!("{req:?} ran while another update operation held the lock: {out:?}"),
+            }
+        }
+        drop(held);
+    }
+
+    /// L3: plain sysupdate is refused once a rollback floor is set.
+    #[test]
+    fn plain_sysupdate_is_refused_on_images_with_a_floor() {
+        use crate::rollback_floor::{OsVersion, RollbackFloor};
+        assert!(plain_sysupdate_allowed(&RollbackFloor::Off).is_ok());
+        assert!(plain_sysupdate_allowed(&RollbackFloor::Min(OsVersion::parse("0.4.0").unwrap())).is_err());
+        assert!(plain_sysupdate_allowed(&RollbackFloor::Invalid("x".into())).is_err());
+    }
+
+    #[test]
+    fn factory_reset_path_follows_the_oneshot_unit_file() {
+        assert_eq!(reset_path(true), ResetPath::Deferred);
+        assert_eq!(reset_path(false), ResetPath::Immediate);
+        assert_eq!(marker_content(true), "clear_network=1\n");
+        assert_eq!(marker_content(false), "clear_network=0\n");
+    }
+
+    #[test]
+    fn reset_marker_is_written_atomically_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("factory-reset.pending");
+        write_reset_marker(&marker, true).unwrap();
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "clear_network=1\n");
+        assert_eq!(std::fs::metadata(&marker).unwrap().permissions().mode() & 0o777, 0o600);
+        // Rewritten, not appended; no temp file left behind.
+        write_reset_marker(&marker, false).unwrap();
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "clear_network=0\n");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        // A stale temp file planted as a symlink is removed, never followed.
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.path().join(".factory-reset.pending.tmp")).unwrap();
+        write_reset_marker(&marker, true).unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "clear_network=1\n");
+    }
+
+    #[test]
+    fn local_model_argv_is_two_literals() {
+        assert_eq!(local_model_argv(LocalModelAction::Stop), ["stop", "duduclaw-llama-server.service"]);
+        assert_eq!(local_model_argv(LocalModelAction::Restart), ["restart", "duduclaw-llama-server.service"]);
+    }
+
+    #[test]
+    fn gateway_home_wipe_empties_the_directory_and_never_follows_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join("agents/a")).unwrap();
+        std::fs::write(home.join("config.toml"), "x").unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("keep"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("link")).unwrap();
+        wipe_gateway_home(&home).unwrap();
+        assert!(home.is_dir(), "the directory itself survives");
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+        assert!(outside.join("keep").exists(), "a symlinked target is not wiped");
+
+        // A home that is itself a symlink is refused, not followed.
+        let redirected = dir.path().join("redirected");
+        std::os::unix::fs::symlink(&outside, &redirected).unwrap();
+        assert!(wipe_gateway_home(&redirected).is_err());
+        assert!(outside.join("keep").exists());
+        // Missing: nothing to wipe.
+        assert!(wipe_gateway_home(&dir.path().join("missing")).is_ok());
+        assert_eq!(GATEWAY_HOME_DIR, "/data/duduclaw");
     }
 
     /// The two systemd helpers this daemon shells out to live in a directory
@@ -1693,6 +2523,25 @@ mod tests {
         std::fs::write(dir.path().join("enp1s0"), b"fake sysfs entry").unwrap();
         assert!(interface_exists(dir.path(), "enp1s0"));
         assert!(!interface_exists(dir.path(), "eth99"));
+        assert!(!interface_exists(dir.path(), "../enp1s0"));
+        // Real sysfs: the entry is a symlink into /sys/devices/….
+        let devices = tempfile::tempdir().unwrap();
+        std::fs::create_dir(devices.path().join("eth0")).unwrap();
+        std::os::unix::fs::symlink(devices.path().join("eth0"), dir.path().join("eth0")).unwrap();
+        assert!(interface_exists(dir.path(), "eth0"));
+    }
+
+    #[test]
+    fn interface_and_timezone_values_never_read_as_options() {
+        for bad in ["-H", "--help", "_x"] {
+            assert!(matches!(validate_interface_syntax(bad), Err(e) if e.kind == "bad_request"), "{bad}");
+        }
+        for bad in ["-Hroot", "Asia/-x", "+0800", "Etc/.hidden", "_x/y"] {
+            assert!(matches!(validate_timezone_syntax(bad), Err(e) if e.kind == "bad_request"), "{bad}");
+        }
+        for ok in ["Etc/GMT+8", "Etc/GMT-8", "America/Port-au-Prince", "Asia/Taipei"] {
+            assert!(validate_timezone_syntax(ok).is_ok(), "{ok}");
+        }
     }
 
     #[test]

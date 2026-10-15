@@ -1,0 +1,19 @@
+# DuDuClaw OS
+
+> 整合 DuDuClaw AI 員工平台與桌面的 x86-64 Linux 作業系統映像。把一台電腦變成 AI 員工的值班機。
+
+官網: https://os.duduclaw.dudustudio.monster/
+下載: https://os.duduclaw.dudustudio.monster/download.html
+文件: https://os.duduclaw.dudustudio.monster/docs/
+原始碼: https://github.com/zhixuli0406/DuDuClaw-OS
+開發原廠: 嘟嘟數位科技（https://www.dudustudio.monster/）
+
+## 這是什麼
+Yocto 映像整合桌面環境、DuDuClaw 平台、唯讀根目錄與 A/B 更新回退。從桌面交辦工作、檢視任務與處理核准。
+
+## 狀態（誠實標註）
+v0.3.0 為 pre-GA、技術試用。整碟映像已在 QEMU 開機驗證；安裝器與部分功能仍有未驗證流程；真實硬體開機與相容性尚未驗證。下載與安裝前請閱讀映像版本、硬體需求與安裝注意事項。
+
+## 相關產品
+- DuDuClaw（可部署在現有電腦的 AI 員工平台）: https://duduclaw.dudustudio.monster/
+- Vettalon（多模型資安稽核器）: https://vettalon.dudustudio.monster/

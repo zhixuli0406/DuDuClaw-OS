@@ -7,6 +7,12 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Changed
+- **官網與文件站換成公司的 C1 視覺**（`website/`、`docs-site/`）：米白底、海軍藍文字、琥珀色條（4px）、細線分隔、Avenir Next／Nunito Sans；深淺兩種主題都照 C1 色票（深色 `#0B1E33`）。logo 改成 C1 貓 mark 加文字「DuDuClaw OS」，inline SVG 的 ink 層在深色底轉米白；頁尾加公司 mono mark 與「Dudu Technology Ltd. · 嘟嘟數位科技有限公司 · 統編 94139082」及公司隱私權政策、服務條款連結。favicon（`favicon.svg`／`favicon.ico`）、apple-touch-icon、manifest 圖示與 `og:image` 換成 Codex 的 C1 檔案；`og:image` 原本是 v0.2.0 的 `home-dark.png` 截圖，改為由 `final-duduclaw-os-social.png` 裁成 1200×630 的 `assets/brand/og.png`。首頁 hero 右側由吉祥物改為 v0.2.0 Launcher 的實拍局部（新增 `launcher-mobile` 三種格式），圖說與桌面圖集上方都標明是 v0.2.0 畫面、v0.3.0 尚未重拍。下載頁 QR code 中央的貓換成 C1 mark，QR 模組路徑逐位元組不變，headless Chrome 截圖後以 jsQR 在 1x／2x、淺色／深色都解出原本的 v0.3.0 ISO 網址。文件站 Starlight 的 logo、hero 圖與 favicon 一起換，程式碼區塊兩種主題都是海軍藍底。影子工作區示意圖的圖說配合新配色，把「藍色箭頭／黃色方形游標」改成「一般箭頭／琥珀色方形游標」。文案其餘不動。`deploy/cloudrun/mime.types` 補 `webmanifest`。`website/README.md`、`docs-site/README.md` 同步。
+
+### Removed
+- **官網的吉祥物與裝飾動畫**：緋紅摺紙貓（hero inline SVG、CTA 背景貓、QR 中央的貓）、3D 貓（`assets/js/cat3d/`、`assets/data/cat-panels.json`、`assets/vendor/ogl.mjs`）、走路貓（`assets/js/catwalk/`、`assets/js/hero-cat.js`）、驗收頁 `website/lab/`、hero 的 WebGL 色塊（`assets/js/hero-shader.js`）、影子工作區的粒子凍結示範（`assets/js/freeze-demo.js`）、捲動進度條、磁吸按鈕與截圖傾斜效果，以及 `assets/brand/` 的舊 logo 與 favicon（`duduclaw-cat.svg`、`duduclaw-mark-circle.svg`、`duduclaw-tile.svg`、`favicon.svg`、`mark-{16,32,64,512}.png`、`cat-512.png`）和文件站的 `src/assets/duduclaw-mark-circle.svg`。C1 規範不留吉祥物動畫，也不用漸層與光暈。`scripts/build-site.sh` 移除刪 `lab/` 的步驟。
+
 ## [0.4.0] - 2026-10-16 — gateway 改用一般帳號×rootless Podman×SSH 預設關閉（內嵌平台 v1.73.4）
 
 gateway 不再以 root 執行（uid 1000 `duduclaw`），容器改用 rootless Podman，`duduclaw-sysd` 只接受 gateway 主行程並拒絕回退到 gateway 以 root 執行的映像，系統更新改由 sysd 以 root 驗證簽章，SSH 預設關閉、基礎版也有防火牆。實測範圍：qemux86-64 的 `duduclaw-image-appliance-test` 在 GCP builder 的 QEMU（TCG，無 KVM）上跑兩輪驗證（`wiki/reports/rootless-verification/2026-10-15.md`），第二輪 36 項中 35 項通過，唯一未過的是平台 doctor 的標題文字（容器功能已正確停用，標題仍寫 PASS）。**尚未驗證**：從 v0.3.0 經 A/B 更新升到 0.4.0 的路徑（資料擁有權遷移、回退清理）、需要 LLM 憑證的任務沙箱／電腦操作／Discovery 完整流程、Windows VM（需要 KVM）、真機的 Wi-Fi 與音訊、genericx86-64 開機。Secure Boot、dm-verity、TPM2 在發布映像上仍未啟用。

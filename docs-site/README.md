@@ -177,19 +177,29 @@ under `src/content/docs/`.
 ## Theme
 
 `src/styles/custom.css` maps the main site's design tokens
-(`website/assets/css/site.css`) onto Starlight's CSS custom properties, so the
-docs read as a section of the same site: the same ground colours (`#f3f3f3` /
-`#0c0c0e`), the same MDS blue accent (`#2171cc` / `#4390ee` in dark), Inter +
-Noto Sans TC for text, JetBrains Mono for code, 10–12px radii and hairline
-borders. Crimson (`#e5484d`) is reserved for the logo mark and is never used as
-a UI colour. Light, dark and system all work — Starlight stamps `data-theme`
-before first paint, the same three-state pattern the main site uses.
+(`website/assets/css/site.css`, the Dudu C1 identity) onto Starlight's CSS
+custom properties, so the docs read as a section of the same site: cream page
+`#F5F4F0` with navy text `#102B48` (dark theme: `#0B1E33` page, cream text),
+amber `#CC8B2D` for bars, icons and focus rings, `#8A5A10` / `#E0A54F` for
+accent-coloured text and links, hairline rules, 10px card radius, Avenir Next /
+Nunito Sans with system CJK fonts. Code blocks are navy with cream text in both
+themes, so Expressive Code runs a single dark theme with navy overrides in
+`astro.config.mjs`. The sidebar marks the current page with the same 4px amber
+bar the main site uses. Light, dark and system all work: Starlight stamps
+`data-theme` before first paint, the same three-state pattern the main site uses.
+
+The header logo is the C1 cat mark (`src/assets/duduclaw-os-mark.svg`, with a
+cream-ink `-reverse` variant for dark), taken verbatim from Codex's C1 output;
+the site title next to it carries the "DuDuClaw OS" text. The landing pages use
+the same pair as the splash hero image. `public/favicon.svg`,
+`public/favicon.ico` and `public/apple-touch-icon.png` are copies of the main
+site's files.
 
 The only chrome customisation beyond CSS is `src/components/SiteLink.astro`,
 which replaces Starlight's social-icon slot with two text links, 「回到官網」
 back to the main site and the DuDuClaw platform site (hidden below 50rem, where
 the header has no room), plus a GitHub icon button for the OS repository that
-uses the same monoline mark and 36px button as the main site's header.
+uses the same monoline mark and 40px button as the main site's header.
 
 Search is Pagefind, Starlight's built-in static index — no third-party search
 service, no runtime dependency.

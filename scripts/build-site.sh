@@ -66,10 +66,6 @@ mkdir -p "$SITE_OUT"
 # 1. the marketing site, verbatim (website/ is never modified)
 cp -R "$REPO_ROOT/website/." "$SITE_OUT/"
 
-# website/lab/ holds acceptance pages for the interactive modules. They are
-# development tooling, not part of the published site.
-rm -rf "$SITE_OUT/lab"
-
 # 2. the docs build under /docs/
 mkdir -p "$SITE_OUT/docs"
 cp -R "$DOCS_DIR/dist/." "$SITE_OUT/docs/"

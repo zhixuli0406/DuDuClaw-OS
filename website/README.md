@@ -1,7 +1,7 @@
 # DuDuClaw OS 官方網站
 
 這是 DuDuClaw OS 的官方網站原始檔：兩頁靜態網站（首頁與下載頁），純 HTML／CSS／vanilla JS，
-沒有框架、沒有建置步驟。除了 Google Fonts（Inter、Noto Sans TC、JetBrains Mono）之外不載入任何外部資源。
+沒有框架、沒有建置步驟。除了 Google Fonts 的 Nunito Sans 之外不載入任何外部資源。
 
 ## 目錄結構
 
@@ -9,35 +9,53 @@
 website/
 ├── index.html              首頁
 ├── download.html           v0.3.0 下載頁（六個資產、驗簽、燒錄）
+├── favicon.svg             C1 貓 mark（深色瀏覽器介面下 ink 層轉米白）
+├── favicon.ico             Codex 的 duduclaw-os app-icon.ico
+├── apple-touch-icon.png    180×180，由 duduclaw-os avatar-1024.png 縮出
+├── site.webmanifest        manifest，圖示指向 assets/brand/icon-192／512.png
 ├── .nojekyll               讓 GitHub Pages 原樣輸出，不跑 Jekyll
 ├── README.md               這份說明
-├── lab/cat3d.html          品牌剪影 3D 貓的驗收頁（左＝SVG、中＝3D、右＝疊圖比對）
-├── lab/cat-walk.html       四足走路貓的驗收頁（六個狀態、凍結姿勢、autoplay）
 └── assets/
-    ├── css/site.css        設計 token 與全站樣式
+    ├── css/site.css        C1 設計 token 與全站樣式
     ├── js/site.js          主題切換、導覽、分頁、複製、捲動進場、下載篩選
-    ├── js/hero-shader.js   首頁 hero 背景的 WebGL2 色塊
-    ├── js/freeze-demo.js   影子工作區示意圖的凍結示範
-    ├── js/hero-cat.js      吉祥物編排：剪影與走路貓共用同一個盒子，游標進 hero 就換人
-    ├── js/cat3d/           品牌剪影 3D 貓模組（見該目錄的 README.md）
-    ├── js/catwalk/         四足走路貓模組（見該目錄的 README.md）
-    ├── data/cat-panels.json 3D 貓的幾何，由 cat3d/tools/build-panels.py 離線產生
-    ├── vendor/ogl.mjs      內嵌的 OGL 1.0.11（Unlicense），生產站不從 CDN 載
-    ├── brand/              吉祥物、logo mark、favicon
-    └── screens/            OS 實際畫面截圖
+    ├── brand/              C1 品牌資產（見下方「品牌與視覺」）
+    └── screens/            OS 實際畫面截圖（v0.2.0）
 ```
 
 所有連結都是相對路徑，所以放在網域根目錄或 GitHub Pages 子路徑都能正常運作。
 
-`lab/` 只是開發用的驗收頁，不上線：`scripts/build-site.sh` 組完 `_site/` 後會把它刪掉。
+## 品牌與視覺（C1，2026-10-16）
+
+依公司的 Dudu C1 網頁設計規範（`Dudu_Brand_C1_Web/WEB-DESIGN-SPEC.md`）：米白底 `#F5F4F0`、
+海軍藍文字 `#102B48`、琥珀 `#CC8B2D` 只用在色條、圖示與 focus ring，琥珀色的文字與連結用
+`#8A5A10`（深色主題 `#E0A54F`）。深色主題底色 `#0B1E33`、卡片 `#102B48`。程式碼區塊兩種主題都是海軍藍底。
+字體是 Avenir Next（Apple 裝置內建）＋ Google Fonts 的 Nunito Sans，中文走系統字（PingFang TC、Noto Sans TC、微軟正黑體）。
+反覆出現的細節是左側 4px 的琥珀色條：hero 文字區、下載頁標題、狀態卡與核心能力卡。
+
+`assets/brand/` 的檔案全部來自 Codex 的 C1 輸出，不要手改幾何：
+
+| 檔案 | 來源 | 用途 |
+|---|---|---|
+| `duduclaw-os-mark.svg` | `svg/duduclaw-os-mark.svg`（與 DuDuClaw mark 相同） | 原檔備查；頁面用的是 inline `<symbol id="mark-os">` |
+| `duduclaw-os-mark-reverse.svg` | 同上，ink 層改米白 | 深色底用 |
+| `company-mark-mono.svg` | `svg/company-mark-mono.svg` | 原檔備查；頁尾用 inline `<symbol id="mark-company">` |
+| `og.png` | `png/final-duduclaw-os-social.png` | 1200×630 社群卡：先縮成 1260×630，再拿掉文字區與貓之間 60px 的空白欄，左右邊距維持一致 |
+| `icon-192.png`、`icon-512.png` | `png/duduclaw-os/avatar-1024.png` | manifest 圖示 |
+
+頁面上的 logo 是 inline SVG：`<svg class="brand-mark"><use href="#mark-os"></use></svg>`，
+ink 層填 `var(--logo-ink)`（淺色海軍藍、深色米白），琥珀層固定不變。「OS」以文字寫在 wordmark 裡，貓不重畫。
+
+舊的緋紅摺紙貓、3D 貓、走路貓、`lab/` 驗收頁、hero WebGL 色塊、影子工作區的粒子示範與捲動進度條都已移除
+（C1 規範：不留吉祥物動畫、不用漸層與光暈、動態只用 150–200ms 的透明度與位移）。要找回舊實作請看 git 歷史。
 
 ## 截圖的格式與裁切
 
 每張截圖都出三種格式，`<picture>` 由上而下試 AVIF、WebP，最後才是 PNG，
 所以舊瀏覽器仍然拿得到圖。桌面版一律 1280×800。
 
-截圖資產另保留一組直式細部裁切（`home-desktop-mobile`、`home-dark-mobile`，
-640×670）：用於首頁圖集的淺／深色首頁分頁。600px 以下顯示交辦列與 Dock 的細部裁切，桌機呈現完整 1280×800 桌面，其餘分頁保持完整畫面。
+截圖資產另保留一組直式細部裁切（640×670）：`home-desktop-mobile`、`home-dark-mobile` 用於首頁圖集的淺／深色首頁分頁，
+600px 以下顯示交辦列與 Dock 的細部裁切，桌機呈現完整 1280×800 桌面，其餘分頁保持完整畫面。
+`launcher-mobile` 是首頁 hero 右側的產品畫面，取 `launcher.png` 的 `(400, 130)–(1040, 800)`，讓交辦面板置中，各種寬度都用這張。
 
 換截圖時三種格式都要重出，尺寸寫進 `width` / `height` 屬性避免版面跳動。
 
@@ -46,39 +64,18 @@ website/
 QEMU 版整碟映像的首次開機（示範帳號「Demo」、不設定任何 AI 授權、套用 Express 板模；深色那張
 是在精靈的外觀步驟選暗色後重開一次拍的）。畫面用 QMP `screendump` 取得，滑鼠與鍵盤用 QMP
 `input-send-event`／`send-key` 送；重拍前先用 Release 上的 `.sha256` 與 `.minisig` 核對映像。
-v0.3.0（2026-10-14 發布）還沒重拍，首頁與 alt 文字照實標成 v0.2.0 的畫面。
+v0.3.0（2026-10-14 發布）還沒重拍，首頁、圖集上方標籤與 alt 文字照實標成 v0.2.0 的畫面。
+
+**待辦：重拍。** 這 24 個檔案（加上 hero 用的 3 個 `launcher-mobile`）是 v0.2.0 的畫面，桌面上還是舊的緋紅貓與舊 logo。
+OS 殼層換成 C1 之後要用新的發布映像照上面的 QMP 程序重拍，三種格式與手機裁切一起重出，再把頁面上的 v0.2.0 標示改掉。
 手機版裁切固定取 1280×800 原圖的 `(320, 130)–(960, 800)`。WebP 用 `cwebp -q 82 -m 6`，
 AVIF 用 `avifenc -q 60 -s 4`。
 
-## 互動模組
+## 互動
 
-六個模組彼此獨立，各自偵測能力、各自降級，關掉任何一個其他照常運作。
-關掉 JavaScript 時六個都不存在，頁面內容與下載連結完全不受影響。
-
-| 模組 | 做什麼 | 降級後看到什麼 | 測試開關 |
-|---|---|---|---|
-| `js/hero-shader.js` | hero 背景兩塊緩慢漂移的色塊，WebGL2 全螢幕 quad，顏色讀 `--hero-circle-a` / `--hero-circle-b` / `--hero-ground` | `.hero-bg` 原本的兩個 CSS 大圓 | `?nogl=1` |
-| `js/freeze-demo.js` | 影子輸出框裡 agent 游標的六顆粒子軌跡，滑鼠移入左框就原地凍結 | 原本靜態的 `.shadow-cursor-agent` | `?nodemo=1`、`?nohover=1`（強制觸控版） |
-| `js/hero-cat.js` | 吉祥物編排：靜止時是品牌剪影，游標進 hero 換成四足走路貓去追紙老鼠，游標離開 2 秒後走回原位換回剪影 | hero 裡那份 inline SVG | `?nocat=1`（兩個都不掛）、`?nowalk=1`（只留剪影） |
-| `js/cat3d/cat3d.mjs` | 品牌剪影的低面數 3D 版，進場展開一次後隨游標微傾 | hero 裡那份 inline SVG | `?nowebgl=1`、`?reducedmotion=1` |
-| `js/catwalk/catwalk.mjs` | 四足走路貓：走、潛行、撲擊、抓紙老鼠，六個狀態 | 不掛就維持剪影 | `?nowebgl=1`、`?reducedmotion=1`、`?pose=`、`?autoplay=1` |
-| `js/site.js` | 主題、導覽、分頁、複製、捲動進場、下載篩選 | 靜態 HTML 全部可讀可點 | 無 |
-
-共同的防護：`prefers-reduced-motion: reduce` 一律不啟動、DPR 上限 2、
-離開視窗或分頁隱藏就停 rAF、觸控裝置鎖 30fps。
-
-吉祥物那兩個模組再多幾條：
-
-- 3D 剪影掛上之後 `.hero-cat` 會多一個 `data-cat3d="on"`，site.js 與 site.css
-  靠它停用 SVG 版的展開與傾斜；掛不上就什麼都不動。
-- 走路貓登場時 `.hero-cat` 再多一個 `data-catwalk="on"`，CSS 靠它把剪影那張畫布淡出。
-- **同一時間只有一個模組在跑 rAF**：淡出的那一個 `pause()` 之後最後一幀還留著，
-  交叉淡入淡出是在兩張靜止畫面之間做的。hero 離開視窗或分頁隱藏時兩個都停。
-- 桌機（>780px 且 `pointer: fine`）走游標互動，吉祥物盒子維持「點一下重播摺紙展開」。
-  觸控或 ≤780px 改成舞台上一顆透明按鈕（`放一隻紙老鼠`，至少 44px），點一下放老鼠、
-  20 秒沒互動就換回剪影；這種情況下不會再掛重播按鈕，同一塊畫面不會疊兩個控制項。
-- 走路貓的站高大約是剪影高度的三成。四足貓的鼻子到尾巴約是站高的兩倍多，
-  吉祥物那一欄只有 480 px 左右，要讓整隻貓不被裁切又留得下走路空間，這是幾何上的上限。
+只有 `assets/js/site.js` 一支腳本：主題切換、手機導覽、桌面圖集分頁、複製按鈕、捲動進場、
+下載頁篩選，以及捲動後在導覽列下緣加一條細線。關掉 JavaScript 時頁面內容與下載連結完全不受影響。
+動態只有進場的 200ms 淡入位移與連結卡圖示的 150ms 位移，`prefers-reduced-motion: reduce` 時全部關閉。
 
 ## 本機預覽
 
@@ -150,8 +147,12 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 
 `download.html` 的 QR code 編的是預設推薦資產（桌面版安裝器 ISO、真機目標）的直連網址，換版一定要重產。
 格式：version 11、錯誤修正 H、segno 自動選 mask，`qr-dots` 只畫一般模組（跳過三個定位圖案、六個對齊圖案與
-中間 `[28,40]×[28,40]` 的貓 logo 區，座標含 4 格 quiet zone），每個點寫成 `M<x> <y>h0`／`m<dx> <dy>h0`。
+中間 `[28,40]×[28,40]` 的 logo 區，座標含 4 格 quiet zone），每個點寫成 `M<x> <y>h0`／`m<dx> <dy>h0`。
 用 segno 1.6.6 照這個規則重產 v0.2.0 的網址，結果與原本的 path 逐位元組相同，v0.3.0 就是照同一規則產的。
+
+中間的 logo 區放 C1 貓 mark（白色圓角方塊上的 `#mark-os`，ink 固定海軍藍），QR 本體固定白底海軍藍點，不跟主題反轉。
+`.qr-frame` 維持 200px 寬、10px 內距：2026-10-16 實測 8px 內距在 1x 螢幕上 jsQR 解不出來，10px 在 1x 與 2x、淺色與深色都解得出 v0.3.0 的 ISO 網址。
+改 QR 的尺寸或內距後，用 headless Chrome 截 `.qr-frame`，再用 jsQR 解一次確認。
 
 ## 首頁資訊路徑（2026-10-11）
 
@@ -159,7 +160,7 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 交辦、追蹤與接手 → 六項核心能力 → 版本 → 硬體 → 入門 → 資料與安全界線 → FAQ → 文件與試用。
 下載頁先解釋版本與安裝形式，再列資產、驗簽與寫入步驟。
 
-- 保留原有 MDS 藍、深淺主題、字體、貓與 WebGL 互動；參考網站只用於資訊結構。
+- 視覺在 2026-10-16 換成 C1（見「品牌與視覺」）；資訊路徑與文案沿用，參考網站只用於資訊結構。
 - 移除「第一」與一般 Linux 的概括比較，將重複技術說明合併為核心能力；深入細節導向文件。
 - 工具名稱列依 `docs/guides/ai-runtimes.md` 與 `duduclaw-ai-runtimes.bb` 的打包內容（v0.2.0 與 v0.3.0 是同一份 2026-09-05 的包），
   展示 Claude Code、Codex、Grok Build 與 Qwen Code；使用純文字、不稱合作夥伴或供應商背書，
@@ -175,8 +176,9 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 ## 內容原則
 
 - 繁體中文（zh-TW），技術名詞保留英文
-- 零 emoji，圖示一律用 inline monoline SVG（2px stroke、24 網格）
-- 緋紅 `#E5484D` 只給貓、logo mark 與每頁最多一個強調詞；UI 的按鈕、連結與 focus ring 一律用 MDS 藍 `#2171cc`
+- 零 emoji，圖示一律用 inline monoline SVG（1.75px stroke、24 網格）
+- 主要按鈕海軍藍底米白字（深色主題反過來），次要按鈕 1px 外框；琥珀 `#CC8B2D` 不拿來當內文顏色
+- 不寫「enterprise-grade」「production-ready」「最好」「第一」這類沒有根據的說法
 - 產品事實以 OS repo 的 `README.md`、`CHANGELOG.md` 與 GitHub Release 為準
 - pre-GA 現況（QEMU 驗證、真機未開機、Secure Boot 需關閉）在兩頁都要看得到，照實寫
 
@@ -192,7 +194,6 @@ SKIP_BUILD=1 scripts/deploy-cloudrun.sh # 沿用現有 _site/
 
 - 容器定義在 `deploy/cloudrun/`（`Dockerfile`、`nginx.conf` 含 CSP 與快取標頭、`mime.types` 補 `mjs`／`avif`／`wasm`）。
   `deploy/cloudrun/_site/` 是部署時的暫存副本，已 gitignore。
-- `lab/` 驗收頁不會進 `_site/`（`scripts/build-site.sh` 會移除）。
 - 文件站的絕對網址由 `SITE_URL` 決定（deploy 腳本預設帶正式網域）；`og:image` 已寫成正式網域的絕對網址。
 - **一次性設定（已完成 2026-09-09）**：Cloud Run domain mapping `os.duduclaw.dudustudio.monster → duduclaw-os-site`
   必須用「已驗證網域」的帳號建立（deployer SA 沒有驗證網域，所以這一步是用擁有者帳號做的）；

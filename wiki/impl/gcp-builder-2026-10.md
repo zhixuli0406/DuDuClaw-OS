@@ -150,3 +150,39 @@ gcloud compute instances delete duduclaw-os-builder --zone asia-east1-b --projec
 
 VM 運轉約 10.9 小時（14:17 → 01:12 停機），以 US$1.0／小時估約 US$11；egress 約 8.7 GB 下載到 Mac，約 US$1。停機後到刪除前，磁碟每小時約 US$0.09。
 
+
+## v0.4.0 建置紀錄（2026-10-15）
+
+內嵌平台 v1.73.4、OS `VERSION` 0.4.0，發布的 tag 釘在 `d95c57a`（PR #17 merge）。這一版把 gateway 改成一般帳號、容器改用 rootless Podman（見 CHANGELOG 0.4.0）。產物矩陣同 v0.3.0：兩機型 × wic.zst＋基礎版 ISO＋桌面版 ISO，共 20 個資產。Release：<https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.4.0>。
+
+v0.3.0 那台 VM 已刪除，這一輪重新建立，規格與上方「VM」一節相同（同一條建立指令）。
+
+### 時間軸（UTC，10-15）
+
+| 時間 | 事件 |
+|---|---|
+| 07:08:58 | VM 建立 |
+| 07:09 之後 | 冷建置 `duduclaw-image-appliance-test` 第一次失敗：`container-host-config_%.bbappend` 對不到任何 recipe（`container-host-config` 沒有版本號，`_%` 比對不到），改名為 `container-host-config.bbappend`（`2a37f65`） |
+| 接著 | 第二次失敗：`duduclaw-sysd` do_compile 缺 `minisign-verify`／`sha2`。`refresh-src.sh` 的依賴是手列的，平台 sysd 新增的 crate 沒被快照帶進來；補上依賴，並加 fail-closed 檢查，refresh 時少帶任何依賴就失敗（`af2fc2d`） |
+| 約 13:30 | 第三次成功，9316 個 task，其中 8424 個從 sstate 取（rootfs 時間戳 13:32；驗證報告記的 `BUILD_EXIT=0` 是 14:07） |
+| 14:09–15:40 | QEMU 驗證第一輪，找到 F1–F6（`duduclaw-podman.service` 根本起不來等），證據在 `wiki/reports/rootless-verification/2026-10-15.md` |
+| 18:03 | 修正後（`5d332c8`）第四次建置成功 |
+| 18:07–18:33 | QEMU 驗證第二輪，36 項過 35 項（沒過的是 doctor 標題文字，不擋發版） |
+| 18:37–20:37 | 發布矩陣：qemux86-64 appliance 6 分、live 11 分、live-desktop 35 分；genericx86-64 appliance 23 分、live 9 分、live-desktop 35 分 |
+| 20:37–21:13 | smoke（qemux86-64 wic，65 秒到 login）＋兩機型 `package --no-sign` |
+| 21:13–21:26 | 拉回 Mac → `sign` → 上傳到釘在 `d95c57a` 的 draft release → GitHub digest 比對 20/20 → minisign 自驗 6/6 → 兩個 qemux86-64 ISO 開機各約 125 秒到 live 環境的自動登入 |
+| 21:26 | 轉正式 |
+| 約 21:35 | VM 刪除 |
+
+### 踩到的坑
+
+1. **bbappend 的 `%` 只比對版本**：`container-host-config_%.bbappend` 要求 recipe 檔名帶 `_<版本>`，上游這個 recipe 沒有版本號，bitbake 直接報 bbappend 沒有對應 recipe。檔名改成不帶 `_%`。
+2. **`refresh-src.sh` 手列依賴會悄悄漏掉新 crate**：平台 sysd 加了 `minisign-verify`、`sha2`，快照沒帶，要到 bitbake do_compile 才爆。現在 refresh 時檢查，少帶就停（fail closed）。
+3. **gcloud 的全域帳號會被別的工具切回部署 SA**：中途有其他工具把 `gcloud config` 的 account 換回 `xuanhe-deployer`，而這個 SA 沒有 Compute 角色。compute 相關指令一律明確帶 `--account`，不依賴全域設定。
+4. **舊的 bitbake 還在收尾時開第二個會卡在鎖上**：第一個 build 失敗後還有進行中的 task 要跑完，這時開新的 bitbake 只會等 lock。先等舊的完全結束再開。
+5. **舊 run 還活著時改 log 檔名**：把 log 改名後開新 run，舊 run 結尾的 `echo BUILD_EXIT` 落進新的 log，看起來像新 run 結束了。每次 run 用新的檔名，不要改舊檔的名字。
+6. **`gh release create` 沒帶 `--target` 會在預設分支 HEAD 打 tag**：建置期間 main 已經往前走，不帶 `--target` 的話 tag 會指到實際沒建置的 commit。這次 draft release 明確釘在 `d95c57a`。
+
+### 費用（估算）
+
+VM 運轉約 14.4 小時（07:09 → 約 21:35 刪除），以 US$1.0／小時估約 US$14–15。VM 已刪除，停機磁碟費不再發生。

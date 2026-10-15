@@ -1,6 +1,9 @@
 # Rootless gateway + rootless Podman — QEMU verification checklist (2026-10)
 
-> L2 internal checklist, not yet run. Maps the V1–V25 acceptance checks of
+> L2 internal checklist. Run twice on 2026-10-15 on the GCP builder (first
+> round found F1–F6, the re-verify round on 5d332c8 passed 35 of 36 checks);
+> evidence: [`../reports/rootless-verification/2026-10-15.md`](../reports/rootless-verification/2026-10-15.md).
+> Shipped in DuDuClaw OS v0.4.0. Maps the V1–V25 acceptance checks of
 > the rootless-gateway design (`commercial/docs/specs/DESIGN-os-rootless-gateway-2026-10.md`,
 > r2.2, in the platform maintainers' private tree) to concrete commands for
 > the first real bake + boot on the GCP builder

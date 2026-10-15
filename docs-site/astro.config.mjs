@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import { docsBase } from './base.mjs';
+import { docsBase, docsBasePrefix } from './base.mjs';
 
 /**
  * The "getting started" group is a curated list of existing pages, so its
@@ -50,9 +50,12 @@ export default defineConfig({
       },
       description:
         'DuDuClaw OS 與 DuDuClaw 平台的公開文件：安裝、桌面、AI runtime、架構與規格。',
+      // C1 mark: navy ink on light, cream ink on dark (the amber layer never
+      // changes). The site title next to it carries the "DuDuClaw OS" text.
       logo: {
-        src: './src/assets/duduclaw-mark-circle.svg',
-        alt: 'DuDuClaw',
+        light: './src/assets/duduclaw-os-mark.svg',
+        dark: './src/assets/duduclaw-os-mark-reverse.svg',
+        alt: 'DuDuClaw OS',
       },
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
@@ -66,6 +69,14 @@ export default defineConfig({
       head: [
         {
           tag: 'link',
+          attrs: { rel: 'icon', href: `${docsBasePrefix()}/favicon.ico`, sizes: 'any' },
+        },
+        {
+          tag: 'link',
+          attrs: { rel: 'apple-touch-icon', href: `${docsBasePrefix()}/apple-touch-icon.png` },
+        },
+        {
+          tag: 'link',
           attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
         },
         {
@@ -76,7 +87,7 @@ export default defineConfig({
           tag: 'link',
           attrs: {
             rel: 'stylesheet',
-            href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap',
+            href: 'https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700&display=swap',
           },
         },
       ],
@@ -87,8 +98,24 @@ export default defineConfig({
         ja: { label: '日本語', lang: 'ja' },
       },
       expressiveCode: {
-        themes: ['github-dark', 'github-light'],
-        styleOverrides: { borderRadius: '10px' },
+        // Code blocks are navy with cream text in both themes (C1 spec §4),
+        // so one dark theme serves both.
+        themes: ['github-dark'],
+        styleOverrides: {
+          borderRadius: '8px',
+          borderColor: '#24405F',
+          codeBackground: '#102B48',
+          codeForeground: '#F5F4F0',
+          frames: {
+            editorBackground: '#102B48',
+            terminalBackground: '#102B48',
+            editorTabBarBackground: '#0B1E33',
+            terminalTitlebarBackground: '#0B1E33',
+            editorActiveTabBackground: '#102B48',
+            terminalTitlebarForeground: '#B7BDC4',
+            frameBoxShadowCssValue: 'none',
+          },
+        },
       },
       pagination: true,
       sidebar: [

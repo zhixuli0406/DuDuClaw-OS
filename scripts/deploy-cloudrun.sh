@@ -4,7 +4,7 @@
 #   scripts/deploy-cloudrun.sh            # build + deploy
 #   SKIP_BUILD=1 scripts/deploy-cloudrun.sh   # reuse an existing _site/
 #
-# Project/region/account follow the DuDu Studio GCP convention: project
+# Project/region/account follow the Dudu Technology Ltd. GCP convention: project
 # louis-460302, region asia-east1, deploys run as the deployer service
 # account (never an interactive login). Domain mapping is a one-time step
 # documented in website/README.md, not part of this script.

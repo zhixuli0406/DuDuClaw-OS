@@ -183,6 +183,16 @@ hardware.
   name, so it cannot break the ruleset) rejects every loopback connection
   the maintenance account opens, keeping it away from the gateway's
   loopback-only entry points and the local model server.
+  The account is not in `systemd-journal` and has no polkit grant or
+  sudo. Its menu reaches root only through `duduclaw-maint-helper.socket`
+  (root:duduclaw-maint 0660, one root instance per connection with no
+  capabilities at all, `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectProc=invisible`, unix sockets only, the `@system-service`
+  syscall filter, no devices, no write-and-execute memory, no network, at
+  most an hour), which accepts six fixed requests from uid
+  4800 only: the gateway's or the local model server's journal entries
+  (the platform's helper drops the one-time bootstrap password line and
+  redacts secrets), or a rate-limited restart of one of those two units.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
   do (that code is in the platform repo).

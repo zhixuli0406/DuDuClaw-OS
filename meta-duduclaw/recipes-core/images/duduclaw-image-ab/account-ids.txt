@@ -1,0 +1,105 @@
+# Account ids of the previous release, base edition (duduclaw-image-ab): DuDuClaw OS v0.4.0.
+#
+# Read by duduclaw_check_maint_account (duduclaw-maint-checks.inc): any
+# user or group below that changes its id or disappears fails the image
+# build, and so does any new one not listed in DUDUCLAW_ACCOUNT_IDS_ADDED.
+#
+# Source: the published v0.4.0 release assets (duduclaw-install.wic.zst inside duduclaw-os-installer-duduclaw-{qemux86-64,genericx86-64}-v0.4.0.iso),
+# checksums verified against the release's .sha256 files on 2026-10-16.
+# Both machines produce identical /etc/passwd and /etc/group. Dumped from
+# the root-A partition (GPT name duduclaw-os_1.73.4-y1-bringup) with:
+#   zstd -d --long=27 <asset> -o img.wic
+#   sfdisk -J img.wic          # start/size of duduclaw-os_* partition
+#   dd if=img.wic of=root.img bs=1M skip=<start*512> count=<size*512> \
+#      iflag=skip_bytes,count_bytes
+#   debugfs -R 'cat /etc/passwd' root.img; debugfs -R 'cat /etc/group' root.img
+# then one line per entry: `user <name> <uid> <gid>` / `group <name> <gid>`.
+# Regenerate the same way from each new release, in the commit that clears
+# DUDUCLAW_ACCOUNT_IDS_ADDED.
+user root 0 0
+user daemon 1 1
+user bin 2 2
+user sys 3 3
+user sync 4 65534
+user games 5 60
+user man 6 12
+user lp 7 7
+user mail 8 8
+user news 9 9
+user uucp 10 10
+user proxy 13 13
+user www-data 33 33
+user backup 34 34
+user list 38 38
+user irc 39 39
+user _apt 42 65534
+user systemd-journal-upload 991 986
+user duduclaw-rescue 992 987
+user systemd-network 993 988
+user systemd-timesync 994 989
+user systemd-resolve 995 990
+user polkitd 996 991
+user pipewire 997 994
+user messagebus 998 995
+user duduclaw-kiosk 999 997
+user duduclaw 1000 1000
+user nobody 65534 65534
+group root 0
+group daemon 1
+group bin 2
+group sys 3
+group adm 4
+group tty 5
+group disk 6
+group lp 7
+group mail 8
+group news 9
+group uucp 10
+group man 12
+group proxy 13
+group kmem 15
+group input 19
+group dialout 20
+group fax 21
+group voice 22
+group cdrom 24
+group floppy 25
+group tape 26
+group sudo 27
+group audio 29
+group dip 30
+group www-data 33
+group backup 34
+group operator 37
+group list 38
+group irc 39
+group src 40
+group shadow 42
+group utmp 43
+group video 44
+group sasl 45
+group plugdev 46
+group kvm 47
+group sgx 48
+group staff 50
+group games 60
+group shutdown 70
+group wheel 80
+group clock 81
+group users 100
+group systemd-journal-upload 986
+group duduclaw-rescue 987
+group systemd-network 988
+group systemd-timesync 989
+group systemd-resolve 990
+group polkitd 991
+group empower 992
+group systemd-journal 993
+group pipewire 994
+group messagebus 995
+group duduclaw-ipc 996
+group duduclaw-kiosk 997
+group render 998
+group seat 999
+group duduclaw 1000
+group nogroup 65534

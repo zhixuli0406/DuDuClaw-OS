@@ -111,6 +111,8 @@ dd if=<iso> of=/dev/<usb> bs=4M conv=fsync    # or balenaEtcher
 
 Boot the target in UEFI mode with **Secure Boot off** (published images remain unsigned through v0.4.0; only signed builds enroll the DuDuClaw keys on first boot). Boot from the USB stick, pick the target SSD in the graphical installer, and reboot: the installed system is the A/B UKI + systemd-boot layout, and the dashboard is reachable from a browser on the same LAN.
 
+**Unreleased installer fix:** development source now stops on decoder, progress-pipe or disk-write failure and reserves 100% for a successfully flushed image stream. It can leave a partially written disk on failure; retry the installation before booting that disk. Host regression tests pass; rebuilding and real blank-disk installation of both ISOs are still required. See [installer tests](appliance/tests/installer/README.md).
+
 **Whole-disk image (desktop edition: desktop + apps + shipping hardening)**
 
 ```bash

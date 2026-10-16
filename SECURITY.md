@@ -134,6 +134,44 @@ hardware.
   firewall; closing the window stops dropbear, ends every session and
   closes the port. No account can log in over SSH yet (root is locked), so
   the switch currently controls only the port.
+- Maintenance SSH login (in the layer, lands in the next OS image, not in
+  v0.4.0): a dedicated account, `duduclaw-maint`, with a fixed uid/gid of
+  4800, password field `*`, no supplementary groups, an empty read-only
+  home and a fixed menu as its login shell instead of a general shell. Its
+  only actions are restarting the gateway or the local model server, done
+  by a root helper service on its behalf (no polkit, no sudo). The image
+  build fails if 4800 is used by any other
+  account or falls inside the host's dynamic system ids, the gateway's
+  subordinate ids, the Android ids Waydroid runs as host ids, or systemd's
+  reserved ranges, and if any account changed its id against the previous
+  release (an id that moves leaves files on `/data` owned by the wrong
+  account after an A/B update). The account cannot log in until the
+  platform snapshot that carries the menu and the per-window key handling
+  is vendored into the image.
+  dropbear (same next image) lets only that account's group log in
+  (`-G duduclaw-maint`), only with a public key (`-s`), reads authorized
+  keys only from `/run/duduclaw-maint-ssh` (tmpfs, written by
+  `duduclaw-sysd` for one window), runs the menu for every session
+  whatever the client asks (`-c`, which also replaces scp and sftp), and
+  refuses port forwarding (`-j -k`). Sessions run with
+  `IPAddressDeny=any`, `NoNewPrivileges`, `ProtectProc=invisible`,
+  `ProtectSystem=strict` and no access to the gateway's and kiosk's homes,
+  saved Wi-Fi networks or the container store. Both the listening socket
+  and the sessions are bound to `duduclaw-sysd.service`, so they stop if
+  sysd stops or fails for good. The build fails if the kernel lacks
+  `CONFIG_CGROUP_BPF` (without it systemd skips `IPAddressDeny=` with only
+  a warning), if the dropbear command differs from the expected one, or if
+  a host key is baked into the image. The host key is one ed25519 key in
+  `/data/system/dropbear`, generated on the device (the desktop edition's
+  root is read-only) and deleted by a factory reset together with the
+  maintenance SSH audit log. If sysd does not close a window in time, a
+  timer in PID 1 runs a root script that deletes the key, stops dropbear,
+  removes port 22 from the firewall and writes the audit record. Residual
+  risk: the script tries that audit write once. If the audit file or its
+  lock is not a root-owned 0600 file, or the lock is held for more than
+  10 seconds, the record is not written (the reason goes to the journal)
+  and is not retried; the window is still closed, and sysd's next startup
+  cleanup writes its own close record from the state it kept.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
   do (that code is in the platform repo).

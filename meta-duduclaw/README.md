@@ -53,7 +53,8 @@ meta-duduclaw/
 │                                            #   journald, secaudit-scan, rescue, os-installer, live-tweaks,
 │                                            #   flatpak-offline-repo, flatpak-setup, flatpak-kiosk-verify, polkit-flatpak,
 │                                            #   compat-runners, steam-devices, ai-runtimes, llama-server,
-│                                            #   podman (rootless engine for the gateway, desktop edition)
+│                                            #   podman (rootless engine for the gateway, desktop edition),
+│                                            #   maint (maintenance SSH account, both editions)
 ├── recipes-containers/container-host-config/ # bbappend: overlay storage + rootless containers.conf drop-in
 ├── recipes-ai/llama-cpp/                    # llama.cpp v0.4.0 — llama-server / llama-cli (CPU build)
 ├── recipes-kernel/linux/                    # linux-yocto 6.18 bbappend + per-machine config fragments
@@ -103,10 +104,12 @@ evidence from the two QEMU rounds on the qemux86-64 test image:
 | `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | socket `/run/duduclaw-podman/podman.sock` (root 0711 dir); `podman system service`, `Delegate=yes` + `DelegateSubgroup=supervisor`, `KillMode=mixed` (a restart kills running sandboxes), `ProtectSystem=strict` with the gateway home read-only (`XDG_CACHE_HOME` in the store), bounding set `CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_SYS_ADMIN` (only setuid newuidmap/newgidmap can use it), no NNP, no `ProtectKernelTunables` (breaks netavark/crun), `InaccessiblePaths=` for root control sockets; store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup, re-added on firewall reloads without restarting podman |
 | `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000`; `--require-main-pid-of duduclaw-gateway.service --min-rollback-version …` are appended at build time from `DUDUCLAW_MIN_ROLLBACK_VERSION` (`1.73.4-y1-bringup` since v0.4.0) |
 | `duduclaw-home-owner.service` | root, oneshot | `systemd-tmpfiles` with `Z` over `/data/duduclaw` before anything runs as uid 1000 (replaces `chown -R`, which followed symlinks); moves root-only state (machine-id, entropy seed, rescue audit log) to `/data/system` once |
-| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`; refuses a marker that is not root-owned or is group/world-writable |
+| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`, plus the SSH host key (`/data/system/dropbear`), the maintenance SSH audit log with its rotations and lock, and `duduclaw-sysd`'s maintenance SSH state (`/data/system/maint-ssh`); refuses a marker that is not root-owned or is group/world-writable |
 | `duduclaw-rollback-prune.service` | root, oneshot | after `boot-complete.target`, deletes ESP entries older than `DUDUCLAW_MIN_ROLLBACK_VERSION` (`conf/distro/include/duduclaw-rollback-floor.inc`, `1.73.4-y1-bringup` since v0.4.0; the unit is skipped while it is empty) — no way back to a pre-rootless image by design |
 | `duduclaw-data-migrate.service`, `duduclaw-secaudit-scan.service` | `duduclaw` | they only touch the gateway's own tree |
 | `duduclaw-llama-server.service` | `duduclaw` | no `EnvironmentFile=`; `llama-server-run` reads only the four `LLAMA_*` keys from the gateway's settings file as uid 1000 and binds 127.0.0.1 |
+| `duduclaw-maint` account (both editions; next image, not in v0.4.0) | — (login account, uid/gid 4800, fixed) | the account a support technician logs in as over SSH during a maintenance window; password field `*`, no supplementary groups, home `/usr/share/duduclaw-maint` (empty, root 0555), shell `/usr/libexec/duduclaw/maint-shell` (a fixed menu from the platform's `duduclaw-maint-tools`, listed in `/etc/shells`); no polkit: the menu's two restarts (gateway, local model server) are done by a root helper service. Cannot log in until the platform snapshot with the menu and the per-window key handling is vendored. Build checks: `recipes-core/images/duduclaw-maint-checks.inc` |
+| `dropbear.socket` / `dropbear@.service` (next image) | per-connection server, drops to `duduclaw-maint` after auth | off by default; started by `duduclaw-sysd` for a maintenance window. Drop-ins `60-duduclaw-maint.conf`: `-G duduclaw-maint -D /run/duduclaw-maint-ssh -c /usr/libexec/duduclaw/maint-shell -s -j -k -w`, host key `/data/system/dropbear/dropbear_ed25519_host_key` (made by `dropbearkey.service` on `/data`, deleted by factory reset), `IPAddressDeny=any`, `ProtectProc=invisible`, `ProtectSystem=strict`, `BindsTo=duduclaw-sysd.service` on both units. `duduclaw-sysd` falls back on a PID 1 timer running `/usr/libexec/duduclaw/maint-ssh-close` (root) to close a window it could not close itself; the script atomically replaces `/data/system/maint-ssh/last-close.json` (root 0700 dir, temp file + rename) and appends sysd's close-record shape (trigger `fallback_timer`) to `/data/system/maint-ssh-audit.log` under the same `flock` on `<file>.lock` (root 0600, 10 s bound), never rotates, and refuses to write if the log or lock is not a root-owned 0600 regular file. The build checks the `ExecStart` token by token, that no host key is baked in, and that the kernel has `CONFIG_CGROUP_BPF` |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
 
 A/B image builds stop at `do_rootfs` if `DUDUCLAW_MIN_ROLLBACK_VERSION` is
@@ -114,6 +117,34 @@ empty (no platform guards). With it set, as in v0.4.0, A/B updates install
 from the root-owned `/data/system/updates`. `/data` is mounted `nosuid,nodev`.
 The iwd D-Bus policy for `duduclaw` covers only Station, Network,
 KnownNetwork, AgentManager and property reads.
+
+The image build fails if any polkit rules file mentions `duduclaw-maint`,
+if uid/gid 4800 is used by anything but `duduclaw-maint`, if 4800 falls inside the host's dynamic system range
+(101–999), a subordinate id range, the Android ids Waydroid uses on the
+host or systemd's reserved ranges, or if any account changed its id, went
+away or appeared since the previous release. The previous release's table
+is `recipes-core/images/duduclaw-image-ab/account-ids.txt` (base edition)
+and `recipes-core/images/duduclaw-image-appliance/account-ids.txt`
+(desktop edition), dumped from the published v0.4.0 images; regenerate
+both after each release (the files' headers say how) and empty
+`DUDUCLAW_ACCOUNT_IDS_ADDED`.
+
+Adding a system account or group (any recipe with `inherit useradd`):
+give it a fixed id (`--uid`/`--gid`) outside 101–999, 100000–165535, the
+Android id ranges and systemd's reserved ranges, and outside every id in
+the two tables; a dynamic id (no `--uid`) is assigned by install order and
+can move every dynamic account installed after it. List the new names in
+`DUDUCLAW_ACCOUNT_IDS_ADDED` (`user:<name>` / `group:<name>`, in
+`duduclaw-maint-checks.inc`) in the same commit, or the image build fails.
+A package newly pulled into an edition can also bring a dynamic account
+with it, and install order then moves the others (in the desktop edition
+polkit's `polkitd` is 999 and everything after it one lower than in the
+base edition); the comparison catches that as a moved or new id. The ids are not pinned with
+`useradd-staticids`: that class rewrites each recipe's `useradd` call for
+the whole build, and the two editions already have different ids for
+every dynamic account (base `duduclaw-kiosk` 999:997, desktop 998:996;
+base `polkitd` 996:991, desktop 999:999; see the two tables), so one table
+cannot keep both.
 
 The Flatpak polkit grant now keys on the empty `duduclaw-flatpak` group, so
 the gateway has no Flatpak rights. `duduclaw-cli` ships

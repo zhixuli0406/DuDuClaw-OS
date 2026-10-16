@@ -104,12 +104,47 @@ evidence from the two QEMU rounds on the qemux86-64 test image:
 | `duduclaw-podman.socket`/`.service` (desktop edition) | `duduclaw` | socket `/run/duduclaw-podman/podman.sock` (root 0711 dir); `podman system service`, `Delegate=yes` + `DelegateSubgroup=supervisor`, `KillMode=mixed` (a restart kills running sandboxes), `ProtectSystem=strict` with the gateway home read-only (`XDG_CACHE_HOME` in the store), bounding set `CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_SYS_ADMIN` (only setuid newuidmap/newgidmap can use it), no NNP, no `ProtectKernelTunables` (breaks netavark/crun), `InaccessiblePaths=` for root control sockets; store `/data/system/containers/duduclaw`; loads an nftables rule that drops loopback connections from its own cgroup, re-added on firewall reloads without restarting podman |
 | `duduclaw-sysd.service` | root | the gateway's only root entry point, `--allowed-uid 1000`; `--require-main-pid-of duduclaw-gateway.service --min-rollback-version …` are appended at build time from `DUDUCLAW_MIN_ROLLBACK_VERSION` (`1.73.4-y1-bringup` since v0.4.0) |
 | `duduclaw-home-owner.service` | root, oneshot | `systemd-tmpfiles` with `Z` over `/data/duduclaw` before anything runs as uid 1000 (replaces `chown -R`, which followed symlinks); moves root-only state (machine-id, entropy seed, rescue audit log) to `/data/system` once |
-| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`; refuses a marker that is not root-owned or is group/world-writable |
+| `duduclaw-factory-reset.service` | root, oneshot | wipes the gateway, kiosk and container data at boot when `/data/system/factory-reset.pending` holds `clear_network=0` or `clear_network=1`, plus the SSH host key (`/data/system/dropbear`), the maintenance SSH audit log with its rotations and lock, and `duduclaw-sysd`'s maintenance SSH state (`/data/system/maint-ssh`); refuses a marker that is not root-owned or is group/world-writable |
 | `duduclaw-rollback-prune.service` | root, oneshot | after `boot-complete.target`, deletes ESP entries older than `DUDUCLAW_MIN_ROLLBACK_VERSION` (`conf/distro/include/duduclaw-rollback-floor.inc`, `1.73.4-y1-bringup` since v0.4.0; the unit is skipped while it is empty) — no way back to a pre-rootless image by design |
 | `duduclaw-data-migrate.service`, `duduclaw-secaudit-scan.service` | `duduclaw` | they only touch the gateway's own tree |
 | `duduclaw-llama-server.service` | `duduclaw` | no `EnvironmentFile=`; `llama-server-run` reads only the four `LLAMA_*` keys from the gateway's settings file as uid 1000 and binds 127.0.0.1 |
 | `duduclaw-maint` account (both editions; next image, not in v0.4.0) | — (login account, uid/gid 4800, fixed) | the account a support technician logs in as over SSH during a maintenance window; password field `*`, no supplementary groups, home `/usr/share/duduclaw-maint` (empty, root 0555), shell `/usr/libexec/duduclaw/maint-shell` (a fixed menu from the platform's `duduclaw-maint-tools`, listed in `/etc/shells`); no polkit: the menu's two restarts (gateway, local model server) are done by a root helper service. Cannot log in until the platform snapshot with the menu and the per-window key handling is vendored. Build checks: `recipes-core/images/duduclaw-maint-checks.inc` |
+| `dropbear.socket` / `dropbear@.service` (next image) | per-connection server, drops to `duduclaw-maint` after auth | off by default; started by `duduclaw-sysd` for a maintenance window. Drop-ins `60-duduclaw-maint.conf`: `-G duduclaw-maint -D /run/duduclaw-maint-ssh -c /usr/libexec/duduclaw/maint-shell -s -j -k -w`, host key `/data/system/dropbear/dropbear_ed25519_host_key` (made by `dropbearkey.service` on `/data`, deleted by factory reset), `IPAddressDeny=any`, `ProtectProc=invisible`, `ProtectSystem=strict`, `BindsTo=duduclaw-sysd.service` on both units. `duduclaw-sysd` falls back on a PID 1 timer running `/usr/libexec/duduclaw/maint-ssh-close` (root) to close a window it could not close itself; the script atomically replaces `/data/system/maint-ssh/last-close.json` (root 0700 dir, temp file + rename) and appends sysd's close-record shape (trigger `fallback_timer`) to `/data/system/maint-ssh-audit.log` under the same `flock` on `<file>.lock` (root 0600, 10 s bound), never rotates, and refuses to write if the log or lock is not a root-owned 0600 regular file. The build checks the `ExecStart` token by token, that no host key is baked in, and that the kernel has `CONFIG_CGROUP_BPF` |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
+
+For the next image, the factory-reset oneshot is ordered before
+`duduclaw-sysd.service` and `dropbearkey.service`. This prevents sysd from
+writing old window/audit data back after the wipe, and prevents a completed
+host-key generation from losing its key to a concurrent wipe. These are
+ordering dependencies only; a failed reset does not block the two services
+or the dashboard from starting.
+
+Run `python3 scripts/tests/maint-reset-order.py` to check the explicit
+ordering graph in the layer's unit sources, including cycle and failure
+dependency checks. This is a static regression test; it does not include
+upstream units or generated systemd dependencies, and does not replace an
+image build or QEMU boot.
+
+The fallback close script reads the platform sysd's persistent
+`/data/system/maint-ssh/window.json`, never a file in the tmpfs key directory.
+It leaves that state file unchanged so sysd can replay the journal from its
+saved cursor, including after a reboot when the tmpfs key has disappeared.
+With neither a persistent window nor a key, it does not write an audit record
+or replace `last-close.json`.
+
+The regression test uses real bash, files and `flock`, with substitutes for
+`systemctl` and `nft`; it does not exercise a booted image or the firewall.
+It compares the fixture's fields and paths against the supplied platform
+checkout's `crates/duduclaw-sysd/src/maint_ssh/mod.rs` (`WindowFile`, `STATE_DIR`,
+`KEY_DIR`, `WINDOW_FILE`). Run in a disposable Linux container as root:
+
+```sh
+docker run --rm --network none \
+  -v "$PWD:/repo:ro" -v "$PWD/../DuDuClaw:/platform:ro" \
+  python:3.12-slim python3 /repo/scripts/tests/maint-ssh-close.py --platform-root /platform
+```
+
+The platform checkout must include the maintenance SSH implementation.
 
 A/B image builds stop at `do_rootfs` if `DUDUCLAW_MIN_ROLLBACK_VERSION` is
 empty (no platform guards). With it set, as in v0.4.0, A/B updates install

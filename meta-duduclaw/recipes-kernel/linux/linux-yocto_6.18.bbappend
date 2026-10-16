@@ -140,3 +140,25 @@ SRC_URI:append = " file://duduclaw-verity.cfg"
 # at this file's own pinned SRCREV) and for why this one fragment is also
 # deliberately NOT gated behind that variable.
 SRC_URI:append = " file://duduclaw-tpm.cfg"
+
+# --- Kernel options security features depend on (2026-10-16) -------------
+# A config fragment is a request, not a guarantee: a symbol whose
+# dependencies are missing is dropped by olddefconfig, and the kernel-cache
+# audit only warns. Some options back a security layer that systemd turns
+# into a silent no-op when the kernel lacks them, so the build checks the
+# final .config instead:
+#   CONFIG_CGROUP_BPF  IPAddressDeny=/IPAddressAllow= (the maintenance SSH
+#                      sessions' dropbear@.service.d/60-duduclaw-maint.conf
+#                      has IPAddressDeny=any) are cgroup BPF programs;
+#                      without this option systemd logs a warning and starts
+#                      the unit unfiltered. Requested in duduclaw-rootless.cfg.
+# Add a line here, with its reason, whenever a unit or script relies on an
+# option failing closed rather than being skipped.
+DUDUCLAW_REQUIRED_KCONFIG = "CONFIG_CGROUP_BPF=y"
+do_configure:append() {
+	for opt in ${DUDUCLAW_REQUIRED_KCONFIG}; do
+		if ! grep -qx -- "$opt" ${B}/.config; then
+			bbfatal "kernel .config lacks $opt (see DUDUCLAW_REQUIRED_KCONFIG in linux-yocto_6.18.bbappend)"
+		fi
+	done
+}

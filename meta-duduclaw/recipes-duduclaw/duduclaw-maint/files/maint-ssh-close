@@ -27,7 +27,7 @@
 #      last window close" file) atomically, then append one close record to
 #      the root audit log /data/system/maint-ssh-audit.log, the same file
 #      and format sysd writes (see "Audit record" below).
-# window.json stays in /run/duduclaw-maint-ssh: it holds the journal cursor
+# window.json stays in /data/system/maint-ssh: it holds the journal cursor
 # duduclaw-sysd needs to copy this window's logins into the audit log when
 # it next starts (its startup cleanup), and that cleanup removes it and
 # writes its own close record (trigger startup_cleanup).
@@ -61,12 +61,12 @@ set -uo pipefail
 
 KEY_DIR=/run/duduclaw-maint-ssh
 KEY_FILE=$KEY_DIR/authorized_keys
-WINDOW_FILE=$KEY_DIR/window.json
+STATE_DIR=/data/system/maint-ssh
+WINDOW_FILE=$STATE_DIR/window.json
 SLICE_KILL=/sys/fs/cgroup/system.slice/system-dropbear.slice/cgroup.kill
 AUDIT_LOG=/data/system/maint-ssh-audit.log
 AUDIT_LOCK=$AUDIT_LOG.lock
 LOCK_WAIT_SECONDS=10
-STATE_DIR=/data/system/maint-ssh
 LAST_CLOSE=$STATE_DIR/last-close.json
 MAX_WINDOW_BYTES=65536
 NFT_FAMILY=inet

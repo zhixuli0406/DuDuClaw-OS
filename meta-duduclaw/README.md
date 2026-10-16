@@ -112,6 +112,27 @@ evidence from the two QEMU rounds on the qemux86-64 test image:
 | `dropbear.socket` / `dropbear@.service` (next image) | per-connection server, drops to `duduclaw-maint` after auth | off by default; started by `duduclaw-sysd` for a maintenance window. Drop-ins `60-duduclaw-maint.conf`: `-G duduclaw-maint -D /run/duduclaw-maint-ssh -c /usr/libexec/duduclaw/maint-shell -s -j -k -w`, host key `/data/system/dropbear/dropbear_ed25519_host_key` (made by `dropbearkey.service` on `/data`, deleted by factory reset), `IPAddressDeny=any`, `ProtectProc=invisible`, `ProtectSystem=strict`, `BindsTo=duduclaw-sysd.service` on both units. `duduclaw-sysd` falls back on a PID 1 timer running `/usr/libexec/duduclaw/maint-ssh-close` (root) to close a window it could not close itself; the script atomically replaces `/data/system/maint-ssh/last-close.json` (root 0700 dir, temp file + rename) and appends sysd's close-record shape (trigger `fallback_timer`) to `/data/system/maint-ssh-audit.log` under the same `flock` on `<file>.lock` (root 0600, 10 s bound), never rotates, and refuses to write if the log or lock is not a root-owned 0600 regular file. The build checks the `ExecStart` token by token, that no host key is baked in, and that the kernel has `CONFIG_CGROUP_BPF` |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
 
+The fallback close script reads the platform sysd's persistent
+`/data/system/maint-ssh/window.json`, never a file in the tmpfs key directory.
+It leaves that state file unchanged so sysd can replay the journal from its
+saved cursor, including after a reboot when the tmpfs key has disappeared.
+With neither a persistent window nor a key, it does not write an audit record
+or replace `last-close.json`.
+
+The regression test uses real bash, files and `flock`, with substitutes for
+`systemctl` and `nft`; it does not exercise a booted image or the firewall.
+It compares the fixture's fields and paths against the supplied platform
+checkout's `crates/duduclaw-sysd/src/maint_ssh/mod.rs` (`WindowFile`, `STATE_DIR`,
+`KEY_DIR`, `WINDOW_FILE`). Run in a disposable Linux container as root:
+
+```sh
+docker run --rm --network none \
+  -v "$PWD:/repo:ro" -v "$PWD/../DuDuClaw:/platform:ro" \
+  python:3.12-slim python3 /repo/scripts/tests/maint-ssh-close.py --platform-root /platform
+```
+
+The platform checkout must include the maintenance SSH implementation.
+
 A/B image builds stop at `do_rootfs` if `DUDUCLAW_MIN_ROLLBACK_VERSION` is
 empty (no platform guards). With it set, as in v0.4.0, A/B updates install
 from the root-owned `/data/system/updates`. `/data` is mounted `nosuid,nodev`.

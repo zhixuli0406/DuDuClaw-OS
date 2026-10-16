@@ -21,6 +21,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 ### Removed
 - **官網的吉祥物與裝飾動畫**：緋紅摺紙貓（hero inline SVG、CTA 背景貓、QR 中央的貓）、3D 貓（`assets/js/cat3d/`、`assets/data/cat-panels.json`、`assets/vendor/ogl.mjs`）、走路貓（`assets/js/catwalk/`、`assets/js/hero-cat.js`）、驗收頁 `website/lab/`、hero 的 WebGL 色塊（`assets/js/hero-shader.js`）、影子工作區的粒子凍結示範（`assets/js/freeze-demo.js`）、捲動進度條、磁吸按鈕與截圖傾斜效果，以及 `assets/brand/` 的舊 logo 與 favicon（`duduclaw-cat.svg`、`duduclaw-mark-circle.svg`、`duduclaw-tile.svg`、`favicon.svg`、`mark-{16,32,64,512}.png`、`cat-512.png`）和文件站的 `src/assets/duduclaw-mark-circle.svg`。C1 規範不留吉祥物動畫，也不用漸層與光暈。`scripts/build-site.sh` 移除刪 `lab/` 的步驟。
 
+### Fixed
+- **下載頁的升級說明寫錯版本**：狀態卡寫「從 v0.4.0 經 A/B 更新升上來…還沒驗證」，實際未驗證的是從 v0.3.0 升到 v0.4.0（首頁與 v0.4.0 的 CHANGELOG 都這樣寫），改正。
+
 ## [0.4.0] - 2026-10-16 — gateway 改用一般帳號×rootless Podman×SSH 預設關閉（內嵌平台 v1.73.4）
 
 gateway 不再以 root 執行（uid 1000 `duduclaw`），容器改用 rootless Podman，`duduclaw-sysd` 只接受 gateway 主行程並拒絕回退到 gateway 以 root 執行的映像，系統更新改由 sysd 以 root 驗證簽章，SSH 預設關閉、基礎版也有防火牆。實測範圍：qemux86-64 的 `duduclaw-image-appliance-test` 在 GCP builder 的 QEMU（TCG，無 KVM）上跑兩輪驗證（`wiki/reports/rootless-verification/2026-10-15.md`），第二輪 36 項中 35 項通過，唯一未過的是平台 doctor 的標題文字（容器功能已正確停用，標題仍寫 PASS）。**尚未驗證**：從 v0.3.0 經 A/B 更新升到 0.4.0 的路徑（資料擁有權遷移、回退清理）、需要 LLM 憑證的任務沙箱／電腦操作／Discovery 完整流程、Windows VM（需要 KVM）、真機的 Wi-Fi 與音訊、genericx86-64 開機。Secure Boot、dm-verity、TPM2 在發布映像上仍未啟用。

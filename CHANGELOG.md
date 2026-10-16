@@ -7,6 +7,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Added
+- **官網的 SEO／GEO 檔案**（`website/`）：兩頁加上 `robots` meta、canonical 與 hreflang（`zh-TW`、`x-default`）；首頁加 JSON-LD（`Organization` 為 Dudu Technology Ltd.／嘟嘟數位科技有限公司，`SoftwareApplication` 寫 v0.4.0、pre-GA、所有驗證在 QEMU、Apache-2.0），下載頁加 `BreadcrumbList`。新增 `robots.txt`（明列允許 GPTBot、ClaudeBot、PerplexityBot、Google-Extended 等 AI 爬蟲，列出 `sitemap.xml` 與文件站的 `docs/sitemap-index.xml`）、`sitemap.xml`、`llms.txt` 與 `llms-full.txt`，內容取自兩頁現有文案與 `site.js` 的 `RELEASE`。這組檔案原本寫在 #15 的分支上（v0.3.0 時的內容），#15 關閉沒有合併，正式站的 `/robots.txt`、`/llms.txt` 一直是 404；這次在 C1 版面上重做，版本與公司名稱改成現況。`scripts/build-site.sh` 組完 `_site/` 會檢查這四個檔案都在。`deploy/cloudrun/mime.types` 的 `.xml` 改送 `application/xml`，`nginx.conf` 加 `charset utf-8`，`.txt` 送 `text/plain; charset=utf-8`。`website/README.md` 補上 SEO 一節與出新版時要改的地方。
+
 ### Changed
 - **官網與文件站換成公司的 C1 視覺**（`website/`、`docs-site/`）：米白底、海軍藍文字、琥珀色條（4px）、細線分隔、Avenir Next／Nunito Sans；深淺兩種主題都照 C1 色票（深色 `#0B1E33`）。logo 改成 C1 貓 mark 加文字「DuDuClaw OS」，inline SVG 的 ink 層在深色底轉米白；頁尾加公司 mono mark 與「Dudu Technology Ltd. · 嘟嘟數位科技有限公司 · 統編 94139082」及公司隱私權政策、服務條款連結。favicon（`favicon.svg`／`favicon.ico`）、apple-touch-icon、manifest 圖示與 `og:image` 換成 Codex 的 C1 檔案；`og:image` 原本是 v0.2.0 的 `home-dark.png` 截圖，改為由 `final-duduclaw-os-social.png` 裁成 1200×630 的 `assets/brand/og.png`。首頁 hero 右側由吉祥物改為 v0.2.0 Launcher 的實拍局部（新增 `launcher-mobile` 三種格式），圖說與桌面圖集上方都標明是 v0.2.0 畫面、v0.3.0 尚未重拍。下載頁 QR code 中央的貓換成 C1 mark，QR 模組路徑逐位元組不變，headless Chrome 截圖後以 jsQR 在 1x／2x、淺色／深色都解出原本的 v0.3.0 ISO 網址。文件站 Starlight 的 logo、hero 圖與 favicon 一起換，程式碼區塊兩種主題都是海軍藍底。影子工作區示意圖的圖說配合新配色，把「藍色箭頭／黃色方形游標」改成「一般箭頭／琥珀色方形游標」。文案其餘不動。`deploy/cloudrun/mime.types` 補 `webmanifest`。`website/README.md`、`docs-site/README.md` 同步。
 

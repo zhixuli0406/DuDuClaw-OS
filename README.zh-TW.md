@@ -111,6 +111,8 @@ dd if=<iso> of=/dev/<usb> bs=4M conv=fsync    # 或用 balenaEtcher
 
 目標機用 UEFI 開機，**Secure Boot 關閉**（截至 v0.4.0，發布映像仍未簽章；簽章版才會在首次開機自動 enroll 金鑰）。從 USB 開機進圖形安裝精靈，選目標 SSD 安裝；重開機後就是 A/B UKI + systemd-boot 系統，用同一區網的瀏覽器開後台。
 
+**尚未發布的安裝器修正**：開發版原始碼在解壓、進度管線或寫碟失敗時會停止，完整串流與同步成功後才報 100%。失敗可能留下部分寫入的磁碟，請重新安裝後再從該磁碟開機。host 回歸測試已過；重新建置與兩版正式 ISO 的真空白磁碟安裝仍待驗證。見[安裝器測試](appliance/tests/installer/README.md)。
+
 **整碟映像（桌面版：桌面＋應用程式＋出貨硬化）**
 
 ```bash

@@ -112,6 +112,19 @@ evidence from the two QEMU rounds on the qemux86-64 test image:
 | `dropbear.socket` / `dropbear@.service` (next image) | per-connection server, drops to `duduclaw-maint` after auth | off by default; started by `duduclaw-sysd` for a maintenance window. Drop-ins `60-duduclaw-maint.conf`: `-G duduclaw-maint -D /run/duduclaw-maint-ssh -c /usr/libexec/duduclaw/maint-shell -s -j -k -w`, host key `/data/system/dropbear/dropbear_ed25519_host_key` (made by `dropbearkey.service` on `/data`, deleted by factory reset), `IPAddressDeny=any`, `ProtectProc=invisible`, `ProtectSystem=strict`, `BindsTo=duduclaw-sysd.service` on both units. `duduclaw-sysd` falls back on a PID 1 timer running `/usr/libexec/duduclaw/maint-ssh-close` (root) to close a window it could not close itself; the script atomically replaces `/data/system/maint-ssh/last-close.json` (root 0700 dir, temp file + rename) and appends sysd's close-record shape (trigger `fallback_timer`) to `/data/system/maint-ssh-audit.log` under the same `flock` on `<file>.lock` (root 0600, 10 s bound), never rotates, and refuses to write if the log or lock is not a root-owned 0600 regular file. The build checks the `ExecStart` token by token, that no host key is baked in, and that the kernel has `CONFIG_CGROUP_BPF` |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
 
+For the next image, the factory-reset oneshot is ordered before
+`duduclaw-sysd.service` and `dropbearkey.service`. This prevents sysd from
+writing old window/audit data back after the wipe, and prevents a completed
+host-key generation from losing its key to a concurrent wipe. These are
+ordering dependencies only; a failed reset does not block the two services
+or the dashboard from starting.
+
+Run `python3 scripts/tests/maint-reset-order.py` to check the explicit
+ordering graph in the layer's unit sources, including cycle and failure
+dependency checks. This is a static regression test; it does not include
+upstream units or generated systemd dependencies, and does not replace an
+image build or QEMU boot.
+
 The fallback close script reads the platform sysd's persistent
 `/data/system/maint-ssh/window.json`, never a file in the tmpfs key directory.
 It leaves that state file unchanged so sysd can replay the journal from its

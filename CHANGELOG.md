@@ -33,6 +33,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **官網的吉祥物與裝飾動畫**：緋紅摺紙貓（hero inline SVG、CTA 背景貓、QR 中央的貓）、3D 貓（`assets/js/cat3d/`、`assets/data/cat-panels.json`、`assets/vendor/ogl.mjs`）、走路貓（`assets/js/catwalk/`、`assets/js/hero-cat.js`）、驗收頁 `website/lab/`、hero 的 WebGL 色塊（`assets/js/hero-shader.js`）、影子工作區的粒子凍結示範（`assets/js/freeze-demo.js`）、捲動進度條、磁吸按鈕與截圖傾斜效果，以及 `assets/brand/` 的舊 logo 與 favicon（`duduclaw-cat.svg`、`duduclaw-mark-circle.svg`、`duduclaw-tile.svg`、`favicon.svg`、`mark-{16,32,64,512}.png`、`cat-512.png`）和文件站的 `src/assets/duduclaw-mark-circle.svg`。C1 規範不留吉祥物動畫，也不用漸層與光暈。`scripts/build-site.sh` 移除刪 `lab/` 的步驟。
 
 ### Fixed
+- **原廠重設與維修 SSH 啟動的競態**：重設資料的 oneshot 現在排在 `duduclaw-sysd.service` 與 `dropbearkey.service` 之前，避免 sysd 在清除後寫回舊維修紀錄，或主機金鑰先產生卻又被重設刪除。只增加啟動排序，不要求重設成功才啟動這兩項服務，重設失敗時仍可進後台排查。新增 `scripts/tests/maint-reset-order.py`，從實際 unit 原始碼檢查排序圖、循環與失敗依賴；這是靜態回歸測試，尚未以映像建置或 QEMU 開機驗證。
 - **維修 SSH 後備關窗腳本讀錯視窗狀態路徑**：`maint-ssh-close` 改讀 sysd 實際寫入的 `/data/system/maint-ssh/window.json`，不再從 tmpfs 金鑰目錄找，讓關窗稽核與 `last-close.json` 保留正確的視窗 ID、指紋、游標與計數。狀態檔留給 sysd 重播 journal；即使重開機後金鑰消失，仍記錄持久視窗的關閉；沒有持久視窗也沒有金鑰時，不新增稽核紀錄、不覆寫最後關閉原因。新增 `scripts/tests/maint-ssh-close.py` 與完整 `WindowFile` 範例，核對平台目前的欄位與路徑，並測試上述行為；Linux 容器使用真正的 Bash、檔案與 flock，systemctl／nft 為替身，尚未建置映像或在 QEMU 開機驗證。
 - **下載頁的升級說明寫錯版本**：狀態卡寫「從 v0.4.0 經 A/B 更新升上來…還沒驗證」，實際未驗證的是從 v0.3.0 升到 v0.4.0（首頁與 v0.4.0 的 CHANGELOG 都這樣寫），改正。
 

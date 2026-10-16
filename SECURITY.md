@@ -164,7 +164,13 @@ hardware.
   a host key is baked into the image. The host key is one ed25519 key in
   `/data/system/dropbear`, generated on the device (the desktop edition's
   root is read-only) and deleted by a factory reset together with the
-  maintenance SSH audit log. If sysd does not close a window in time, a
+  maintenance SSH audit log and persistent window state. The reset oneshot
+  is ordered before sysd's startup replay and host-key generation, so those
+  services cannot race the wipe by restoring old audit data or generating a
+  key that the wipe then removes. This is ordering only: a failed reset is
+  still reported while the dashboard remains reachable. The ordering has
+  static regression coverage; it has not been verified in a built image or
+  a QEMU boot. If sysd does not close a window in time, a
   timer in PID 1 runs a root script that deletes the key, stops dropbear,
   removes port 22 from the firewall and writes the audit record. Residual
   risk: the script tries that audit write once. If the audit file or its

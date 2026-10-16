@@ -70,6 +70,16 @@ cp -R "$REPO_ROOT/website/." "$SITE_OUT/"
 mkdir -p "$SITE_OUT/docs"
 cp -R "$DOCS_DIR/dist/." "$SITE_OUT/docs/"
 
+# Crawler-facing files live in website/ and are copied verbatim above. Fail
+# loudly if one goes missing (for example dropped in a merge) instead of
+# deploying a site whose robots.txt or llms.txt returns 404.
+for f in robots.txt sitemap.xml llms.txt llms-full.txt; do
+  if [[ ! -s "$SITE_OUT/$f" ]]; then
+    echo "build-site: $f missing from $SITE_OUT (expected website/$f)" >&2
+    exit 1
+  fi
+done
+
 # GitHub Pages must not run Jekyll over the output (Starlight emits
 # directories such as _astro/ that Jekyll would drop).
 touch "$SITE_OUT/.nojekyll"

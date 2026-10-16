@@ -1,0 +1,67 @@
+# DuDuClaw OS
+
+> 內嵌 DuDuClaw AI 員工平台與交辦桌面的 x86-64 Linux 作業系統映像，把一台電腦設成 AI 員工的值班機。目前版本 v0.4.0（2026-10-16 發布），pre-GA：所有驗證都在 QEMU 完成，尚未在真實 x86-64 硬體上開機。
+
+- 官網: https://os.duduclaw.dudustudio.monster/
+- 下載: https://os.duduclaw.dudustudio.monster/download.html
+- 文件: https://os.duduclaw.dudustudio.monster/docs/
+- 原始碼: https://github.com/zhixuli0406/DuDuClaw-OS
+- 開發者: Dudu Technology Ltd.（嘟嘟數位科技有限公司，https://www.dudustudio.monster/）
+- 授權: Apache-2.0（內附元件各有授權）
+
+## 這是什麼
+
+在桌面輸入交辦事項、追蹤進度，再由人處理需要核准的操作；管理後台也能從區網瀏覽器打開（http://<機器 IP>:18789）。按 Super+K 叫出交辦列。桌面版內建交辦列與 AI 工具鏈，共駕開啟後可用影子工作區讓 AI 操作應用程式，人保留接手（Super+Enter 交還）與急停（Super+Esc）。
+
+v0.4.0 內嵌 DuDuClaw 平台 1.73.4（並非平台最新版本的全部功能），基座為 Yocto Project 6.0「wrynose」與 Linux 6.18。OS 版號與平台版號各自獨立。
+
+## 現況（照實標註）
+
+- 0.4.0 屬於 bring-up 階段，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動，建議在可重裝的測試環境試用。
+- 發布前的驗證：QEMU 版整碟映像在 QEMU 開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）。安裝精靈這一版沒有跑，跑完整段安裝的紀錄停在 v0.1.0 與 2026-09-06 的開發版。桌面版測試映像跑了兩輪 rootless 驗證，第二輪 36 項過 35 項。
+- 真機目標 duduclaw-genericx86-64 這一版只建置、沒有開機；目前沒有真機開機數據。
+- 尚未驗證：從 v0.3.0 經 A/B 更新升級、需要 LLM 憑證的任務沙箱／電腦操作／Discovery 完整流程、Windows 虛擬機、真實 DRM 硬體與雙螢幕。
+- 共駕功能已編譯進映像但預設關閉，每個 agent 各自開啟；凍結與接手只在早期開發映像驗證過，不是這版 x86-64 發布映像。
+- v0.4.0 起 gateway 以一般帳號 duduclaw 執行，桌面版容器改用 rootless Podman。升級是單向的：開過 v0.4.0 的裝置不能經 A/B 更新退回 v0.3.0 或更早的版本。
+- SSH 預設關閉，只能從後台維護模式打開連接埠；映像上目前沒有能透過 SSH 登入的帳號。
+
+## 兩種版本
+
+- 桌面版：A/B 更新鏈與桌面殼、唯讀 root 與防火牆、Chromium 與 LibreOffice 離線一鍵安裝、注音輸入法（fcitx5）與 app 相容層、十套 AI CLI（包含 Claude Code、Codex、Grok Build、Qwen Code）與 llama.cpp 本機推理服務。AI CLI 需要使用者自己的廠商帳號或 API 金鑰；本機模型需另行下載。
+- 基礎版：同樣的 A/B 佈局與桌面殼加 gateway 管理後台，沒有應用層、app 相容層、AI CLI 與 llama.cpp，也沒有唯讀 root；防火牆與桌面版相同，SSH 預設關閉。屬於 bring-up 產物。
+
+## 下載資產（v0.4.0）
+
+六個資產都直連 GitHub Release，每個附 .sha256 與 .minisig，同一把 minisign 公鑰（v0.1.0 起都是這一把）：RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n
+
+- duduclaw-os-installer-desktop-duduclaw-genericx86-64-v0.4.0.iso（桌面版安裝器 ISO，真機目標，本版未開機）
+- duduclaw-os-installer-desktop-duduclaw-qemux86-64-v0.4.0.iso（桌面版安裝器 ISO，QEMU 開到 live 環境，未跑安裝）
+- duduclaw-os-duduclaw-genericx86-64-v0.4.0.wic.zst（桌面版整碟映像，真機目標，本版未開機）
+- duduclaw-os-duduclaw-qemux86-64-v0.4.0.wic.zst（桌面版整碟映像，QEMU 開機測試通過）
+- duduclaw-os-installer-duduclaw-genericx86-64-v0.4.0.iso（基礎版安裝器 ISO，真機目標，本版未開機）
+- duduclaw-os-installer-duduclaw-qemux86-64-v0.4.0.iso（基礎版安裝器 ISO，QEMU 開到 live 環境，未跑安裝）
+
+整碟映像用 --long=27 壓縮，解壓指令是 zstd -d --long=27。Release 頁：https://github.com/zhixuli0406/DuDuClaw-OS/releases/tag/v0.4.0
+
+## 硬體條件
+
+以下是建置目標與規劃規格，不是真機相容認證。
+
+- x86-64 CPU 且支援 AVX2（x86-64-v3）：Intel Haswell（2013 年）以後、Intel N100／N200／N305、AMD Excavator（2015 年）以後與 Zen 全系。
+- 不支援 arm64：Apple Silicon、樹莓派與 ARM 迷你主機都不能用。
+- UEFI 開機；純 legacy BIOS 不在支援範圍。開機前要在韌體裡關閉 Secure Boot。
+- SSD（A/B 雙槽佈局同時放兩份系統）。規劃最低 4 GB 記憶體與 64 GB SSD，建議 8 GB 與 128 GB。
+- 不需要獨立顯示卡；QEMU 上的桌面走 llvmpipe 軟體渲染，真機 GPU 加速還沒驗證。
+
+## 資料與安全界線
+
+- OS 設定、AI CLI 憑證與本機模型存於本機 /data/duduclaw，系統更新不會清掉。使用雲端模型時，提示、檔案內容與工具結果等執行所需資料可能傳給該供應商。
+- 出貨即有：A/B 原子更新與回滾（先前的映像實測過套用與手動回滾，v0.4.0 的升級路徑還沒驗證）、桌面版唯讀 root、發布產物 minisign 簽章、兩版都有預設拒絕的防火牆。
+- 已接好但 v0.4.0 未啟用：Secure Boot 自簽與雙簽 UKI、dm-verity 逐塊驗證、TPM2 加 LUKS 磁碟金鑰，都屬於建置 overlay 選項。
+- 接手、急停與核准機制不等於完整隔離，也不是供應商的資料保護保證。
+
+## 相關產品
+
+- DuDuClaw（可部署在現有電腦的 AI 員工平台）: https://duduclaw.dudustudio.monster/
+- Vettalon（多模型對抗式資安稽核器）: https://vettalon.dudustudio.monster/
+- DuDuClaw 的企業導入、培訓與支援由總經銷未來企業股份有限公司提供: https://www.futurecorp.tw/

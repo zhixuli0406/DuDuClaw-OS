@@ -1,0 +1,29 @@
+# robots.txt — DuDuClaw OS — https://os.duduclaw.dudustudio.monster/
+User-agent: *
+Allow: /
+
+# AI / GEO crawlers are welcome to read and cite this site.
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: Claude-Web
+Allow: /
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: anthropic-ai
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+User-agent: CCBot
+Allow: /
+User-agent: Bytespider
+Allow: /
+
+Sitemap: https://os.duduclaw.dudustudio.monster/sitemap.xml
+# Starlight generates the docs sitemap at build time (SITE_URL).
+Sitemap: https://os.duduclaw.dudustudio.monster/docs/sitemap-index.xml

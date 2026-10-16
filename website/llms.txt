@@ -1,0 +1,34 @@
+# DuDuClaw OS
+
+> 內嵌 DuDuClaw AI 員工平台與交辦桌面的 x86-64 Linux 作業系統映像，把一台電腦設成 AI 員工的值班機。目前版本 v0.4.0（2026-10-16 發布），pre-GA：所有驗證都在 QEMU 完成，尚未在真實 x86-64 硬體上開機。
+
+開發者：Dudu Technology Ltd.（嘟嘟數位科技有限公司，https://www.dudustudio.monster/）。授權：Apache-2.0。v0.4.0 內嵌 DuDuClaw 平台 1.73.4，基座為 Yocto Project 6.0「wrynose」與 Linux 6.18。
+
+## 現況（照實標註）
+
+- 0.4.0 屬於 bring-up 階段，1.0.0 才是第一個 GA 版本；介面與設定格式都還可能變動。
+- 發布前的驗證：QEMU 版整碟映像在 QEMU 開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）。安裝精靈這一版沒有跑；真機目標 duduclaw-genericx86-64 只建置、沒有開機。
+- 尚未驗證：從 v0.3.0 經 A/B 更新升級、需要 LLM 憑證的完整流程、Windows 虛擬機、真機的 GPU 與雙螢幕。
+- 發布映像沒有啟用 Secure Boot 簽章、dm-verity 與 TPM；開機前要在韌體裡關閉 Secure Boot。
+- v0.4.0 起 gateway 以一般帳號 duduclaw 執行，升級是單向的（開過 v0.4.0 的裝置不能經 A/B 更新退回 v0.3.0）；SSH 預設關閉。
+
+## 主要頁面
+
+- [首頁](https://os.duduclaw.dudustudio.monster/): 用途、pre-GA 狀態、桌面截圖、版本與硬體、FAQ
+- [下載 v0.4.0](https://os.duduclaw.dudustudio.monster/download.html): 六個資產、SHA-256 與 minisign 驗簽、燒錄步驟
+- [文件站](https://os.duduclaw.dudustudio.monster/docs/): OS 與平台文件，繁體中文、English、日本語
+- [OS README](https://os.duduclaw.dudustudio.monster/docs/os/readme/): 專案總覽、映像內容與建置方式
+- [CHANGELOG](https://os.duduclaw.dudustudio.monster/docs/os/changelog/): 每個版本的變更與已知問題
+- [AI runtimes 指南](https://os.duduclaw.dudustudio.monster/docs/os/guides/ai-runtimes/): 桌面版內附的 AI CLI 與授權方式
+- [硬體需求](https://os.duduclaw.dudustudio.monster/docs/guides/hardware-requirements/): CPU、韌體與儲存條件
+- [原始碼](https://github.com/zhixuli0406/DuDuClaw-OS): GitHub repository
+- [Releases](https://github.com/zhixuli0406/DuDuClaw-OS/releases): 映像、.sha256 與 .minisig
+
+## 相關產品
+
+- [DuDuClaw](https://duduclaw.dudustudio.monster/): 可部署在現有電腦的 AI 員工平台
+- [Vettalon](https://vettalon.dudustudio.monster/): 多模型對抗式資安稽核器
+
+## Optional
+
+- [llms-full.txt](https://os.duduclaw.dudustudio.monster/llms-full.txt): 版本差異、下載資產、硬體條件與安全界線的完整說明

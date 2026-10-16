@@ -13,6 +13,10 @@ website/
 ├── favicon.ico             Codex 的 duduclaw-os app-icon.ico
 ├── apple-touch-icon.png    180×180，由 duduclaw-os avatar-1024.png 縮出
 ├── site.webmanifest        manifest，圖示指向 assets/brand/icon-192／512.png
+├── robots.txt              允許所有爬蟲（含 AI 爬蟲），列出兩份 sitemap
+├── sitemap.xml             首頁、下載頁與 /docs/；文件站另有 Starlight 產生的 docs/sitemap-index.xml
+├── llms.txt                給 LLM 讀的站點摘要（llmstxt.org 格式）
+├── llms-full.txt           llms.txt 的完整版：版本差異、資產、硬體、安全界線
 ├── .nojekyll               讓 GitHub Pages 原樣輸出，不跑 Jekyll
 ├── README.md               這份說明
 └── assets/
@@ -23,6 +27,24 @@ website/
 ```
 
 所有連結都是相對路徑，所以放在網域根目錄或 GitHub Pages 子路徑都能正常運作。
+例外是給搜尋引擎與 AI 爬蟲的部分，一律寫正式網域的絕對網址：`og:image`、canonical、hreflang、
+JSON-LD，以及 `robots.txt`、`sitemap.xml`、`llms.txt`、`llms-full.txt`。GitHub Pages 備援站因此也會把 canonical 指回正式站。
+
+## SEO 與 GEO
+
+- 兩頁都有 `<meta name="robots" content="index, follow">`、canonical 與 hreflang（`zh-TW` 加 `x-default`，目前只有繁中一種語言）。
+- 首頁的 JSON-LD 是 `@graph`：`Organization`（Dudu Technology Ltd.／嘟嘟數位科技有限公司）與 `SoftwareApplication`
+  （版本、pre-GA 與 QEMU 驗證範圍、Apache-2.0）。下載頁只放 `BreadcrumbList`。
+- `robots.txt` 明列 GPTBot、ClaudeBot、PerplexityBot、Google-Extended 等 AI 爬蟲為允許，並列出 `sitemap.xml` 與文件站的 `docs/sitemap-index.xml`。
+- `llms.txt`／`llms-full.txt` 的事實只能取自兩頁現有文案與 `site.js` 的 `RELEASE`，不另外加宣稱。
+- `scripts/build-site.sh` 組完 `_site/` 會檢查這四個檔案都在，缺一個就失敗。
+- Cloud Run 的 nginx 以 `text/plain; charset=utf-8` 送 `.txt`、`application/xml; charset=utf-8` 送 `.xml`
+  （`deploy/cloudrun/mime.types` 與 `nginx.conf` 的 `charset`）；沒有 charset 時瀏覽器可能把中文的 llms.txt 解成亂碼。
+- 改完 JSON-LD 跑一次下面這行，每個 `application/ld+json` 區塊都要能解析：
+
+```bash
+python3 -c 'import re,json,sys; n=[json.loads(b) for f in sys.argv[1:] for b in re.findall(r"<script type=\"application/ld\+json\">(.*?)</script>", open(f).read(), re.S)]; print(len(n), "JSON-LD blocks ok")' website/index.html website/download.html
+```
 
 ## 品牌與視覺（C1，2026-10-16）
 
@@ -135,7 +157,14 @@ python3 -m http.server 8000
 - 誠實狀態卡：驗證範圍、Secure Boot、GA 進度如果有變就一起改
 - 信任鏈區塊：某項保護從「已接好、未啟用」變成「出貨即有」時要搬過去
 
-**4. 全站搜一次舊版本號**
+**4. SEO 檔案**
+
+- `index.html` 的 JSON-LD：`softwareVersion` 與 `description` 裡的版本、驗證範圍
+- `download.html` 的 JSON-LD `BreadcrumbList` 第二項名稱（「下載 v<版本>」）
+- `llms.txt`、`llms-full.txt`：版本、發布日、內嵌平台版、驗證範圍、六個資產檔名
+- `sitemap.xml` 首頁與下載頁的 `<lastmod>`
+
+**5. 全站搜一次舊版本號**
 
 ```bash
 grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
@@ -143,7 +172,7 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 
 確認沒有漏掉的字串（刻意保留的舊版字樣：截圖說明與 alt、回舊版卡片、公鑰「舊版也是這一把」），接著在本機起站點過一次六個下載連結。
 
-**5. 下載頁的 QR code**
+**6. 下載頁的 QR code**
 
 `download.html` 的 QR code 編的是預設推薦資產（桌面版安裝器 ISO、真機目標）的直連網址，換版一定要重產。
 格式：version 11、錯誤修正 H、segno 自動選 mask，`qr-dots` 只畫一般模組（跳過三個定位圖案、六個對齊圖案與
@@ -192,7 +221,7 @@ scripts/deploy-cloudrun.sh              # 建置 _site/ 並以 deployer SA 部�
 SKIP_BUILD=1 scripts/deploy-cloudrun.sh # 沿用現有 _site/
 ```
 
-- 容器定義在 `deploy/cloudrun/`（`Dockerfile`、`nginx.conf` 含 CSP 與快取標頭、`mime.types` 補 `mjs`／`avif`／`wasm`）。
+- 容器定義在 `deploy/cloudrun/`（`Dockerfile`、`nginx.conf` 含 CSP、快取標頭與 `charset utf-8`、`mime.types` 補 `mjs`／`avif`／`wasm`，`.xml` 送 `application/xml`）。
   `deploy/cloudrun/_site/` 是部署時的暫存副本，已 gitignore。
 - 文件站的絕對網址由 `SITE_URL` 決定（deploy 腳本預設帶正式網域）；`og:image` 已寫成正式網域的絕對網址。
 - **一次性設定（已完成 2026-09-09）**：Cloud Run domain mapping `os.duduclaw.dudustudio.monster → duduclaw-os-site`

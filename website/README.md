@@ -9,9 +9,9 @@
 website/
 ├── index.html              首頁
 ├── download.html           v0.4.0 下載頁（六個資產、驗簽、燒錄）
-├── favicon.svg             C1 貓 mark（深色瀏覽器介面下 ink 層轉米白）
-├── favicon.ico             Codex 的 duduclaw-os app-icon.ico
-├── apple-touch-icon.png    180×180，由 duduclaw-os avatar-1024.png 縮出
+├── favicon-32／48.png      透明 C1 貓 mark（原始 PNG）
+├── favicon.ico             由透明 icon-16～256.png 封裝，未使用帶底色的 app-icon.ico
+├── apple-touch-icon.png    180×180，由透明 duduclaw-os icon-512.png 縮出
 ├── site.webmanifest        manifest，圖示指向 assets/brand/icon-192／512.png
 ├── robots.txt              允許所有爬蟲（含 AI 爬蟲），列出兩份 sitemap
 ├── sitemap.xml             首頁、下載頁與 /docs/；文件站另有 Starlight 產生的 docs/sitemap-index.xml
@@ -58,14 +58,13 @@ python3 -c 'import re,json,sys; n=[json.loads(b) for f in sys.argv[1:] for b in 
 
 | 檔案 | 來源 | 用途 |
 |---|---|---|
-| `duduclaw-os-mark.svg` | `svg/duduclaw-os-mark.svg`（與 DuDuClaw mark 相同） | 原檔備查；頁面用的是 inline `<symbol id="mark-os">` |
-| `duduclaw-os-mark-reverse.svg` | 同上，ink 層改米白 | 深色底用 |
-| `company-mark-mono.svg` | `svg/company-mark-mono.svg` | 原檔備查；頁尾用 inline `<symbol id="mark-company">` |
-| `og.png` | `png/final-duduclaw-os-social.png` | 1200×630 社群卡：先縮成 1260×630，再拿掉文字區與貓之間 60px 的空白欄，左右邊距維持一致 |
-| `icon-192.png`、`icon-512.png` | `png/duduclaw-os/avatar-1024.png` | manifest 圖示 |
+| `duduclaw-os-mark.png` | `png/duduclaw-os/icon-color-native.png` | 依 alpha 範圍裁去外圍透明空間；保留原始像素與負空間，用於導覽、頁尾與 QR 中央 |
+| `company-mark.png` | `png/company/icon-color-native.png` | 公司頁尾，所有主題都使用原始彩色 PNG |
+| `og.png` | `png/final-duduclaw-os-social.png` | 1200×630 社群卡，沿用既有裁切 |
+| `icon-192.png`、`icon-512.png` | `png/duduclaw-os/icon-512.png` | 透明 manifest 圖示 |
 
-頁面上的 logo 是 inline SVG：`<svg class="brand-mark"><use href="#mark-os"></use></svg>`，
-ink 層填 `var(--logo-ink)`（淺色海軍藍、深色米白），琥珀層固定不變。「OS」以文字寫在 wordmark 裡，貓不重畫。
+頁面上的 Logo 使用原始產出的透明 PNG，沒有 SVG 描圖或幾何重建。深淺主題都保留原色，不以白色、單色、CSS filter 或 SVG 替代。「OS」以文字寫在 wordmark 裡。
+Favicon 同樣固定使用原色。Favicon 的 PNG、ICO、Apple 圖示都有 alpha，從透明 `icon-*.png` 匯出；不可改用有底色的 avatar 或 app-icon.ico。head 與 manifest 的 `v=c1-color-png` 用來更新舊圖示快取。舊 SVG 僅留存備查，頁面不再引用。
 
 舊的緋紅摺紙貓、3D 貓、走路貓、`lab/` 驗收頁、hero WebGL 色塊、影子工作區的粒子示範與捲動進度條都已移除
 （C1 規範：不留吉祥物動畫、不用漸層與光暈、動態只用 150–200ms 的透明度與位移）。要找回舊實作請看 git 歷史。
@@ -179,7 +178,7 @@ grep -rn "v0\.2\.0" website/   # 換成上一版的版本號
 中間 `[28,40]×[28,40]` 的 logo 區，座標含 4 格 quiet zone），每個點寫成 `M<x> <y>h0`／`m<dx> <dy>h0`。
 用 segno 1.6.6 照這個規則重產 v0.2.0 的網址，結果與原本的 path 逐位元組相同，v0.3.0 就是照同一規則產的。v0.4.0 換版時先用同一支腳本重產 v0.3.0 的網址，確認與頁面上的 path 逐位元組相同（9979 個字元），再產 v0.4.0。
 
-中間的 logo 區放 C1 貓 mark（白色圓角方塊上的 `#mark-os`，ink 固定海軍藍），QR 本體固定白底海軍藍點，不跟主題反轉。
+中間的 logo 區放 C1 貓 mark（白色圓角方塊上的 `assets/brand/duduclaw-os-mark.png`），QR 本體固定白底海軍藍點，不跟主題反轉。
 `.qr-frame` 維持 200px 寬、10px 內距：2026-10-16 實測 8px 內距在 1x 螢幕上 jsQR 解不出來，10px 在 1x 與 2x、淺色與深色都解得出 v0.3.0 的 ISO 網址。換成 v0.4.0 後（2026-10-16）以 headless Chrome 截整頁、jsQR 1.4.0 解碼，1x／2x、淺色／深色四張都解出 v0.4.0 的 ISO 網址。
 改 QR 的尺寸或內距後，用 headless Chrome 截 `.qr-frame`，再用 jsQR 解一次確認。
 

@@ -113,6 +113,19 @@ evidence from the two QEMU rounds on the qemux86-64 test image:
 | `duduclaw-maint-helper.socket` / `duduclaw-maint-helper@.service` (next image) | root, one instance per connection | the maintenance menu's only root entry point (no polkit, no sudo): `/run/duduclaw-maint-helper.sock` root:duduclaw-maint 0660, `Accept=yes`, at most 4 connections; the instance runs `/usr/libexec/duduclaw/maint-helper` (platform `duduclaw-maint-tools`; checks the peer is uid 4800, accepts six tokens: gateway/model logs with or without follow, `restart-gateway`, `restart-model`, rate-limited) with an empty `CapabilityBoundingSet=`, `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectProc=invisible`, `PrivateNetwork`, `IPAddressDeny=any`, `RestrictAddressFamilies=AF_UNIX`, `SystemCallFilter=@system-service`, the `ProtectKernel*`/`ProtectControlGroups`/`ProtectClock`/`ProtectHostname`/`PrivateDevices`/`ProtectHome`/`PrivateTmp`/`RestrictNamespaces`/`LockPersonality`/`MemoryDenyWriteExecute` set, `RuntimeMaxSec=3600`, writable only `RuntimeDirectory=duduclaw-maint-helper` (0700, kept between instances; the helper keeps its restart rate limit there), `CollectMode=inactive-or-failed`, its own slice (not `system-dropbear.slice`), stderr to the journal |
 | `duduclaw-kiosk.service` | `duduclaw-kiosk` | comp's shell-control/codrive sockets (0660) and codrive token (0640) belong to group `duduclaw-ipc` (members: the kiosk user and `duduclaw`); the gateway sets volume through comp's `get_audio`/`set_audio`/`set_audio_output` verbs, PipeWire sockets stay 0600 |
 
+For the next image, the factory-reset oneshot is ordered before
+`duduclaw-sysd.service` and `dropbearkey.service`. This prevents sysd from
+writing old window/audit data back after the wipe, and prevents a completed
+host-key generation from losing its key to a concurrent wipe. These are
+ordering dependencies only; a failed reset does not block the two services
+or the dashboard from starting.
+
+Run `python3 scripts/tests/maint-reset-order.py` to check the explicit
+ordering graph in the layer's unit sources, including cycle and failure
+dependency checks. This is a static regression test; it does not include
+upstream units or generated systemd dependencies, and does not replace an
+image build or QEMU boot.
+
 The fallback close script reads the platform sysd's persistent
 `/data/system/maint-ssh/window.json`, never a file in the tmpfs key directory.
 It leaves that state file unchanged so sysd can replay the journal from its

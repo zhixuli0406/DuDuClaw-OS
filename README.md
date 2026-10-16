@@ -19,7 +19,18 @@ This repo is the **base-OS line**: the `meta-duduclaw/` Yocto layer (distro poli
 
 > **Status: bring-up (0.4.0, pre-GA, embedding platform v1.73.4).** The image boots and updates A/B with rollback; the trust chain is wired in the layer but, as of v0.4.0, published images still do not enable signing / verity / TPM (see Trust chain). This is not a general-availability release: the `0.x` line tracks bring-up, `1.0.0` will mark the first GA. All verification so far is under QEMU; **the image has not yet been booted on real x86-64 hardware**.
 
-**New in v0.4.0** (2026-10-16): the gateway no longer runs as root. It runs as the `duduclaw` account (uid 1000), and the desktop edition's containers (task sandbox, script sandbox, computer use, discovery) run on rootless Podman instead of root Docker; if the engine does not enforce resource limits, those features turn themselves off. `duduclaw-sysd`, the only root helper, accepts requests only from the gateway's main process and verifies OS updates itself before installing them. SSH is off by default and opens only through the dashboard's maintenance mode, and the base edition now has the same default-deny firewall as the desktop edition. Factory reset wipes data at the next boot, before any service starts. **The upgrade is one-way:** once a v0.4.0 image has booted successfully, the device cannot go back to v0.3.0 or earlier. No account can log in over SSH yet, so maintenance-mode SSH only controls the port. Full list: [CHANGELOG](CHANGELOG.md), section 0.4.0.
+**New in v0.4.0** (2026-10-16): the gateway no longer runs as root. It runs as the `duduclaw` account (uid 1000), and the desktop edition's containers (task sandbox, script sandbox, computer use, discovery) run on rootless Podman instead of root Docker; if the engine does not enforce resource limits, those features turn themselves off. `duduclaw-sysd`, the only root helper, accepts requests only from the gateway's main process and verifies OS updates itself before installing them. SSH is off by default and opens only through the dashboard's maintenance mode, and the base edition now has the same default-deny firewall as the desktop edition. Factory reset wipes data at the next boot, before any service starts. **The upgrade is one-way:** once a v0.4.0 image has booted successfully, the device cannot go back to v0.3.0 or earlier. The published v0.4.0 images have no SSH login account, so their maintenance switch only controls the port. Full list: [CHANGELOG](CHANGELOG.md), section 0.4.0.
+
+**Unreleased source:** the layer now vendors platform v1.74.0 at commit
+`c7068c508ae9ab5afc4392b58237cf86afdb9f2c`, including the keyed SSH gateway,
+privileged helper and dashboard. The CLI recipe also builds the restricted
+`maint-shell` and root `maint-helper`; the account package installs the SSH
+readiness marker. Image checks require those binaries, the account, hardened
+services and firewall, and refuse any baked-in `authorized_keys`. An Admin
+must supply one technician public key for a window of at most 24 hours;
+there is no password login or general shell. **This source candidate has not
+yet passed a Yocto image build or QEMU verification.** Published downloads
+remain v0.4.0 with platform v1.73.4. See [Security](SECURITY.md) for limits.
 
 ## Contents
 

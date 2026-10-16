@@ -7,6 +7,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Fixed
+- 官網、下載頁與三語文件站的 Logo 改用交付的透明 PNG，保留原始像素與負空間；深淺主題都保留原色，不使用白色或單色替代。公司頁尾與下載 QR 中央同步。Favicon、ICO、Apple 與 manifest 圖示改從透明 icon 匯出，停止引用 SVG 描圖與帶底色的 avatar，並加上圖示快取版本。
+
 ### Added
 - **官網的 SEO／GEO 檔案**（`website/`）：兩頁加上 `robots` meta、canonical 與 hreflang（`zh-TW`、`x-default`）；首頁加 JSON-LD（`Organization` 為 Dudu Technology Ltd.／嘟嘟數位科技有限公司，`SoftwareApplication` 寫 v0.4.0、pre-GA、所有驗證在 QEMU、Apache-2.0），下載頁加 `BreadcrumbList`。新增 `robots.txt`（明列允許 GPTBot、ClaudeBot、PerplexityBot、Google-Extended 等 AI 爬蟲，列出 `sitemap.xml` 與文件站的 `docs/sitemap-index.xml`）、`sitemap.xml`、`llms.txt` 與 `llms-full.txt`，內容取自兩頁現有文案與 `site.js` 的 `RELEASE`。這組檔案原本寫在 #15 的分支上（v0.3.0 時的內容），#15 關閉沒有合併，正式站的 `/robots.txt`、`/llms.txt` 一直是 404；這次在 C1 版面上重做，版本與公司名稱改成現況。`scripts/build-site.sh` 組完 `_site/` 會檢查這四個檔案都在。`deploy/cloudrun/mime.types` 的 `.xml` 改送 `application/xml`，`nginx.conf` 加 `charset utf-8`，`.txt` 送 `text/plain; charset=utf-8`。`website/README.md` 補上 SEO 一節與出新版時要改的地方。
 

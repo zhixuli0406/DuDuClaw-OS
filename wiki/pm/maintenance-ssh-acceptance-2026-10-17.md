@@ -15,9 +15,10 @@ The owner authorized GCP resources, actual image installation, acceptance and me
 
 | ID | Type | Evidence / completion condition | Status |
 |---|---|---|---|
-| OS26-GCP | External environment | The configured deployment SA cannot list Compute instances in the configured GCP project. Obtain an already-authorized Compute SA or owner-managed IAM configuration; never change IAM or switch identity to evade a refusal. | BLOCKED_ENV |
+| OS26-GCP | External environment | Initial deployment-identity Compute denial retained below. The owner explicitly authorized temporary IAM provisioning; API inventory, bounded builder creation and isolated dual-stack networking now work with the deployment identity. Exact private identities and resource IDs remain in ignored artifacts. | VERIFIED |
 | OS26-SOURCE | Integration | Pure #26 still embeds platform 1.73.4 and lacks maintenance tools/readiness. Candidate snapshots were generated through supported refresh scripts, tools/helper units/marker integrated, and dependency closure/source pins independently verified. Target compile remains pending. | FIXED_PENDING_VERIFY |
-| OS26-BUILD | Build | Actual kas builds of base and desktop disk images plus both installer ISOs; rootfs and kernel assertions pass. Keep logs, exit codes, layer identities, manifests and SHA-256. | OPEN |
+| OS26-BUILD | Build | Actual kas builds of base and desktop disk images plus both installer ISOs; rootfs and kernel assertions pass. Keep logs, exit codes, layer identities, manifests and SHA-256. The first real base build is running; no image success is recorded yet. | IN_PROGRESS |
+| OS26-INSTALL-STREAM | Correctness / installation | Original decompression pipelines could hide producer failure, emit 100% and continue; top-PID cancellation also left writers. PR #31 adds full pipeline status, progress capped below completion and owned process-group cancellation including startup races. Host regressions and independent review passed; actual fixed ISO/blank-disk installation remains pending. | FIXED_PENDING_VERIFY |
 | OS26-BOOT | Platform | Actual cold boot and reboot of both editions; persistent host fingerprint and effective unit/firewall settings verified. | OPEN |
 | OS26-INSTALL | Formal flow | Boot each production installer ISO, identify a newly created blank target disk, execute the shipped installer, remove ISO and boot the installed disk. Check ESP/A/B/data and first-boot behavior. | OPEN |
 | OS26-GCE | Cloud installation | Import a source-bound installed disk and boot it as a dedicated GCE guest if supported. GCP-hosted QEMU installation is separate evidence and must not be described as native GCE boot. | OPEN |
@@ -68,7 +69,7 @@ Keep raw build/serial/journal/RPC output, source manifests, artifact hashes and 
 
 Record every resource created by this run. After exporting evidence, stop its QEMU processes and delete only its own VMs, disks, custom images and temporary objects. Verify deletion through the API; stopping a VM does not remove disk charges. If cleanup is blocked, report the exact resource and outstanding action. Do not delete an existing cache or builder merely because an old runbook names it.
 
-## Current environment evidence
+## Initial environment evidence (before owner IAM authorization)
 
 2026-10-17 Asia/Taipei: `gcloud auth list` shows the configured deployment SA active. the configured-project Compute instance inventory command returned a warning that `compute.instances.list` is required; its process exit code was zero, so the warning must not be treated as an empty successful inventory. No Compute resources were created, modified or deleted.
 
@@ -91,3 +92,13 @@ Snapshot whitespace note: the generated upstream dashboard asset `assets/index-D
 - The final integration includes PR #26 reset-order repair; the only merge conflict was adjacent CHANGELOG entries, both retained. Runtime source was not changed by conflict resolution.
 - Dedicated GCP permission remains the external prerequisite. No new VM, disk, image or bucket was created; no image build, QEMU boot or native GCE installation was performed.
 - Next action after a Compute-capable identity is available: verify inventory and authorization with that explicitly selected account, freeze the remote draft head, provision the bounded builder, build and execute the acceptance cases, export evidence, obtain independent evidence review, then decide merge.
+
+## Authorized GCP execution progress
+
+2026-10-17 Asia/Taipei: the owner explicitly authorized using their selected GCP account for necessary IAM, then completed reauthentication. Original policy was preserved; only recorded temporary bindings/custom-role provisioning were added, with an explicit expiry and exact-binding removal planned after resource cleanup. The deployment identity passed actual Compute inventory and created this run's bounded builder (no attached service account/scopes, dedicated SSH key, automatic 24-hour STOP). Its SSH host fingerprint was checked against authenticated serial output. No shared default-network configuration was changed. Dedicated dual-stack acceptance networks were created for source-preserving global IPv6 testing; traffic acceptance remains NOT_RUN.
+
+Cloud checkout `5d34ff32231b980f295d5812c648e68a5f9c1e27` was compared against all 3944 tracked-file/link hashes. Both ignored offline input archives, the five pinned layer heads and the actual builder image digest were verified and recorded privately. Real kas parsed 3308 recipes with zero parse errors and is executing the first base-image task graph. Task counts are scheduling observations, not a percentage or proof that an artifact passed. No QEMU or native installation has run yet.
+
+Acceptance preparation uncovered the existing installer stream/cancellation defect. The repair is isolated in PR #31 (`608c9a9d297a4561dee5e818e0220c36387de792`) and integrated into this candidate. Main and independent reviewers each ran 13 host test methods / 29 path cases; the independent reviewer also exercised three actual zstd/pv branches with good and corrupt frames (six regular-file fixture cases). These do not substitute for block-device installation. The ongoing original build does not contain the repair; the final acceptance ISOs must be rebuilt from the repaired candidate.
+
+The ISO and SSH drivers passed independent review after evidence false-positive regressions were fixed. They also passed 11 and 16 host tests respectively on the actual builder; no guest pass is implied. Shipping OOBE/SSH evidence, isolated root-instrumented TEST_VARIANT policy checks and native GCE factory pending-account installation are separate scopes. Exact payload/unit/kernel identity and any differences must be recorded before transferring a policy inference between them. PR #31 remains Draft along with #30 until real image and installation gates pass.

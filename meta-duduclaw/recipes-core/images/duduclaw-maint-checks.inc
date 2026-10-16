@@ -270,3 +270,163 @@ python duduclaw_check_maint_account () {
 ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_account;"
 do_rootfs[vardeps] += "DUDUCLAW_ACCOUNT_BASELINE DUDUCLAW_ACCOUNT_IDS_ADDED DUDUCLAW_AOSP_AID_RANGES DUDUCLAW_SYSTEMD_RESERVED_RANGES DUDUCLAW_HOST_DYNAMIC_RANGE DUDUCLAW_MAINT_ID"
 do_rootfs[file-checksums] += "${@'%s:True' % d.getVar('DUDUCLAW_ACCOUNT_BASELINE') if (d.getVar('DUDUCLAW_ACCOUNT_BASELINE') or '').strip() else ''}"
+
+# --- dropbear for the maintenance account (2026-10-16) ----------------------
+# duduclaw-sysd refuses to open a window unless the ExecStart systemd
+# actually uses for dropbear@.service equals its own constant, token by
+# token; this check catches the same drift at build time. Change the
+# drop-in (recipes-core/dropbear/files/60-duduclaw-maint-dropbear.conf),
+# this constant and sysd's constant together.
+DUDUCLAW_MAINT_DROPBEAR_ARGV = "/usr/sbin/dropbear -i -r /data/system/dropbear/dropbear_ed25519_host_key -w -s -j -k -m -T 3 -I 1800 -G duduclaw-maint -D /run/duduclaw-maint-ssh -c /usr/libexec/duduclaw/maint-shell"
+DUDUCLAW_MAINT_CLOSE = "${libexecdir}/duduclaw/maint-ssh-close"
+DUDUCLAW_MAINT_DROPBEAR_INACCESSIBLE = "-/data/duduclaw -/data/duduclaw-kiosk -/data/system/iwd -/data/system/containers"
+
+# What fails the build:
+#   - dropbear@.service.d/60-duduclaw-maint.conf is missing, its ExecStart
+#     is not exactly a reset plus "-" + DUDUCLAW_MAINT_DROPBEAR_ARGV, or it
+#     lacks BindsTo=duduclaw-sysd.service, IPAddressDeny=any, the
+#     EnvironmentFile= reset, RequiresMountsFor=/data, or any of its sandbox
+#     settings (NoNewPrivileges, ProtectSystem=strict, ProtectProc=invisible,
+#     ProtectHome, PrivateTmp, InaccessiblePaths as designed);
+#   - the ExecStart binary does not resolve (through oe-core's
+#     dropbear -> dropbearmulti link) to a root-owned regular executable
+#     under sbindir that only root can write;
+#   - any other drop-in for dropbear@.service sets ExecStart= (it would
+#     replace or add to ours);
+#   - dropbear.socket.d/60-duduclaw-maint.conf lacks BindsTo=duduclaw-
+#     sysd.service;
+#   - dropbearkey.service.d/60-duduclaw-maint.conf does not generate into
+#     /data/system/dropbear;
+#   - a host key is baked into the image (/etc/dropbear or
+#     /data/system/dropbear not empty): every device would share it;
+#   - the fallback close script is missing or not executable, or there is
+#     no flock command for its audit lock.
+python duduclaw_check_maint_dropbear () {
+    import os
+    import stat
+
+    root = d.getVar('IMAGE_ROOTFS')
+    unitdir = root + d.getVar('systemd_system_unitdir')
+    errors = []
+
+    def parse(path):
+        """Return {section: [(key, value), ...]} for a systemd unit file."""
+        out, section = {}, None
+        with open(path) as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line[0] in '#;':
+                    continue
+                if line.startswith('[') and line.endswith(']'):
+                    section = line[1:-1]
+                    out.setdefault(section, [])
+                    continue
+                if '=' in line and section:
+                    k, v = line.split('=', 1)
+                    out[section].append((k.strip(), v.strip()))
+        return out
+
+    def values(unit, section, key):
+        return [v for k, v in unit.get(section, []) if k == key]
+
+    service_dir = os.path.join(unitdir, 'dropbear@.service.d')
+    ours = os.path.join(service_dir, '60-duduclaw-maint.conf')
+    if not os.path.isfile(ours):
+        errors.append('dropbear@.service.d/60-duduclaw-maint.conf is missing')
+    else:
+        u = parse(ours)
+        execs = values(u, 'Service', 'ExecStart')
+        want = '-' + ' '.join(d.getVar('DUDUCLAW_MAINT_DROPBEAR_ARGV').split())
+        if len(execs) != 2 or execs[0] != '' or ' '.join(execs[1].split()) != want:
+            errors.append('dropbear@ ExecStart is %r, expected ["", %r]' % (execs, want))
+        if 'duduclaw-sysd.service' not in ' '.join(values(u, 'Unit', 'BindsTo')).split():
+            errors.append('dropbear@ drop-in lacks BindsTo=duduclaw-sysd.service')
+        if values(u, 'Service', 'IPAddressDeny') != ['any']:
+            errors.append('dropbear@ drop-in must set IPAddressDeny=any')
+        if '' not in values(u, 'Service', 'EnvironmentFile'):
+            errors.append('dropbear@ drop-in must reset EnvironmentFile=')
+        # Session sandbox: each of these must stay exactly as designed.
+        for key, want_v in (('NoNewPrivileges', 'yes'), ('ProtectSystem', 'strict'),
+                            ('ProtectProc', 'invisible'), ('ProtectHome', 'yes'),
+                            ('PrivateTmp', 'yes')):
+            if values(u, 'Service', key) != [want_v]:
+                errors.append('dropbear@ drop-in must set %s=%s (has %s)' % (key, want_v, values(u, 'Service', key)))
+        inacc = ' '.join(values(u, 'Service', 'InaccessiblePaths')).split()
+        if sorted(inacc) != sorted(d.getVar('DUDUCLAW_MAINT_DROPBEAR_INACCESSIBLE').split()):
+            errors.append('dropbear@ drop-in InaccessiblePaths is %s, expected %s' % (inacc, d.getVar('DUDUCLAW_MAINT_DROPBEAR_INACCESSIBLE').split()))
+        if '/data' not in ' '.join(values(u, 'Unit', 'RequiresMountsFor')).split():
+            errors.append('dropbear@ drop-in must have RequiresMountsFor=/data')
+    for name in sorted(os.listdir(service_dir)) if os.path.isdir(service_dir) else []:
+        full = os.path.join(service_dir, name)
+        if name != '60-duduclaw-maint.conf' and os.path.isfile(full) and values(parse(full), 'Service', 'ExecStart'):
+            errors.append('dropbear@.service.d/%s sets ExecStart=, which would change the maintenance dropbear command' % name)
+
+    # The ExecStart binary sysd compares by path. oe-core installs dropbear
+    # as a multi-call binary (/usr/sbin/dropbear -> dropbearmulti); sysd
+    # canonicalizes at runtime, and here the path must resolve, inside the
+    # rootfs, to a root-owned regular executable under sbindir that only
+    # root can write. The resolved path is printed for the build log.
+    def resolve_in_root(path):
+        cur, seen = path, 0
+        while True:
+            parts = cur.strip('/').split('/')
+            built = ''
+            for i, part in enumerate(parts):
+                cand = built + '/' + part
+                full = root + cand
+                if os.path.islink(full):
+                    seen += 1
+                    if seen > 40:
+                        return None
+                    target = os.readlink(full)
+                    nxt = target if target.startswith('/') else os.path.normpath(os.path.dirname(cand) + '/' + target)
+                    cur = nxt + ('/' + '/'.join(parts[i + 1:]) if i + 1 < len(parts) else '')
+                    break
+                built = cand
+            else:
+                return os.path.normpath(built)
+    exe = d.getVar('DUDUCLAW_MAINT_DROPBEAR_ARGV').split()[0]
+    real = resolve_in_root(exe)
+    sbindir = d.getVar('sbindir')
+    if real is None or not os.path.lexists(root + real):
+        errors.append('%s does not resolve to a file in the image' % exe)
+    else:
+        st = os.lstat(root + real)
+        if not (real.startswith(sbindir + '/') and stat.S_ISREG(st.st_mode) and st.st_uid == 0
+                and st.st_mode & 0o111 and not st.st_mode & 0o022):
+            errors.append('%s resolves to %s, which must be a root-owned regular executable under %s, not group/world-writable' % (exe, real, sbindir))
+        else:
+            bb.note('duduclaw_check_maint_dropbear: %s resolves to %s' % (exe, real))
+
+    sock = os.path.join(unitdir, 'dropbear.socket.d', '60-duduclaw-maint.conf')
+    if not os.path.isfile(sock):
+        errors.append('dropbear.socket.d/60-duduclaw-maint.conf is missing')
+    elif 'duduclaw-sysd.service' not in ' '.join(values(parse(sock), 'Unit', 'BindsTo')).split():
+        errors.append('dropbear.socket drop-in lacks BindsTo=duduclaw-sysd.service')
+
+    key = os.path.join(unitdir, 'dropbearkey.service.d', '60-duduclaw-maint.conf')
+    if not os.path.isfile(key):
+        errors.append('dropbearkey.service.d/60-duduclaw-maint.conf is missing')
+    else:
+        execs = values(parse(key), 'Service', 'ExecStart')
+        if not execs or execs[0] != '' or not any('/data/system/dropbear/dropbear_ed25519_host_key' in e for e in execs[1:]):
+            errors.append('dropbearkey drop-in must reset ExecStart= and generate /data/system/dropbear/dropbear_ed25519_host_key')
+
+    for keydir in (d.getVar('sysconfdir') + '/dropbear', '/data/system/dropbear'):
+        full = root + keydir
+        if os.path.isdir(full) and os.listdir(full):
+            errors.append('%s in the image is not empty (%s): a baked-in host key would be shared by every device' % (keydir, ' '.join(sorted(os.listdir(full)))))
+
+    close = root + d.getVar('DUDUCLAW_MAINT_CLOSE')
+    if not (os.path.isfile(close) and os.access(close, os.X_OK)):
+        errors.append('%s is missing or not executable' % d.getVar('DUDUCLAW_MAINT_CLOSE'))
+    # The close script takes the audit lock with flock(1) (busybox's applet
+    # or util-linux's); without it no fallback close record can be written.
+    if not any(os.path.lexists(root + d.getVar(v) + '/flock') for v in ('base_bindir', 'bindir', 'base_sbindir', 'sbindir')):
+        errors.append('no flock command in the image (maint-ssh-close needs it for the audit lock)')
+
+    if errors:
+        bb.fatal('duduclaw_check_maint_dropbear:\n  ' + '\n  '.join(errors))
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_dropbear;"
+do_rootfs[vardeps] += "DUDUCLAW_MAINT_DROPBEAR_ARGV DUDUCLAW_MAINT_DROPBEAR_INACCESSIBLE"

@@ -1,0 +1,310 @@
+#!/bin/bash
+# DuDuClaw OS: close a maintenance SSH window from PID 1's fallback timer.
+#
+# When duduclaw-sysd opens a maintenance window it also starts a transient
+# timer, duduclaw-maint-ssh-expire.timer (systemd-run, monotonic TTL+60s
+# and the matching UTC wall-clock time, whichever comes first), whose
+# service runs this script. sysd stops that timer whenever it closes the
+# window itself (Admin closes it, sysd's own deadline, sysd startup
+# cleanup), so this only runs when sysd did not close the window in time:
+# sysd hit its start limit, was stopped, or is stuck. It needs nothing but
+# PID 1, this script and the commands below.
+#
+# Authority: commercial/docs/DESIGN-maintenance-ssh-account-2026-10.md
+# (private platform tree) section 4.5, R7; audit format shared with
+# platform crates/duduclaw-sysd/src/maint_ssh/audit.rs and mod.rs.
+#
+# Steps, in this order (the first one is what ends access):
+#   1. delete the key file /run/duduclaw-maint-ssh/authorized_keys, so no
+#      new login can authenticate even if a later step fails;
+#   2. stop dropbear.socket and every dropbear@*.service (ends sessions:
+#      the session units run with KillMode=control-group);
+#   3. write 1 to system-dropbear.slice's cgroup.kill, for anything left;
+#   4. remove port 22 from the firewall's maintenance_tcp_ports set; an
+#      element (or set) that is already gone counts as success;
+#   5. read every result back;
+#   6. replace /data/system/maint-ssh/last-close.json (sysd's "why did the
+#      last window close" file) atomically, then append one close record to
+#      the root audit log /data/system/maint-ssh-audit.log, the same file
+#      and format sysd writes (see "Audit record" below).
+# window.json stays in /run/duduclaw-maint-ssh: it holds the journal cursor
+# duduclaw-sysd needs to copy this window's logins into the audit log when
+# it next starts (its startup cleanup), and that cleanup removes it and
+# writes its own close record (trigger startup_cleanup).
+#
+# Safe to run any number of times, with or without an open window. Exit
+# status 0 means every read-back check passed; 1 means at least one did not
+# (the record lists which). Each step runs even if an earlier one failed.
+#
+# Audit record: the close record from platform crates/duduclaw-sysd/src/
+# maint_ssh/audit.rs's interface note (P-1):
+#   {"ts":<integer Unix seconds, UTC>,"event":"close","trigger":"fallback_timer",
+#    "window_id":..., "removed_fingerprint":..., "done":[...], "problems":[...],
+#    "logins_recorded":..., "logins_over_cap":..., "logouts_recorded":...,
+#    "logouts_over_cap":..., "auth_failures":..., "auth_failure_sources":null,
+#    "sessions_open_at_close":<n>, "last_cursor":..., "events_complete":false}
+# window_id, removed_fingerprint, the counters and last_cursor come from
+# sysd's window.json (null when it is missing or unreadable; busybox has no
+# sha256sum/base64, so the fingerprint is never recomputed when window.json
+# has it). events_complete is false and auth_failure_sources null: this
+# script does not read the journal; sysd's next startup cleanup replays it
+# from window.json and writes its own close record.
+# How it is written (same rules as sysd): append only (only sysd rotates);
+# exclusive flock(2) on <file>.lock held for the whole append, created under
+# umask 077; both the log and the lock must be regular, non-symlink files
+# owned by root with no group/other bits, otherwise nothing is written and
+# the reason goes to the journal (the window is still closed). The image's
+# flock is busybox's, which has no -w, so the 10 s bound is a loop of
+# non-blocking attempts (works with util-linux flock too); no lock in 10 s
+# is a refusal, like sysd's own lock timeout.
+set -uo pipefail
+
+KEY_DIR=/run/duduclaw-maint-ssh
+KEY_FILE=$KEY_DIR/authorized_keys
+WINDOW_FILE=$KEY_DIR/window.json
+SLICE_KILL=/sys/fs/cgroup/system.slice/system-dropbear.slice/cgroup.kill
+AUDIT_LOG=/data/system/maint-ssh-audit.log
+AUDIT_LOCK=$AUDIT_LOG.lock
+LOCK_WAIT_SECONDS=10
+STATE_DIR=/data/system/maint-ssh
+LAST_CLOSE=$STATE_DIR/last-close.json
+MAX_WINDOW_BYTES=65536
+NFT_FAMILY=inet
+NFT_TABLE=filter
+NFT_SET=maintenance_tcp_ports
+SSH_PORT=22
+
+log() { echo "maint-ssh-close: $*" >&2; }
+
+done_steps=()
+problems=()
+problem() {
+    problems+=("$1")
+    log "problem: $1"
+}
+
+# json_list ARRAY_NAME: the array as a JSON list of strings. Every element
+# is a fixed message from this script (no quotes, backslashes or control
+# characters), so no escaping is needed.
+json_list() {
+    local -n arr=$1
+    local out='' item
+    for item in "${arr[@]}"; do
+        out+="${out:+,}\"$item\""
+    done
+    printf '[%s]' "$out"
+}
+
+# --- read window.json (sysd's state for the open window) ---------------------
+# serde_json writes it on one line. Only fields with a known safe shape are
+# taken: window_id is [A-Za-z0-9-], the fingerprint is SHA256:<base64>,
+# the journal cursor is [A-Za-z0-9=;], counters are digits.
+window_json=
+if [[ -f $WINDOW_FILE && ! -L $WINDOW_FILE ]]; then
+    size=$(stat -c %s "$WINDOW_FILE" 2>/dev/null) || size=-1
+    if (( size > 0 && size <= MAX_WINDOW_BYTES )); then
+        window_json=$(cat -- "$WINDOW_FILE" 2>/dev/null) || window_json=
+    fi
+fi
+field_str() { # NAME PATTERN -> JSON string or null
+    local v
+    v=$(printf '%s' "$window_json" | grep -o "\"$1\":\"$2\"" | head -n 1)
+    if [[ -n $v ]]; then printf '%s' "${v#\""$1"\":}"; else printf 'null'; fi
+}
+field_num() { # NAME -> digits or null
+    local v
+    v=$(printf '%s' "$window_json" | grep -o "\"$1\":[0-9]\{1,20\}" | head -n 1)
+    if [[ -n $v ]]; then printf '%s' "${v#\""$1"\":}"; else printf 'null'; fi
+}
+window_id=$(field_str window_id '[A-Za-z0-9-]\{1,64\}')
+window_fp=$(field_str key_fingerprint 'SHA256:[A-Za-z0-9+/]\{1,64\}')
+last_cursor=$(field_str last_cursor '[A-Za-z0-9=;][A-Za-z0-9=;]*')
+# fingerprint_of FILE: SHA256:<unpadded base64> of the key blob on the
+# file's single line, the format dropbear and sysd use. Only needed when
+# window.json is gone; needs sha256sum and base64, which the image's busybox
+# may not have, so it prints nothing on any failure.
+fingerprint_of() {
+    local blob hex fp
+    blob=$(awk 'NF { print $NF; exit }' "$1" 2>/dev/null) || return 0
+    [[ $blob =~ ^[A-Za-z0-9+/]+=*$ ]] || return 0
+    hex=$(printf '%s' "$blob" | base64 -d 2>/dev/null | sha256sum 2>/dev/null) || return 0
+    hex=${hex%% *}
+    [[ $hex =~ ^[0-9a-f]{64}$ ]] || return 0
+    fp=$(printf '%b' "$(printf '%s' "$hex" | sed 's/../\\x&/g')" | base64 2>/dev/null | tr -d '\n=') || return 0
+    [[ $fp =~ ^[A-Za-z0-9+/]+$ ]] && printf '"SHA256:%s"' "$fp"
+}
+
+# --- 1. key file -------------------------------------------------------------
+removed_fp=$window_fp
+key_existed=no
+if [[ -e $KEY_FILE || -L $KEY_FILE ]]; then
+    key_existed=yes
+    if [[ $removed_fp == null && -f $KEY_FILE && ! -L $KEY_FILE ]]; then
+        fp=$(fingerprint_of "$KEY_FILE")
+        [[ -n $fp ]] && removed_fp=$fp
+    fi
+    # rm on a symlink removes the link, never its target.
+    if rm -f -- "$KEY_FILE"; then
+        done_steps+=("removed the maintenance key")
+    else
+        problem "removing the maintenance key failed"
+    fi
+fi
+
+# --- 2. dropbear units -------------------------------------------------------
+count_sessions() {
+    systemctl list-units --plain --no-legend --state=active 'dropbear@*.service' 2>/dev/null | awk 'NF { n++ } END { print n + 0 }'
+}
+sessions_open_at_close=$(count_sessions)
+if systemctl stop dropbear.socket; then
+    done_steps+=("stopped dropbear.socket")
+else
+    problem "stopping dropbear.socket failed"
+fi
+if systemctl stop 'dropbear@*.service'; then
+    (( sessions_open_at_close > 0 )) && done_steps+=("ended $sessions_open_at_close SSH sessions")
+else
+    problem "stopping the SSH session units failed"
+fi
+
+# --- 3. leftover processes ----------------------------------------------------
+if [[ -e $SLICE_KILL ]]; then
+    echo 1 > "$SLICE_KILL" || problem "writing system-dropbear.slice cgroup.kill failed"
+fi
+
+# --- 4. firewall port ----------------------------------------------------------
+set_present=yes
+if ! nft list set "$NFT_FAMILY" "$NFT_TABLE" "$NFT_SET" >/dev/null 2>&1; then
+    # No set (or no table) means no element to remove; noted, not a failure.
+    set_present=no
+    done_steps+=("firewall set $NFT_SET not present")
+elif nft get element "$NFT_FAMILY" "$NFT_TABLE" "$NFT_SET" "{ $SSH_PORT }" >/dev/null 2>&1; then
+    if nft delete element "$NFT_FAMILY" "$NFT_TABLE" "$NFT_SET" "{ $SSH_PORT }"; then
+        done_steps+=("closed port $SSH_PORT")
+    else
+        problem "removing port $SSH_PORT from the firewall failed"
+    fi
+fi
+
+# --- 5. read back ---------------------------------------------------------------
+if [[ -e $KEY_FILE || -L $KEY_FILE ]]; then
+    problem "the maintenance key is still present"
+fi
+if systemctl is-active --quiet dropbear.socket; then
+    problem "dropbear.socket is still active"
+fi
+if [[ $(count_sessions) != 0 ]]; then
+    problem "SSH sessions are still active"
+fi
+if [[ $set_present == yes ]] && nft get element "$NFT_FAMILY" "$NFT_TABLE" "$NFT_SET" "{ $SSH_PORT }" >/dev/null 2>&1; then
+    problem "port $SSH_PORT is still in the firewall set"
+fi
+
+# --- 6. audit record ------------------------------------------------------------
+# Like sysd, nothing is written (neither last-close.json nor an audit
+# record) when there was nothing to close (no window state and no key).
+if [[ -z $window_json && $key_existed == no ]]; then
+    log "nothing was open; no audit record written"
+    (( ${#problems[@]} == 0 ))
+    exit
+fi
+
+# root_only_file PATH: a regular, non-symlink file owned by uid 0 with no
+# group/other permission bits (sysd's check for the log and the lock).
+root_only_file() {
+    local owner mode
+    [[ -L $1 || ! -f $1 ]] && return 1
+    read -r owner mode < <(stat -c '%u %a' "$1" 2>/dev/null) || return 1
+    [[ $owner == 0 && $mode =~ ^[0-7]+$ ]] || return 1
+    (( (8#$mode & 8#077) == 0 ))
+}
+
+ts=$(date -u +%s)
+build_record() {
+    printf '{"ts":%s,"event":"close","trigger":"fallback_timer","window_id":%s,"removed_fingerprint":%s,"done":%s,"problems":%s,"logins_recorded":%s,"logins_over_cap":%s,"logouts_recorded":%s,"logouts_over_cap":%s,"auth_failures":%s,"auth_failure_sources":null,"sessions_open_at_close":%s,"last_cursor":%s,"events_complete":false}' \
+        "$ts" "$window_id" "$removed_fp" "$(json_list done_steps)" "$(json_list problems)" \
+        "$(field_num logins_recorded)" "$(field_num logins_over_cap)" \
+        "$(field_num logouts_recorded)" "$(field_num logouts_over_cap)" \
+        "$(field_num auth_failures)" "${sessions_open_at_close:-0}" "$last_cursor"
+}
+
+# write_audit: one append under the lock, or a refusal (returns 1, the
+# reason added to problems so the journal line shows it).
+write_audit() {
+    local i got_lock=no
+    if [[ -L $AUDIT_LOCK ]] || { [[ -e $AUDIT_LOCK ]] && ! root_only_file "$AUDIT_LOCK"; }; then
+        problem "audit lock $AUDIT_LOCK is not a root-owned 0600 regular file; record not written"
+        return 1
+    fi
+    umask 077
+    if ! exec 9>>"$AUDIT_LOCK"; then
+        problem "cannot open the audit lock $AUDIT_LOCK; record not written"
+        return 1
+    fi
+    if ! root_only_file "$AUDIT_LOCK"; then
+        exec 9>&-
+        problem "audit lock $AUDIT_LOCK is not a root-owned 0600 regular file; record not written"
+        return 1
+    fi
+    for (( i = 0; i < LOCK_WAIT_SECONDS; i++ )); do
+        if flock -n -x 9; then got_lock=yes; break; fi
+        sleep 1
+    done
+    if [[ $got_lock == no ]]; then
+        exec 9>&-
+        problem "audit lock not acquired within ${LOCK_WAIT_SECONDS}s; record not written"
+        return 1
+    fi
+    if [[ -L $AUDIT_LOG ]] || { [[ -e $AUDIT_LOG ]] && ! root_only_file "$AUDIT_LOG"; }; then
+        exec 9>&-
+        problem "audit log $AUDIT_LOG is not a root-owned 0600 regular file; record not written"
+        return 1
+    fi
+    # The record is built after every problem above is known.
+    if ! printf '%s\n' "$(build_record)" >> "$AUDIT_LOG"; then
+        exec 9>&-
+        problem "appending to $AUDIT_LOG failed"
+        return 1
+    fi
+    exec 9>&-
+}
+# last-close.json: sysd's record of why the last window closed (P-1
+# interface, audit.rs). Replaced atomically: temp file in the same
+# directory under umask 077, then rename. Refused (reason in problems, so
+# it reaches the audit record and the journal) unless the directory is a
+# real root-owned 0700 directory and the existing file, if any, is a plain
+# file and not a symlink. sysd keeps this trigger when it later cleans the
+# window up (R5), as long as ts is not older than the window's open time.
+write_last_close() {
+    local owner mode tmp
+    if [[ -L $STATE_DIR || ! -d $STATE_DIR ]]; then
+        problem "$STATE_DIR is not a real directory; last-close.json not written"
+        return 1
+    fi
+    read -r owner mode < <(stat -c '%u %a' "$STATE_DIR" 2>/dev/null) || owner=
+    if [[ $owner != 0 || $mode != 700 ]]; then
+        problem "$STATE_DIR is not root-owned 0700; last-close.json not written"
+        return 1
+    fi
+    if [[ -L $LAST_CLOSE ]] || { [[ -e $LAST_CLOSE ]] && [[ ! -f $LAST_CLOSE ]]; }; then
+        problem "$LAST_CLOSE is not a regular file; last-close.json not written"
+        return 1
+    fi
+    if ! tmp=$(umask 077 && mktemp "$STATE_DIR/.last-close.json.XXXXXX"); then
+        problem "cannot create a temporary file in $STATE_DIR; last-close.json not written"
+        return 1
+    fi
+    if ! (umask 077 && printf '{"window_id":%s,"trigger":"fallback_timer","events_complete":false,"events_lost":false,"ts":%s}\n' "$window_id" "$ts" > "$tmp") \
+        || ! mv -f -- "$tmp" "$LAST_CLOSE"; then
+        rm -f -- "$tmp"
+        problem "writing $LAST_CLOSE failed"
+        return 1
+    fi
+    done_steps+=("wrote last-close.json")
+}
+write_last_close
+write_audit
+# Also to the journal (stderr), which is where a failed audit write shows.
+log "$(build_record)"
+
+(( ${#problems[@]} == 0 ))

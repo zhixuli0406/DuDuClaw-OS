@@ -13,8 +13,8 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 
-# No source files yet: everything this recipe installs is created in
-# do_install. S still points at an existing directory.
+SRC_URI = "file://maint-ssh-close"
+
 S = "${UNPACKDIR}"
 
 inherit useradd allarch
@@ -71,6 +71,12 @@ USERADD_PARAM:${PN} = "--system --uid ${DUDUCLAW_MAINT_ID} --gid duduclaw-maint 
 do_install() {
     # Read-only, empty home.
     install -d -m 0555 ${D}${DUDUCLAW_MAINT_HOME}
+
+    # Root-only fallback close, run by the transient timer duduclaw-sysd
+    # starts with every window (see the script's header). 0700: nothing but
+    # root (PID 1's oneshot) runs it.
+    install -d ${D}${libexecdir}/duduclaw
+    install -m 0700 ${UNPACKDIR}/maint-ssh-close ${D}${libexecdir}/duduclaw/maint-ssh-close
 }
 
 # dropbear refuses a login whose shell is not listed in /etc/shells. Written
@@ -86,6 +92,7 @@ pkg_postinst:${PN} () {
 
 FILES:${PN} += " \
     ${DUDUCLAW_MAINT_HOME} \
+    ${libexecdir}/duduclaw/maint-ssh-close \
 "
 
 # No polkit (owner decision 2026-10-16): the menu's two restarts go through
@@ -94,5 +101,11 @@ FILES:${PN} += " \
 # system account with it. base-files owns /etc/shells; listing it orders
 # its install before this package's postinst appends to the file.
 RDEPENDS:${PN} += "base-files"
+# maint-ssh-close is a bash script (arrays, [[ ]]); nft and systemctl come
+# with the firewall and systemd, and the script reports a missing firewall
+# set instead of failing on it. flock (the audit lock it shares with sysd)
+# is busybox's applet (CONFIG_FLOCK=y in oe-core's defconfig);
+# duduclaw_check_maint_dropbear fails the image if no flock is installed.
+RDEPENDS:${PN} += "bash"
 
 COMPATIBLE_MACHINE = ".*"

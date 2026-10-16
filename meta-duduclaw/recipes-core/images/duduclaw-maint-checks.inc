@@ -511,3 +511,65 @@ python duduclaw_check_maint_nft () {
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_nft;"
 do_rootfs[vardeps] += "DUDUCLAW_MAINT_SRC4 DUDUCLAW_MAINT_SRC6 DUDUCLAW_MAINT_NFT_RULE"
+
+# --- Root helper units for the maintenance menu (2026-10-16) ---------------
+# The menu's only root entry point (logs and the two restarts; no polkit). What fails the build:
+# the socket or the per-connection service is missing; the socket is not
+# exactly root:duduclaw-maint 0660 with Accept=yes and MaxConnections=4 on
+# /run/duduclaw-maint-helper.sock; the service lost any of its required
+# settings (root, socket stdin/stdout, NoNewPrivileges, ProtectSystem=strict,
+# ProtectProc=invisible, PrivateNetwork, IPAddressDeny=any,
+# RuntimeMaxSec=3600, the preserved 0700 RuntimeDirectory the helper keeps
+# its restart rate limit in, the empty capability bounding set, AF_UNIX
+# only, @system-service, the kernel/cgroup/device/home/tmp/namespace/
+# personality/W^X protections); it is placed in system-dropbear.slice; or
+# the socket is not enabled.
+DUDUCLAW_MAINT_HELPER_SOCKET_SETTINGS = "ListenStream=/run/duduclaw-maint-helper.sock SocketUser=root SocketGroup=duduclaw-maint SocketMode=0660 Accept=yes MaxConnections=4"
+DUDUCLAW_MAINT_HELPER_SERVICE_SETTINGS = "User=root ExecStart=/usr/libexec/duduclaw/maint-helper StandardInput=socket StandardOutput=socket NoNewPrivileges=yes ProtectSystem=strict ProtectProc=invisible PrivateNetwork=yes IPAddressDeny=any RuntimeMaxSec=3600 RuntimeDirectory=duduclaw-maint-helper RuntimeDirectoryMode=0700 RuntimeDirectoryPreserve=yes CapabilityBoundingSet= AmbientCapabilities= RestrictAddressFamilies=AF_UNIX SystemCallFilter=@system-service SystemCallArchitectures=native ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes ProtectClock=yes ProtectHostname=yes PrivateDevices=yes ProtectHome=yes PrivateTmp=yes RestrictNamespaces=yes RestrictRealtime=yes RestrictSUIDSGID=yes LockPersonality=yes MemoryDenyWriteExecute=yes"
+
+python duduclaw_check_maint_helper () {
+    import os
+
+    root = d.getVar('IMAGE_ROOTFS')
+    unitdir = root + d.getVar('systemd_system_unitdir')
+    errors = []
+
+    def settings(path):
+        out = {}
+        with open(path) as f:
+            for raw in f:
+                line = raw.strip()
+                if line and line[0] not in '#;[' and '=' in line:
+                    k, v = line.split('=', 1)
+                    out.setdefault(k.strip(), []).append(v.strip())
+        return out
+
+    for name, var in (('duduclaw-maint-helper.socket', 'DUDUCLAW_MAINT_HELPER_SOCKET_SETTINGS'),
+                      ('duduclaw-maint-helper@.service', 'DUDUCLAW_MAINT_HELPER_SERVICE_SETTINGS')):
+        path = os.path.join(unitdir, name)
+        if not os.path.isfile(path):
+            errors.append('%s is missing' % name)
+            continue
+        have = settings(path)
+        for item in d.getVar(var).split():
+            k, v = item.split('=', 1)
+            if have.get(k) != [v]:
+                errors.append('%s: %s is %s, expected [%r]' % (name, k, have.get(k), v))
+
+    svc = os.path.join(unitdir, 'duduclaw-maint-helper@.service')
+    if os.path.isfile(svc) and any(v.startswith('system-dropbear') for v in settings(svc).get('Slice', [])):
+        errors.append('duduclaw-maint-helper@.service must not run in system-dropbear.slice (a window close kills that slice)')
+    # The two units the helper restarts (constants in the platform binary).
+    for unit in ('duduclaw-gateway.service', 'duduclaw-llama-server.service'):
+        if not os.path.isfile(os.path.join(unitdir, unit)):
+            bb.note('duduclaw_check_maint_helper: %s is not in this image; the helper\'s restart of it will fail' % unit)
+
+    wants = root + d.getVar('sysconfdir') + '/systemd/system/sockets.target.wants/duduclaw-maint-helper.socket'
+    if not os.path.lexists(wants):
+        errors.append('duduclaw-maint-helper.socket is not enabled (no sockets.target.wants link)')
+
+    if errors:
+        bb.fatal('duduclaw_check_maint_helper:\n  ' + '\n  '.join(errors))
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_helper;"
+do_rootfs[vardeps] += "DUDUCLAW_MAINT_HELPER_SOCKET_SETTINGS DUDUCLAW_MAINT_HELPER_SERVICE_SETTINGS"

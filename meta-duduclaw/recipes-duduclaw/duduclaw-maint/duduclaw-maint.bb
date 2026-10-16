@@ -16,11 +16,13 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://maint-ssh-close \
     file://60-duduclaw-maint-nftables.conf \
+    file://duduclaw-maint-helper.socket \
+    file://duduclaw-maint-helper@.service \
 "
 
 S = "${UNPACKDIR}"
 
-inherit useradd allarch
+inherit useradd allarch systemd
 
 # --- The account ------------------------------------------------------------
 #
@@ -88,7 +90,19 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}/nftables.service.d
     install -m 0644 ${UNPACKDIR}/60-duduclaw-maint-nftables.conf \
         ${D}${systemd_system_unitdir}/nftables.service.d/60-duduclaw-maint.conf
+
+    # Root helper for the menu (logs and the two restarts): socket-activated,
+    # one instance per connection (see the units' headers).
+    install -m 0644 ${UNPACKDIR}/duduclaw-maint-helper.socket \
+        ${D}${systemd_system_unitdir}/duduclaw-maint-helper.socket
+    install -m 0644 ${UNPACKDIR}/duduclaw-maint-helper@.service \
+        ${D}${systemd_system_unitdir}/duduclaw-maint-helper@.service
 }
+
+# The socket listens from boot (root:duduclaw-maint 0660, only uid 4800 can
+# use it); instances start per connection and are never enabled themselves.
+SYSTEMD_SERVICE:${PN} = "duduclaw-maint-helper.socket"
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 # dropbear refuses a login whose shell is not listed in /etc/shells. Written
 # at rootfs time ($D set); it has no on-target branch, so it never becomes a
@@ -105,6 +119,8 @@ FILES:${PN} += " \
     ${DUDUCLAW_MAINT_HOME} \
     ${libexecdir}/duduclaw/maint-ssh-close \
     ${systemd_system_unitdir}/nftables.service.d/60-duduclaw-maint.conf \
+    ${systemd_system_unitdir}/duduclaw-maint-helper.socket \
+    ${systemd_system_unitdir}/duduclaw-maint-helper@.service \
 "
 
 # No polkit (owner decision 2026-10-16): the menu's two restarts go through

@@ -197,7 +197,7 @@
         <h2>下載前先知道這幾件事</h2>
         <ul>
           <li><strong>0.4.0 是 bring-up 版本</strong>，1.0.0 才是第一個 GA。拿來當生產環境的唯一一台機器並不合適。</li>
-          <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。發布前在 QEMU 上，QEMU 版的整碟映像開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）；安裝精靈這一版沒有跑。桌面版的測試映像另外跑了兩輪 rootless 驗證，第二輪 36 項過 35 項。從 v0.4.0 經 A/B 更新升上來、需要 LLM 憑證的完整流程、Windows 虛擬機都還沒驗證。</li>
+          <li><strong>所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。<code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。發布前在 QEMU 上，QEMU 版的整碟映像開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）；安裝精靈這一版沒有跑。桌面版的測試映像另外跑了兩輪 rootless 驗證，第二輪 36 項過 35 項。從 v0.3.0 經 A/B 更新升到 v0.4.0、需要 LLM 憑證的完整流程、Windows 虛擬機都還沒驗證。</li>
           <li><strong>升級是單向的</strong>：v0.4.0 起 gateway 不再以 root 執行。裝置成功開過 v0.4.0 之後，就不能再退回 v0.3.0 或更早的版本；之後的版本出問題，只能裝修好的新版或用救援開機項目。</li>
           <li><strong>SSH 預設關閉</strong>，只能從後台的維護模式打開；映像上目前沒有能透過 SSH 登入的帳號，所以這個開關只控制連接埠。</li>
           <li><strong>開機鏈未啟用 Secure Boot 簽章</strong>，安裝前要在韌體裡關閉 Secure Boot；下載資產另有 minisign 簽章可驗證來源。dm-verity 與 TPM 也還沒啟用。</li>

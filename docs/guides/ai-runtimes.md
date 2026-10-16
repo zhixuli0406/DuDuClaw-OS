@@ -17,10 +17,10 @@ catalog also lists Kiro CLI and Google Antigravity, which the image does
 not bundle (see [Not installed](#not-installed)).
 
 The platform deprecated its Gemini CLI runtime in v1.67.0. Platform 1.73.4
-(embedded in v0.4.0) still carries it and has moved the removal to v1.74.0 (Antigravity is the
-named replacement); the Gemini API provider is not affected. `gemini` stays
-in this image until the OS syncs to a platform release without that
-runtime.
+(embedded in v0.4.0) still carries it. The platform has since postponed the
+removal to v1.75.0 (Antigravity is the named replacement); the Gemini API
+provider is not affected. `gemini` stays in this image until the OS syncs to
+a platform release without that runtime.
 
 This guide covers where that payload comes from, how to refresh it, where
 credentials are stored, and what the image deliberately does *not* carry.
@@ -138,10 +138,15 @@ default, and no account can log in over it yet.)
 
 API keys are the supported path and the default recommendation. Signing a
 consumer subscription (Claude Pro/Max, ChatGPT, Google, Copilot, …) into a
-third-party product is a vendor-terms question, not a technical one:
-Anthropic and Google have blocked consumer subscription tokens from
-third-party products server-side since March 2026, and accounts have been
-suspended for it. The OOBE shows that risk and requires an explicit
+third-party product is a vendor-terms question:
+[Anthropic's policy](https://code.claude.com/docs/en/legal-and-compliance)
+does not let third-party products route requests through Claude subscription
+credentials and may be enforced without notice, and Google's
+[Gemini CLI terms](https://geminicli.com/docs/resources/tos-privacy/) and
+[Antigravity terms](https://antigravity.google/terms) (section 6) say
+third-party software accessing the service through a subscription sign-in may
+get the account suspended or terminated. OpenAI's and xAI's positions are
+unclear; their terms still apply. The OOBE shows that risk and requires an explicit
 acknowledgement before offering a subscription login.
 
 ## Local models

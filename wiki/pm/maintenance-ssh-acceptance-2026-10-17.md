@@ -6,17 +6,17 @@ The owner authorized GCP resources, actual image installation, acceptance and me
 
 ## Source baseline
 
-- OS #26: `69033fc82c799f8070a4062cee58e3713639fe57`, based on #25 (`feat/maint-account`).
+- OS #26 initial baseline: `69033fc82c799f8070a4062cee58e3713639fe57`; reviewed reset-order repair: `27ee4651815f97f32203e6391499d58e52e3a2fd`, based on #25 (`feat/maint-account`).
 - Integration branch: `feat/maint-ssh-ready-20261017`, created from fetched `origin/main` (`77da682`). It includes #25, #27 and #28, then #26's reviewed fallback-path repair. All precursor heads remain separately traceable.
 - Platform source selected for synchronization: `c7068c508ae9ab5afc4392b58237cf86afdb9f2c` (1.74.0), the exact reviewed and CI-tested maintenance dashboard head. This commit is included in platform main.
-- Final integration SHA, generated snapshots, layer SHAs, builder image digest and artifact hashes: pending source freeze. A version string alone is not a source identity.
+- Integration payload is committed and includes the reset-order repair. The exact checkout SHA and full tracked-file manifest are recorded in ignored acceptance artifacts and the draft PR head. Layer SHAs, builder image digest and image hashes remain pending actual build. A version string alone is not a source identity.
 
 ## Blockers
 
 | ID | Type | Evidence / completion condition | Status |
 |---|---|---|---|
 | OS26-GCP | External environment | The configured deployment SA cannot list Compute instances in the configured GCP project. Obtain an already-authorized Compute SA or owner-managed IAM configuration; never change IAM or switch identity to evade a refusal. | BLOCKED_ENV |
-| OS26-SOURCE | Integration | Pure #26 still embeds platform 1.73.4 and lacks maintenance tools/readiness. Generate snapshots through the supported refresh scripts, install the tools/helper units/marker, verify dependency closure, then freeze the full candidate. | IN_PROGRESS |
+| OS26-SOURCE | Integration | Pure #26 still embeds platform 1.73.4 and lacks maintenance tools/readiness. Candidate snapshots were generated through supported refresh scripts, tools/helper units/marker integrated, and dependency closure/source pins independently verified. Target compile remains pending. | FIXED_PENDING_VERIFY |
 | OS26-BUILD | Build | Actual kas builds of base and desktop disk images plus both installer ISOs; rootfs and kernel assertions pass. Keep logs, exit codes, layer identities, manifests and SHA-256. | OPEN |
 | OS26-BOOT | Platform | Actual cold boot and reboot of both editions; persistent host fingerprint and effective unit/firewall settings verified. | OPEN |
 | OS26-INSTALL | Formal flow | Boot each production installer ISO, identify a newly created blank target disk, execute the shipped installer, remove ISO and boot the installed disk. Check ESP/A/B/data and first-boot behavior. | OPEN |
@@ -24,7 +24,7 @@ The owner authorized GCP resources, actual image installation, acceptance and me
 | OS26-SSH | Formal flow / security | Actual Admin open, maintenance-key login, menu/log filtering, forbidden identities/passwords/forwarding/commands, close and independent deadline/crash paths, audit and source-address controls. | OPEN |
 | OS26-RESET-ORDER | Correctness / privacy | Independent review found factory reset was not ordered before sysd state replay or host-key generation. Add ordering only, preserve failure behavior and prove graph regression; verify actual boot later. | FIXED_PENDING_VERIFY |
 | OS26-READY-GATE | Acceptance gate | Require exact executable/marker modes and exact marker bytes; existing relaxed fixtures accepted unsafe variants. Exact modes/bytes regressions and independent static recheck passed; actual guest remains pending. | FIXED_PENDING_VERIFY |
-| OS26-CHECKER | Independent review | Review actual candidate diff, harness and evidence. No unresolved blocking findings; required checks pass on the final head. | OPEN |
+| OS26-CHECKER | Independent review | Independent static reviews passed after three findings were fixed; actual image/guest evidence must still be reviewed, and required remote checks verified on the final head. | FIXED_PENDING_VERIFY |
 | OS26-MERGE | Integration | Merge prerequisites in order and #26 only after its source-bound build/boot/install/behavior evidence and independent review pass. An integration candidate's result does not retroactively identify a different standalone image. | OPEN |
 
 ## Acceptance contracts
@@ -84,3 +84,10 @@ The owner has been asked for a provisioned Compute-capable SA key path or confir
 Final local hardening: primary and independent checker each ran 10 guest validator tests and 7 readiness fixture tests, all passed. Exact marker bytes and special permission bits are covered. Reset repair is committed as `27ee4651815f97f32203e6391499d58e52e3a2fd` on PR #26, with four graph regressions and independent static review passed. No kas/guest evidence is implied.
 
 Snapshot whitespace note: the generated upstream dashboard asset `assets/index-DY5iy7OB.js` contains trailing whitespace inside a template-literal message. The full staged diff whitespace check reports it. Preserve byte identity with the tested platform dist; do not hand-edit a generated snapshot. Whitespace validation for authored source excludes only this generated dist tree; full snapshot equality is checked independently.
+
+## Preparation handoff
+
+- Final authored-source syntax and documentation links passed. Final primary synthetic tests: 10 validators, 7 readiness tests and 4 reset-order graph tests passed. These counts are distinct suites, not real guest results.
+- The final integration includes PR #26 reset-order repair; the only merge conflict was adjacent CHANGELOG entries, both retained. Runtime source was not changed by conflict resolution.
+- Dedicated GCP permission remains the external prerequisite. No new VM, disk, image or bucket was created; no image build, QEMU boot or native GCE installation was performed.
+- Next action after a Compute-capable identity is available: verify inventory and authorization with that explicitly selected account, freeze the remote draft head, provision the bounded builder, build and execute the acceptance cases, export evidence, obtain independent evidence review, then decide merge.

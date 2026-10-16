@@ -13,7 +13,10 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 
-SRC_URI = "file://maint-ssh-close"
+SRC_URI = " \
+    file://maint-ssh-close \
+    file://60-duduclaw-maint-nftables.conf \
+"
 
 S = "${UNPACKDIR}"
 
@@ -77,6 +80,14 @@ do_install() {
     # root (PID 1's oneshot) runs it.
     install -d ${D}${libexecdir}/duduclaw
     install -m 0700 ${UNPACKDIR}/maint-ssh-close ${D}${libexecdir}/duduclaw/maint-ssh-close
+
+    # Loopback egress rule for uid 4800, re-added whenever nftables.service
+    # (re)loads the ruleset (see the drop-in's header). Inert on an image
+    # without duduclaw-firewall: a drop-in for a unit that does not exist
+    # is never loaded.
+    install -d ${D}${systemd_system_unitdir}/nftables.service.d
+    install -m 0644 ${UNPACKDIR}/60-duduclaw-maint-nftables.conf \
+        ${D}${systemd_system_unitdir}/nftables.service.d/60-duduclaw-maint.conf
 }
 
 # dropbear refuses a login whose shell is not listed in /etc/shells. Written
@@ -93,6 +104,7 @@ pkg_postinst:${PN} () {
 FILES:${PN} += " \
     ${DUDUCLAW_MAINT_HOME} \
     ${libexecdir}/duduclaw/maint-ssh-close \
+    ${systemd_system_unitdir}/nftables.service.d/60-duduclaw-maint.conf \
 "
 
 # No polkit (owner decision 2026-10-16): the menu's two restarts go through

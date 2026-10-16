@@ -172,6 +172,17 @@ hardware.
   10 seconds, the record is not written (the reason goes to the journal)
   and is not retried; the window is still closed, and sysd's next startup
   cleanup writes its own close record from the state it kept.
+  While a window is open the firewall accepts port 22 only from LAN
+  ranges (RFC 1918, 169.254.0.0/16, fc00::/7, fe80::/10) and
+  100.64.0.0/10, the shared address space VPNs such as Tailscale use; any
+  other source, every global IPv6 address included, gets a TCP reset.
+  Two consequences: a scanner can tell from the reset that a window is
+  open, and on a WAN that hands the device an ISP carrier-grade NAT
+  (100.64.0.0/10) or 10.x address, other customers of that ISP are in
+  range too. A firewall rule added at runtime by number (uid 4800, never a
+  name, so it cannot break the ruleset) rejects every loopback connection
+  the maintenance account opens, keeping it away from the gateway's
+  loopback-only entry points and the local model server.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
   do (that code is in the platform repo).

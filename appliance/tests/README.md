@@ -5,6 +5,9 @@ VM-based acceptance tests for the DuDuClaw OS appliance image.
 - `ab-update/` — A/B partition update acceptance probes (boot, health-check,
   negative-path injection).
 - `wifi-hwsim/` — `mac80211_hwsim`-based Wi-Fi integration tests.
+- [`installer/`](installer/README.md) — host-only regression tests for the Yocto
+  installer's stream failures, exact byte copies and progress cleanup; no VM or
+  root access required.
 - `lib/` — **shared VM acceptance-testing helper library** (this document's
   subject). Promotes patterns that used to live only as ad-hoc, host-local,
   gitignored scripts under `appliance/.vm/inject/` (QMP screendump, serial

@@ -146,7 +146,7 @@ hardware.
   reserved ranges, and if any account changed its id against the previous
   release (an id that moves leaves files on `/data` owned by the wrong
   account after an A/B update). The source now vendors platform v1.74.0
-  at `c7068c508ae9ab5afc4392b58237cf86afdb9f2c`, including both menu binaries,
+  at `99aeee9c8d819314f72287a8fef6fc72bd733dde`, including both menu binaries,
   per-window key handling and the dashboard. The readiness marker contains
   `1\n` and is installed by the account package, which depends on the
   `duduclaw-maint-tools` subpackage built from that same CLI snapshot.

@@ -13,4 +13,4 @@
 # The -y1-bringup suffix remains separately owned in duduclaw-os.conf;
 # syncing platform source must not silently change that milestone marker.
 DUDUCLAW_PLATFORM_VERSION = "1.74.0"
-DUDUCLAW_PLATFORM_SRCREV = "c7068c508ae9ab5afc4392b58237cf86afdb9f2c"
+DUDUCLAW_PLATFORM_SRCREV = "99aeee9c8d819314f72287a8fef6fc72bd733dde"

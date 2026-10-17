@@ -31,7 +31,7 @@ root 服務 `maint-helper`，帳號套件安裝 SSH 就緒標記。映像檢查�
 已發布的下載仍是內嵌平台 v1.73.4 的 v0.4.0。限制見 [安全說明](SECURITY.md)。
 維修選單已修正 Dropbear 傳入空原始指令時的入口，現在進入固定互動選單；
 非空指令仍受原本白名單限制。新映像與實際 SSH 驗證仍待完成。
-安全快照將 ZIP 處理更新為 zip 9.0.4、rust_xlsxwriter 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crate 下載清單仍須在 BitBake 執行 `update_crates`；這份中間原始碼完成再生前不可建置或視為驗收通過。
+安全快照將 ZIP 處理更新為 zip 9.0.4、rust_xlsxwriter 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crate 下載清單已由原 BitBake `update_crates` 任務再生，785 筆 registry 項目與 checksum 均符合快照 lock；新映像建置與實際安裝仍待驗證。
 
 ## 目錄
 

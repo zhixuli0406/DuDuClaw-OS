@@ -385,3 +385,7 @@ starlight-menu-button button,
     transition: none;
   }
 }
+
+/* Keep the original-color raster readable in the docs chrome. */
+.site-title img { background: #eef1f3; border-radius: 10px; padding: 4px; }
+.hero img { object-fit: contain; background: #eef1f3; border-radius: 32px; padding: 24px; }

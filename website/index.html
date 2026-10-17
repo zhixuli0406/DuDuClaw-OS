@@ -59,17 +59,19 @@
 <meta name="twitter:image" content="https://os.duduclaw.dudustudio.monster/assets/brand/og.png">
 <meta name="twitter:image:alt" content="DuDuClaw OS：給人與 AI 員工共用的 Linux 桌面，pre-GA，已在 QEMU 開機驗證">
 
-<link rel="icon" href="favicon.ico" sizes="any">
-<link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="manifest" href="site.webmanifest">
+<link rel="icon" href="favicon.ico?v=c1-color-png" sizes="any">
+<link rel="icon" href="favicon-32.png?v=c1-color-png" type="image/png" sizes="32x32">
+<link rel="icon" href="favicon-48.png?v=c1-color-png" type="image/png" sizes="48x48">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=c1-color-png">
+<link rel="manifest" href="site.webmanifest?v=c1-color-png">
 <meta name="theme-color" content="#F5F4F0" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0B1E33" media="(prefers-color-scheme: dark)">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/site.css">
+<link rel="stylesheet" href="assets/css/site.css?v=20261018">
+<link rel="stylesheet" href="assets/css/os-home.css?v=20261018">
 <script>
 /* Applies the stored theme before first paint and marks JS as available. */
 (function () {
@@ -82,51 +84,12 @@
 }());
 </script>
 </head>
-<body>
+<body class="os-site os-home">
 
 <a class="skip-link" href="#main">跳到主要內容</a>
 
 <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
   <defs>
-    <symbol id="mark-os" viewBox="23.0 38.0 1231.0 1231.0"><g class="ink" style="fill:var(--logo-ink,#102B48)" transform="translate(0.000000,1254.000000) scale(0.100000,-0.100000)"><path d="M6520 11193 c-28 -26 -62 -82 -251 -416 -43 -76 -94 -164 -113 -195
--18 -31 -62 -106 -96 -167 -35 -60 -164 -285 -288 -500 -496 -862 -577 -1033
--672 -1425 -58 -240 -62 -295 -67 -801 -6 -620 10 -770 116 -1039 153 -394
-445 -688 1155 -1170 27 -18 195 -137 336 -239 58 -41 175 -125 261 -185 86
--61 279 -201 428 -311 149 -110 281 -207 293 -215 21 -14 21 -14 14 70 -3 47
--13 308 -21 580 -8 272 -20 615 -25 761 -25 668 -6 871 104 1087 147 290 361
-460 776 616 339 128 442 186 593 334 186 184 271 354 272 542 0 128 -32 207
--112 281 -27 24 -238 227 -470 452 l-423 410 -2 612 -3 613 -24 26 c-27 28
--76 42 -113 31 -12 -4 -233 -217 -490 -473 l-467 -466 -49 105 c-27 57 -122
-262 -212 454 -90 193 -166 355 -170 360 -4 6 -34 68 -65 138 -62 139 -80 157
--149 157 -25 0 -45 -8 -66 -27z M4392 7085 c-968 -643 -1509 -1112 -2023
--1755 -705 -882 -1024 -1836 -924 -2770 93 -880 722 -1648 1455 -1776 88 -15
-328 -16 3100 -9 2134 5 3007 10 3012 18 26 42 21 611 -7 787 -120 760 -636
-1571 -1476 2319 -449 399 -724 612 -1499 1156 -639 449 -895 679 -1093 985
--191 295 -274 590 -293 1040 -4 88 -10 160 -13 160 -3 0 -111 -70 -239 -155z"/></g><g class="accent" style="fill:#CC8B2D" transform="translate(0.000000,1254.000000) scale(0.100000,-0.100000)"><path d="M11255 7273 c-201 -28 -596 -153 -893 -282 -1455 -636 -2239 -1930
--1835 -3031 69 -189 217 -461 390 -716 256 -378 431 -747 517 -1089 84 -336
-88 -792 11 -1206 -34 -183 -36 -172 28 -164 607 75 1114 503 1312 1110 59 178
-76 286 82 501 9 310 -26 500 -191 1029 -232 741 -289 1069 -256 1465 44 539
-223 936 815 1805 38 55 105 154 151 221 104 153 126 196 127 250 1 94 -87 131
--258 107z"/></g></symbol>
-    <symbol id="mark-company" viewBox="-2.5 15.0 1236.0 1236.0"><g class="ink" style="fill:currentColor" transform="translate(0.000000,1254.000000) scale(0.100000,-0.100000)"><path d="M2138 11555 c-188 -52 -333 -218 -358 -411 -7 -53 -10 -947 -8 -2734
-3 -2448 4 -2657 20 -2685 22 -41 56 -71 100 -90 78 -32 36 -50 708 302 179 93
-406 212 505 263 99 51 255 133 347 182 92 48 170 88 173 88 3 0 47 23 98 52
-99 56 138 88 431 358 306 283 327 300 351 300 57 0 60 -7 260 -655 149 -483
-197 -631 208 -638 7 -4 215 -113 462 -241 248 -128 506 -262 575 -298 69 -36
-240 -125 380 -198 140 -73 339 -177 442 -231 102 -55 189 -99 192 -99 3 0 101
--51 218 -113 574 -306 612 -321 736 -286 58 16 150 104 172 164 19 51 28 3378
-10 3556 -31 311 -188 573 -445 745 -58 39 -879 455 -2265 1149 -1196 598
--2364 1183 -2595 1300 -300 151 -437 215 -479 223 -75 15 -177 14 -238 -3z"/></g><g class="accent" style="fill:currentColor" transform="translate(0.000000,1254.000000) scale(0.100000,-0.100000)"><path d="M8556 7552 c-2 -4 -5 -713 -5 -1575 -1 -1088 -5 -1584 -12 -1620 -61
--289 -351 -495 -646 -458 -131 16 -79 -8 -1223 586 -151 78 -414 215 -585 303
--911 470 -1229 634 -1315 679 -582 305 -610 316 -775 316 -249 1 -452 -148
--528 -388 l-22 -70 0 -1250 c0 -1397 -4 -1310 71 -1493 89 -216 223 -354 479
--490 308 -164 611 -328 1255 -679 151 -82 316 -171 365 -198 50 -26 113 -60
-140 -75 28 -15 140 -76 250 -135 110 -59 229 -125 265 -145 36 -21 106 -59
-155 -85 50 -26 128 -69 175 -95 47 -26 162 -90 255 -140 94 -51 218 -119 277
--151 236 -130 348 -123 616 37 321 191 734 437 1062 634 190 114 406 243 480
-287 74 43 279 165 455 270 1323 788 1256 747 1326 815 116 115 199 259 241
-418 l23 85 0 1325 c0 1425 1 1383 -52 1555 -51 165 -140 310 -273 448 -119
-125 -211 182 -602 375 -189 93 -682 339 -1095 545 -414 207 -755 373 -757 369z"/></g></symbol>
     <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
@@ -167,13 +130,13 @@
 <header class="nav">
   <div class="wrap nav-inner">
     <a class="brand" href="index.html">
-      <svg class="brand-mark" aria-hidden="true" focusable="false"><use href="#mark-os"></use></svg>
+      <img class="brand-mark" src="assets/brand/duduclaw-os-mark.png" alt="" width="32" height="32">
       <span>DuDuClaw OS</span>
     </a>
     <nav class="nav-links" aria-label="主要導覽">
       <a href="#shadow">怎麼用</a>
       <a href="#desktop">桌面</a>
-      <a href="#editions">版本與硬體</a>
+      <a href="#status">試用準備</a>
       <a href="#faq">常見問題</a>
       <a href="download.html">下載</a>
       <a href="docs/">文件</a>
@@ -195,7 +158,7 @@
   <div class="nav-panel" id="nav-panel" data-open="false">
     <a href="#shadow">怎麼用</a>
     <a href="#desktop">桌面</a>
-    <a href="#editions">版本與硬體</a>
+    <a href="#status">試用準備</a>
     <a href="#faq">常見問題</a>
     <a href="download.html">下載</a>
     <a href="docs/">文件</a>
@@ -218,78 +181,13 @@
   </div>
 </div>
 
-<main id="main">
-
-  <!-- hero -->
-  <section class="hero">
+<main id="main" tabindex="-1">
+<section class="os-intro section" id="shadow" aria-labelledby="os-title"><div class="wrap intro-grid"><div class="intro-copy"><p class="eyebrow">給人與 AI 員工的 Linux 桌面</p><h1 id="os-title">你的桌面，<br>留給你。<br><span>另一個工作區，<br>交給 AI。</span></h1><p class="intro-lead">你照常使用電腦，AI 在影子工作區處理交辦。需要時接手，或讓它停下來。</p><div class="intro-actions"><a class="btn btn-primary" href="#workspace-lab">試試控制權交接 <span aria-hidden="true">↓</span></a><a class="text-link" href="download.html">下載 v0.4.0 <span aria-hidden="true">↗</span></a></div><p class="intro-boundary">技術試用版 · 目前僅 QEMU 驗證<br><a href="#status">先看驗證範圍與升級限制</a></p></div><div class="workspace-explainer"><article class="space-summary human-space"><div class="space-heading"><span class="space-number">01</span><h2>你的工作區</h2><span class="space-owner">由你操作</span></div><img src="assets/screens/home-desktop.webp" alt="v0.2.0 QEMU 淺色桌面實拍" width="1280" height="800" fetchpriority="high"><p>瀏覽、寫作、開會。你的桌面照常使用。</p></article><div class="space-bridge"><span aria-hidden="true">↕</span><p>交辦 → 旁觀 → 隨時接手</p></div><article class="space-summary agent-space"><div class="space-heading"><span class="space-number">02</span><h2>影子工作區</h2><span class="space-owner">AI 處理交辦</span></div><p>GUI 任務使用另一個工作區。啟用共駕後，可以旁觀 AI，也能接手或急停。</p><small>共駕已編譯，預設關閉；真機仍待驗證。</small></article><p class="image-provenance">實拍為 v0.2.0 QEMU，v0.4.0 尚未重拍。</p></div></div></section><section class="section os-lab" id="workspace-lab" aria-labelledby="lab-title"><div class="wrap"><div class="section-head lab-heading"><div><span class="eyebrow">01 / 先試操作</span><h2 id="lab-title">讓 AI 工作。<br>也練習讓它停下來。</h2></div><p>按下交辦，接著試試接手、交還與急停。這段示意只在瀏覽器切換狀態，不執行任務、不連接 AI，也不操控你的電腦。</p></div><div class="os-workspace-demo" data-workspace-demo data-state="ready"><div class="demo-workspaces"><div class="os-human-workspace"><div class="os-space-header"><h3>你的工作區</h3><span>控制權優先</span></div><div class="human-session"><span class="eyebrow">人工優先</span><p>你照常使用桌面。</p><span class="session-apps">瀏覽器 · 文書 · 會議</span><span class="input-priority">鍵盤／滑鼠輸入 → AI 輸入凍結</span></div><p>共駕時，你的輸入有優先權。需要讓 AI 繼續時，再明確交還。</p></div><div class="os-agent-workspace"><div class="os-space-header"><h3>影子工作區</h3><span>操作示意</span></div><div class="os-task"><span class="eyebrow">這次交辦</span><p class="task-brief">整理這週的會議摘要，<br>列出需要我確認的事項。</p><div class="os-task-state"><p class="demo-status" data-demo-status role="status" aria-live="polite" aria-atomic="true">等待你交辦</p><p data-demo-detail>按下「示範交辦」，看看工作區如何切換。</p></div></div></div></div><div class="os-demo-controls" hidden data-demo-controls aria-label="操作控制權示意"><button type="button" data-demo-action="dispatch">示範交辦</button><button type="button" data-demo-action="takeover" disabled>由我接手</button><button type="button" data-demo-action="resume" disabled>交還 AI</button><button type="button" data-demo-action="stop" disabled>急停</button><button type="button" data-demo-action="reset">重設</button></div></div><noscript><p class="os-demo-fallback">交辦後，AI 在影子工作區工作；你使用鍵盤滑鼠時會凍結 AI 輸入。Super+Enter 交還，Super+Esc 急停。啟用 JavaScript 可操作此示意。</p></noscript><p class="os-lab-note">實際 OS：Super+K 交辦、Super+Enter 交還、Super+Esc 急停。共駕須為每位員工啟用；完整模型任務與真實 DRM 硬體仍待驗證。</p></div></section><section class="section spatial-section" aria-labelledby="spatial-title"><div class="wrap"><div class="section-head"><span class="eyebrow">探索空間</span><h2 id="spatial-title">把兩個工作區，一起看清楚。</h2><p>立體場景呈現工作區的關係。你可以切換視角，也能隨時暫停；上方交接示意會同步改變場景。</p></div><figure class="spatial-stage" data-spatial-stage tabindex="-1"><div class="spatial-viewport" data-spatial-viewport><div class="spatial-poster" aria-hidden="true"><img src="assets/screens/home-desktop.webp" alt="" width="1280" height="800" loading="lazy"><img src="assets/screens/home-dark.webp" alt="" width="1280" height="800" loading="lazy"></div></div><div class="spatial-controls" hidden data-spatial-controls><div role="group" aria-label="工作區視角"><button type="button" data-space-view="together" aria-pressed="true">一起看</button><button type="button" data-space-view="human" aria-pressed="false">你的桌面</button><button type="button" data-space-view="agent" aria-pressed="false">影子工作區</button></div><button type="button" data-spatial-pause aria-pressed="false">暫停動態</button></div><p class="spatial-feedback" data-spatial-feedback role="status" aria-live="polite"></p><figcaption>空間為概念示意，螢幕內嵌 v0.2.0 QEMU 實拍；v0.4.0 尚未重拍。立體效果為裝飾，不影響操作與下載。</figcaption></figure></div></section>  <section class="section" id="desktop">
     <div class="wrap">
-      <div class="hero-grid">
-        <div class="hero-copy bar">
-          <span class="eyebrow">DuDuClaw AI 員工的 Linux 值班機</span>
-          <h1>從桌面交辦<br>讓 AI 員工接手</h1>
-          <p class="hero-sub">把一台 x86-64 電腦設成 AI 員工的值班機。在桌面輸入交辦事項、追蹤進度，再由你處理需要核准的操作；管理後台也能從區網瀏覽器打開。</p>
-          <p class="hero-sub">桌面版內建交辦列與 AI 工具鏈，共駕開啟後可用影子工作區讓 AI 操作應用程式，並保留你的接手與急停控制。</p>
-          <div class="hero-cta">
-            <a class="btn btn-primary" href="download.html">
-              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
-              下載 v0.4.0
-            </a>
-            <a class="btn btn-ghost" href="#desktop">看看桌面</a>
-          </div>
-          <p class="hero-meta">v0.4.0 pre-GA · x86-64 / UEFI · Apache-2.0<br>目前適合試用與驗證，真機尚未開機；<a href="#status">先看驗證範圍</a>。</p>
-        </div>
-        <figure class="hero-visual">
-          <div class="frame">
-            <picture>
-              <source type="image/avif" srcset="assets/screens/launcher-mobile.avif">
-              <source type="image/webp" srcset="assets/screens/launcher-mobile.webp">
-              <img src="assets/screens/launcher-mobile.png" alt="v0.2.0 在 QEMU 上按 Super+K 叫出的 Launcher 局部：第一個結果是「交辦給 總管助理」，下面是應用程式、可安裝的瀏覽器與 Bottles，底部是 Dock" width="640" height="670" fetchpriority="high" decoding="async">
-            </picture>
-          </div>
-          <figcaption>Super+K 叫出的交辦列。v0.2.0 發布映像在 QEMU 上的實拍，v0.3.0 與 v0.4.0 都尚未重拍。</figcaption>
-        </figure>
-      </div>
-    </div>
-  </section>
-
-  <!-- honest status -->
-  <section class="section-tight" id="status" aria-labelledby="status-title">
-    <div class="wrap">
-      <div class="notice bar reveal">
-        <h2 id="status-title">先確認：這還不是正式版</h2>
-        <ul>
-          <li><strong>0.4.0 屬於 bring-up 階段</strong>，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動。</li>
-          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。v0.4.0 發布前，QEMU 版的整碟映像在 QEMU 開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）；安裝精靈這一版沒有跑，跑完整段安裝的紀錄仍停在 v0.1.0 與 2026-09-06 的開發版。桌面版的測試映像另外跑了兩輪 rootless 驗證，第二輪 36 項過 35 項；從 v0.3.0 經 A/B 更新升級、需要 LLM 憑證的任務沙箱／電腦操作／Discovery 完整流程與 Windows 虛擬機都還沒驗證。</li>
-          <li><strong>v0.4.0 起 gateway 不再以 root 執行，升級是單向的</strong>。gateway 改用一般帳號 <code>duduclaw</code>，桌面版的容器改用 rootless Podman。裝置成功開過 v0.4.0 之後就回不去 v0.3.0 或更早的版本；SSH 預設關閉，目前也沒有能透過 SSH 登入的帳號。</li>
-          <li><strong>發布映像沒有啟用 Secure Boot 簽章、dm-verity 與 TPM</strong>。相關 layer 已經接好，由建置 overlay 開啟；用官方映像開機前請在韌體裡關閉 Secure Boot。</li>
-          <li><strong>共駕功能已經編譯進映像，但預設關閉</strong>，每個 agent 要各自開啟。凍結、交還、急停與影子工作區在開發階段驗證過：容器裡用模擬輸入，QEMU 虛擬機裡用真實鍵盤滑鼠事件，那台虛擬機跑的是早期 arm64 開發映像，不是這版 x86-64 發布映像。真實 DRM 硬體與雙螢幕還沒驗。</li>
-          <li><strong>v0.3.0 與更早的版本仍留在 Releases</strong>，資產與驗簽方式相同；開過 v0.4.0 的裝置不能經 A/B 更新退回這些版本。版本之間經 A/B 更新升級，目前沒有驗證紀錄。</li>
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  <!-- bundled tools -->
-  <section class="section-tight tool-strip" id="tools" aria-labelledby="tools-title">
-    <div class="wrap">
-      <h2 id="tools-title">桌面版內附的 AI 工具</h2>
-      <ul class="tool-brands" aria-label="v0.4.0 桌面版內附工具範例">
-        <li class="pill">Claude Code</li>
-        <li class="pill">Codex</li>
-        <li class="pill">Grok Build</li>
-        <li class="pill">Qwen Code</li>
-      </ul>
-      <p class="tool-note">需自行準備廠商帳號或金鑰；映像內工具版本與目前供應商服務狀態可能不同，<a href="docs/os/guides/ai-runtimes/">完整清單及設定見指南</a>。</p>
-    </div>
-  </section>
-
-  <!-- desktop -->
-  <section class="section section-alt cv-auto" id="desktop">
-    <div class="wrap">
-      <div class="section-head reveal">
-        <span class="eyebrow">桌面</span>
+      <div class="section-head">
+        <span class="eyebrow">02 / 看實際畫面</span>
         <h2>先看實際桌面</h2>
-        <p>以下六張都是 v0.2.0 發布映像在 QEMU 上的截圖（v0.3.0 與 v0.4.0 還沒重拍），2026 年 10 月 7 日拍攝，映像與 Release 上的檔案核對過 SHA-256 與簽章。安裝精靈那張來自桌面版安裝器 ISO，其餘五張來自整碟映像的首次開機。帳號名稱「Demo」是示範用的，也沒有設定任何 AI 服務的授權，所以首頁還沒有任務。真機畫面目前還沒有。</p>
+        <p>這是目前可核對來源的實際桌面：v0.2.0 發布映像，於 QEMU 拍攝。v0.4.0 尚未重拍，尚無真機畫面。</p><details class="provenance"><summary>截圖來源與拍攝條件</summary><p>以下六張都是 v0.2.0 發布映像在 QEMU 上的截圖（v0.3.0 與 v0.4.0 還沒重拍），2026 年 10 月 7 日拍攝，映像與 Release 上的檔案核對過 SHA-256 與簽章。安裝精靈那張來自桌面版安裝器 ISO，其餘五張來自整碟映像的首次開機。帳號名稱「Demo」是示範用的，也沒有設定任何 AI 服務的授權，所以首頁還沒有任務。真機畫面目前還沒有。</p></details>
       </div>
 
       <p class="shot-label">v0.2.0 截圖 · v0.4.0 尚未重拍</p>
@@ -374,161 +272,29 @@
         <p class="caption">安裝器 ISO 開機後的第一步。安裝精靈提供繁體中文、English、日本語三種顯示語言。</p>
       </div>
     </div>
-  </section>
-
-  <!-- shadow workspace -->
-  <section class="section" id="shadow">
-    <div class="wrap">
-      <div class="section-head reveal">
-        <span class="eyebrow">一台機器 兩個工作區</span>
-        <h2>交辦、看進度，需要時接手</h2>
-        <p>先設定 AI 服務與員工，再從桌面交辦。啟用共駕後，GUI 工作預設在影子工作區進行；你可以旁觀，也能接手或急停。以下展示操作方式，不代表圖中的任務已由模型執行。</p>
-      </div>
-
-      <div class="grid grid-3 reveal workflow-steps">
-        <article class="card"><span class="eyebrow">01 · 交辦</span><h3>說清楚要做什麼</h3><p>按 Super+K 或使用首頁輸入框，描述工作與完成條件，把任務交給已設定的 AI 員工。</p></article>
-        <article class="card"><span class="eyebrow">02 · 追蹤</span><h3>查看進度與核准項目</h3><p>回首頁看任務進度；需要你決定的操作會顯示核准提示，從管理後台處理。</p></article>
-        <article class="card"><span class="eyebrow">03 · 接手</span><h3>共駕時保留控制</h3><p>用子母畫面旁觀 GUI 工作。你操作鍵盤滑鼠時 AI 輸入凍結；Super+Enter 交還，Super+Esc 急停。</p></article>
-      </div>
-      <figure class="shadow-fig reveal">
-        <div class="shadow-diagram">
-
-          <!-- Left: the human's screen. Wireframes only, no product UI. -->
-          <div class="shadow-screen" data-screen="you">
-            <p class="shadow-screen-title">你的螢幕</p>
-            <div class="shadow-stage">
-              <div class="shadow-window">
-                <div class="shadow-window-bar">
-                  <span class="shadow-tab">Steam</span>
-                  <span class="shadow-tab">影片</span>
-                  <span class="shadow-tab">瀏覽器</span>
-                </div>
-                <div class="shadow-window-body" aria-hidden="true">
-                  <span class="shadow-bar"></span>
-                  <span class="shadow-bar"></span>
-                  <span class="shadow-bar"></span>
-                </div>
-                <svg class="shadow-cursor shadow-cursor-you" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 3l13.4 8.2-6 1.4-2.5 5.9z"/></svg>
-              </div>
-              <div class="shadow-pip-row">
-                <span class="shadow-pip-label">子母畫面：影子工作區預覽</span>
-                <span class="shadow-pip" aria-hidden="true">
-                  <span class="shadow-bar"></span>
-                  <span class="shadow-bar"></span>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <!-- The compositor sits between the two outputs and owns the brake. -->
-          <div class="shadow-divider">
-            <span class="shadow-divider-line" aria-hidden="true"></span>
-            <span class="shadow-chip"><code>duduclaw-comp</code></span>
-            <p class="shadow-divider-note">你操作鍵盤滑鼠時，AI 的輸入凍結</p>
-            <span class="shadow-divider-line" aria-hidden="true"></span>
-            <svg class="shadow-divider-arrow" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
-          </div>
-
-          <!-- Right: the headless shadow output the agent works on. -->
-          <div class="shadow-screen" data-screen="agent">
-            <p class="shadow-screen-title">影子輸出 <code>duduclaw-shadow-0</code></p>
-            <div class="shadow-stage">
-              <div class="shadow-browser" aria-hidden="true">
-                <span class="shadow-browser-bar"></span>
-                <span class="shadow-form">
-                  <span class="shadow-field"></span>
-                  <span class="shadow-field"></span>
-                  <span class="shadow-field"></span>
-                  <span class="shadow-button">
-                    <svg class="shadow-cursor shadow-cursor-agent" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 7.5v9M7.5 12h9"/></svg>
-                  </span>
-                </span>
-              </div>
-              <span class="shadow-tag">agent 在這裡工作</span>
-            </div>
-          </div>
-
-        </div>
-        <figcaption class="caption">操作示意（非實際模型任務）：左邊是你的螢幕，一個開著 Steam、影片與瀏覽器的大視窗，右下角有一個小小的子母畫面預覽，你的游標是一般箭頭；右邊是影子輸出 duduclaw-shadow-0，agent 用琥珀色方形游標在一個瀏覽器表單上工作；兩者之間是 compositor duduclaw-comp 的分隔線。</figcaption>
-      </figure>
-
-      <div class="grid grid-3 shadow-points reveal">
-        <article class="card">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-shadow-out"></use></svg></span>
-          <h3>影子輸出</h3>
-          <p>GUI 任務預設落在無頭的第二輸出。聊天回覆、目標迴圈、排程工作與型別化工具更是連桌面都不碰。</p>
-        </article>
-        <article class="card">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-pip"></use></svg></span>
-          <h3>子母畫面旁觀</h3>
-          <p>想盯著就把預覽拉出來；把它拉到前台就進入共駕，螢幕會出現琥珀色邊框，接手時轉成暗紅色。</p>
-        </article>
-        <article class="card">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-hand"></use></svg></span>
-          <h3>人永遠優先</h3>
-          <p>實體鍵盤滑鼠的任何事件都先讓 agent 的 seat 凍結，指令直接丟棄不排隊。Super+Enter 交還，Super+Esc 急停，兩者都由 compositor 持有。</p>
-        </article>
-      </div>
-
-      <p class="shadow-foot reveal">影子工作區與共駕已編譯進 v0.4.0，預設關閉，每個 agent 各自開啟。凍結與接手曾在早期開發映像驗證，並非這版 x86-64 發布映像；真實 DRM 硬體與雙螢幕尚未驗證。<a href="#status">完整驗證範圍</a>。</p>
+  </section>  <section class="section readiness" id="status" aria-labelledby="status-title">
+    <div class="wrap"><div class="section-head"><span class="eyebrow">03 / 準備試用</span><h2>v0.4.0 走到哪裡了？</h2><p>這是 pre-GA 技術試用版。先在可重裝的測試環境探索；1.0.0 才是第一個 GA 版本。</p></div><dl class="readiness-list"><div><dt>已驗證</dt><dd>QEMU 整碟映像開到登入畫面，兩種安裝器 ISO 開到 live 環境。</dd></div><div><dt>仍待驗證</dt><dd>真實 x86-64 硬體、這版安裝器的整段安裝、v0.3 → v0.4 A/B 升級與需要 LLM 授權的完整任務。</dd></div><div><dt>升級前留意</dt><dd>v0.4.0 改用 rootless gateway；成功開機後不能退回 v0.3.0 或更早版本。</dd></div></dl>
+      <details class="notice os-status">
+        <summary><h2 id="status-title">完整驗證紀錄與未完成項目</h2><span>展開 / 收合</span></summary>
+        <ul>
+          <li><strong>0.4.0 屬於 bring-up 階段</strong>，1.0.0 才是第一個 GA 版本。介面、分割佈局與設定格式都還可能變動。</li>
+          <li><strong>目前所有驗證都在 QEMU 完成</strong>，尚未在真實 x86-64 硬體上開機過。真機目標 <code>duduclaw-genericx86-64</code> 這一版只建置、沒有開機。v0.4.0 發布前，QEMU 版的整碟映像在 QEMU 開到登入畫面（約 65 秒），兩種安裝器 ISO 開到 live 環境的自動登入（各約 125 秒）；安裝精靈這一版沒有跑，跑完整段安裝的紀錄仍停在 v0.1.0 與 2026-09-06 的開發版。桌面版的測試映像另外跑了兩輪 rootless 驗證，第二輪 36 項過 35 項；從 v0.3.0 經 A/B 更新升級、需要 LLM 憑證的任務沙箱／電腦操作／Discovery 完整流程與 Windows 虛擬機都還沒驗證。</li>
+          <li><strong>v0.4.0 起 gateway 不再以 root 執行，升級是單向的</strong>。gateway 改用一般帳號 <code>duduclaw</code>，桌面版的容器改用 rootless Podman。裝置成功開過 v0.4.0 之後就回不去 v0.3.0 或更早的版本；SSH 預設關閉，目前也沒有能透過 SSH 登入的帳號。</li>
+          <li><strong>發布映像沒有啟用 Secure Boot 簽章、dm-verity 與 TPM</strong>。相關 layer 已經接好，由建置 overlay 開啟；用官方映像開機前請在韌體裡關閉 Secure Boot。</li>
+          <li><strong>共駕功能已經編譯進映像，但預設關閉</strong>，每個 agent 要各自開啟。凍結、交還、急停與影子工作區在開發階段驗證過：容器裡用模擬輸入，QEMU 虛擬機裡用真實鍵盤滑鼠事件，那台虛擬機跑的是早期 arm64 開發映像，不是這版 x86-64 發布映像。真實 DRM 硬體與雙螢幕還沒驗。</li>
+          <li><strong>v0.3.0 與更早的版本仍留在 Releases</strong>，資產與驗簽方式相同；開過 v0.4.0 的裝置不能經 A/B 更新退回這些版本。版本之間經 A/B 更新升級，目前沒有驗證紀錄。</li>
+        </ul>
+      </details>
     </div>
-  </section>
-
-  <!-- features -->
-  <section class="section section-alt cv-auto" id="layers">
+  </section>  <section class="section editions-section" id="editions">
     <div class="wrap">
-      <div class="section-head reveal">
-        <span class="eyebrow">核心能力</span>
-        <h2>桌面、AI 工具與系統更新一起準備</h2>
-        <p>v0.4.0 桌面版內嵌 DuDuClaw 平台 1.73.4，基座為 Yocto Project 6.0 與 Linux 6.18。以下是映像內容；功能的驗證程度見狀態卡與文件。</p>
-      </div>
-      <div class="grid grid-3">
-        <article class="card bar reveal">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-command"></use></svg></span>
-          <h3>交辦與核准就在桌面上</h3>
-          <p>按 Super+K 打開交辦列，首頁查看任務，選單列與通知中心顯示待核准項目。管理後台也能從區網操作。</p>
-        </article>
-        <article class="card bar reveal">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-columns"></use></svg></span>
-          <h3>共駕時由你掌控</h3>
-          <p>影子工作區、子母畫面、接手與急停整合進視窗系統。共駕預設關閉，需要為每個 AI 員工各自開啟；尚未在真機驗證。</p>
-        </article>
-        <article class="card bar reveal">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
-          <h3>選用你的 AI 服務</h3>
-          <p>桌面版包含 Claude Code、Codex 等十套 AI CLI。以自己的廠商帳號或 API 金鑰授權，憑證存在 <code>/data/duduclaw</code>。</p>
-          <p><a href="docs/os/guides/ai-runtimes/">查看工具清單與授權方式</a></p>
-        </article>
-        <article class="card bar reveal">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
-          <h3>可配置本機模型</h3>
-          <p>內建 llama.cpp 的推理服務；模型需另行下載到本機。準備好權重後可離線推理，雲端 AI 服務與網路任務仍需要連線。</p>
-        </article>
-        <article class="card bar reveal">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-package"></use></svg></span>
-          <h3>瀏覽器、文書與中文輸入</h3>
-          <p>Chromium 與 LibreOffice 可由內附的離線倉庫安裝，提供 fcitx5 注音。其他軟體走 Flathub；Windows／Android 相容層的驗證仍有限。</p>
-          <p><a href="docs/os/guides/app-compat/">查看應用程式相容範圍</a></p>
-        </article>
-        <article class="card bar reveal">
-          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-refresh"></use></svg></span>
-          <h3>更新系統、保留資料</h3>
-          <p>A/B 更新寫入另一個系統槽；桌面版採唯讀 root，資料另存於 <code>/data</code>。先前的映像實測過套用更新與手動回滾，v0.4.0 的 A/B 升級路徑還沒驗證，自動失敗回滾也尚未做故障注入驗證。</p>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <!-- download teaser -->
-  <section class="section section-alt cv-auto" id="editions">
-    <div class="wrap">
-      <div class="section-head reveal">
+      <div class="section-head">
         <span class="eyebrow">下載</span>
         <h2>依試用目的選版本</h2>
         <p>兩種都提供圖形安裝精靈的 ISO；桌面版另外提供可直接寫入整碟的映像。都屬於 pre-GA，請先準備可重裝的測試環境。</p>
       </div>
       <div class="grid grid-2">
-        <article class="card edition reveal">
+        <article class="card edition">
           <div>
             <h3>桌面版</h3>
             <p class="persona">想試用交辦桌面與 AI 工具鏈</p>
@@ -545,7 +311,7 @@
             看桌面版資產
           </a>
         </article>
-        <article class="card edition reveal">
+        <article class="card edition">
           <div>
             <h3>基礎版</h3>
             <p class="persona">gateway 值班機，接不接螢幕都行</p>
@@ -562,38 +328,34 @@
       </div>
       <p style="margin-top:20px;color:var(--muted)">管理後台由 gateway 提供，接不接螢幕都能從區網的瀏覽器打開 <code>http://&lt;這台機器的 IP&gt;:18789</code>。</p>
     </div>
-  </section>
-
-  <!-- hardware -->
-  <section class="section section-alt cv-auto" id="hardware">
-    <div class="wrap">
-      <div class="section-head reveal">
+  </section><section class="section reference" aria-labelledby="reference-title"><div class="wrap"><div class="section-head"><span class="eyebrow">試用參考</span><h2 id="reference-title">需要的規格與設定，放在這裡</h2><p>下載前確認硬體條件；設定 AI 服務前，先了解憑證與資料去向。</p></div><details class="reference-item" id="hardware"><summary>硬體目標與建議規格</summary><div class="reference-content">
+      <div class="section-head">
         <span class="eyebrow">硬體</span>
         <h2>我的機器能跑嗎</h2>
         <p>以下是建置目標與規劃規格，不是真機相容認證。只提供 x86-64（x86-64-v3）映像；目前尚無真機開機數據。</p>
       </div>
 
       <div class="grid grid-3">
-        <article class="card reveal">
+        <article class="card">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
           <h3>x86-64 CPU 且支援 AVX2</h3>
           <p>Intel Haswell（2013 年）以後、Intel N100 / N200 / N305、AMD Excavator（2015 年）以後與 Zen 全系都符合。</p>
           <p style="margin-top:10px"><span class="pill pill-warn">不支援 arm64</span></p>
           <p style="margin-top:10px">Apple Silicon、樹莓派與 ARM 迷你主機都不能用。</p>
         </article>
-        <article class="card reveal">
+        <article class="card">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-power"></use></svg></span>
           <h3>UEFI 開機</h3>
           <p>純 legacy BIOS 的機器不在支援範圍。v0.4.0 的開機鏈未啟用 Secure Boot 簽章，開機前要在韌體裡關閉 Secure Boot。</p>
         </article>
-        <article class="card reveal">
+        <article class="card">
           <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-disk"></use></svg></span>
           <h3>SSD</h3>
           <p>A/B 雙槽佈局會同時放兩份系統，機械硬碟的隨機讀寫撐不住日常使用。</p>
         </article>
       </div>
 
-      <div class="table-shell reveal" style="margin-top:28px">
+      <div class="table-shell" style="margin-top:28px">
         <div class="table-scroll">
         <table class="table-cards">
           <caption>三種配置的建議規格</caption>
@@ -616,48 +378,87 @@
           <svg class="icon icon-sm" aria-hidden="true"><use href="#i-arrow"></use></svg>
         </a>
       </p>
-    </div>
-  </section>
-
-  <!-- timeline -->
-  <section class="section cv-auto" id="start">
-    <div class="wrap">
-      <div class="section-head reveal">
+    </div></details><details class="reference-item" id="tools"><summary>AI 工具與授權</summary><div class="reference-content">
+      <h2 id="tools-title">桌面版內附的 AI 工具</h2>
+      <ul class="tool-brands" aria-label="v0.4.0 桌面版內附工具範例">
+        <li class="pill">Claude Code</li>
+        <li class="pill">Codex</li>
+        <li class="pill">Grok Build</li>
+        <li class="pill">Qwen Code</li>
+      </ul>
+      <p class="tool-note">需自行準備廠商帳號或金鑰；映像內工具版本與目前供應商服務狀態可能不同，<a href="docs/os/guides/ai-runtimes/">完整清單及設定見指南</a>。</p>
+    </div></details><details class="reference-item" id="layers"><summary>映像內的功能與限制</summary><div class="reference-content">
+      <div class="section-head">
+        <span class="eyebrow">核心能力</span>
+        <h2>桌面、AI 工具與系統更新一起準備</h2>
+        <p>v0.4.0 桌面版內嵌 DuDuClaw 平台 1.73.4，基座為 Yocto Project 6.0 與 Linux 6.18。以下是映像內容；功能的驗證程度見狀態卡與文件。</p>
+      </div>
+      <div class="grid grid-3">
+        <article class="card bar">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-command"></use></svg></span>
+          <h3>交辦與核准就在桌面上</h3>
+          <p>按 Super+K 打開交辦列，首頁查看任務，選單列與通知中心顯示待核准項目。管理後台也能從區網操作。</p>
+        </article>
+        <article class="card bar">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-columns"></use></svg></span>
+          <h3>共駕時由你掌控</h3>
+          <p>影子工作區、子母畫面、接手與急停整合進視窗系統。共駕預設關閉，需要為每個 AI 員工各自開啟；尚未在真機驗證。</p>
+        </article>
+        <article class="card bar">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
+          <h3>選用你的 AI 服務</h3>
+          <p>桌面版包含 Claude Code、Codex 等十套 AI CLI。以自己的廠商帳號或 API 金鑰授權，憑證存在 <code>/data/duduclaw</code>。</p>
+          <p><a href="docs/os/guides/ai-runtimes/">查看工具清單與授權方式</a></p>
+        </article>
+        <article class="card bar">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
+          <h3>可配置本機模型</h3>
+          <p>內建 llama.cpp 的推理服務；模型需另行下載到本機。準備好權重後可離線推理，雲端 AI 服務與網路任務仍需要連線。</p>
+        </article>
+        <article class="card bar">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-package"></use></svg></span>
+          <h3>瀏覽器、文書與中文輸入</h3>
+          <p>Chromium 與 LibreOffice 可由內附的離線倉庫安裝，提供 fcitx5 注音。其他軟體走 Flathub；Windows／Android 相容層的驗證仍有限。</p>
+          <p><a href="docs/os/guides/app-compat/">查看應用程式相容範圍</a></p>
+        </article>
+        <article class="card bar">
+          <span class="card-icon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-refresh"></use></svg></span>
+          <h3>更新系統、保留資料</h3>
+          <p>A/B 更新寫入另一個系統槽；桌面版採唯讀 root，資料另存於 <code>/data</code>。先前的映像實測過套用更新與手動回滾，v0.4.0 的 A/B 升級路徑還沒驗證，自動失敗回滾也尚未做故障注入驗證。</p>
+        </article>
+      </div>
+    </div></details><details class="reference-item" id="start"><summary>從下載到第一次交辦</summary><div class="reference-content">
+      <div class="section-head">
         <span class="eyebrow">從開機到上工</span>
         <h2>準備試用的四個步驟</h2>
         <p>先選映像、驗簽，再依指南寫入 USB 或測試硬碟。首次設定提供圖形精靈；v0.4.0 安裝器尚未完成整段安裝驗證，請以指南與目前測試範圍為準。</p>
       </div>
       <div class="steps">
-        <div class="step reveal">
+        <div class="step">
           <h3>選映像並驗簽</h3>
           <p>選對 QEMU／真機目標，用 minisign 與 SHA-256 驗證來源，再依下載頁寫入指南操作；寫入前備份，確認目標硬碟。</p>
         </div>
-        <div class="step reveal">
+        <div class="step">
           <h3>首次設定精靈</h3>
           <p>語言、帳號、主題、Wi-Fi 在圖形精靈裡一路點完，不必開終端機。</p>
         </div>
-        <div class="step reveal">
+        <div class="step">
           <h3>登入 AI 廠商</h3>
           <p>在 AI Runtime 授權頁或管理後台登入既有帳號、貼上 API 金鑰。憑證存在 <code>/data/duduclaw</code>，系統更新不會清掉。</p>
         </div>
-        <div class="step reveal">
+        <div class="step">
           <h3>交辦第一件事</h3>
           <p>按 Super+K 叫出交辦列，描述你要的事，AI 員工排隊接手，進度回到首頁看。</p>
         </div>
       </div>
-    </div>
-  </section>
-
-  <!-- trust chain -->
-  <section class="section cv-auto" id="trust">
-    <div class="wrap">
-      <div class="section-head reveal">
+    </div></details><details class="reference-item" id="trust"><summary>資料、安全界線與簽章公鑰</summary><div class="reference-content">
+      <div class="section-head">
         <span class="eyebrow">資料與安全界線</span>
         <h2>資料存在哪裡，保護到哪一層</h2>
         <p>OS 的設定、AI CLI 憑證與模型存於本機 <code>/data/duduclaw</code>。使用雲端模型時，交辦內容與執行所需資料仍可能傳給供應商，依你選擇的工具與服務政策處理。</p>
       </div>
       <div class="grid grid-2">
-        <article class="card reveal">
+        <article class="card">
           <h3 class="card-title">
             <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
             出貨即有
@@ -677,7 +478,7 @@
             </li>
           </ul>
         </article>
-        <article class="card reveal">
+        <article class="card">
           <h3 class="card-title">
             <svg class="icon" aria-hidden="true"><use href="#i-clock"></use></svg>
             已接好但 v0.4.0 未啟用
@@ -700,7 +501,7 @@
       </div>
 
       <p class="caption trust-boundary">桌面版有唯讀 root，基礎版沒有；兩版都有預設拒絕的防火牆，SSH 預設關閉。v0.4.0 起 gateway 以一般帳號 <code>duduclaw</code> 執行，AI 員工跟它共用這個帳號。共駕預設關閉，系統提供接手、急停與核准機制；這些不等於完整隔離或供應商的資料保護保證。</p>
-      <div class="card reveal" style="margin-top:20px">
+      <div class="card" style="margin-top:20px">
         <h3 class="card-title">
           <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
           minisign 公鑰
@@ -714,13 +515,9 @@
           <pre><code id="minisign-key">RWQyI00ugZ/+WVisQ2ZnKeTqFs8Ze8h2X11FO9Z8le0YubFMXYTwQD7n</code></pre>
         </div>
       </div>
-    </div>
-  </section>
-
-  <!-- faq -->
-  <section class="section section-alt cv-auto" id="faq" aria-labelledby="faq-title">
+    </div></details></div></section>  <section class="section section-alt" id="faq" aria-labelledby="faq-title">
     <div class="wrap">
-      <div class="section-head reveal"><span class="eyebrow">常見問題</span><h2 id="faq-title">試用前，你可能想知道</h2></div>
+      <div class="section-head"><span class="eyebrow">常見問題</span><h2 id="faq-title">試用前，你可能想知道</h2></div>
       <div class="faq-list">
         <details><summary>DuDuClaw OS 與 DuDuClaw 有什麼差別？</summary><p>DuDuClaw 是 AI 員工平台，可部署在既有系統；DuDuClaw OS 是內嵌平台的 Linux 映像，加上交辦桌面、視窗系統與 A/B 更新鏈。OS 版號獨立，v0.4.0 內嵌平台 1.73.4，並非平台最新版本的全部功能。</p></details>
         <details><summary>現在適合取代日常主力機嗎？</summary><p>目前建議用可重裝的測試環境試用。v0.4.0 是 pre-GA，驗證以 QEMU 為主，真機尚未開機；安裝器整段流程、真機 GPU 與雙螢幕仍未驗證。請先看<a href="#status">目前狀態</a>。</p></details>
@@ -730,85 +527,7 @@
         <details><summary>可以用在商務環境嗎？</summary><p>OS 開源程式碼採 Apache-2.0，內附元件仍各有授權。DuDuClaw 的企業導入、培訓與支援由總經銷 未來企業股份有限公司提供。OS 目前仍為 pre-GA，企業平台服務不代表 OS 已通過生產環境驗收。</p><p><a href="https://www.futurecorp.tw/" target="_blank" rel="noopener noreferrer">前往總經銷官網洽詢（另開視窗）</a></p></details>
       </div>
     </div>
-  </section>
-
-  <!-- docs -->
-  <section class="section cv-auto" id="docs">
-    <div class="wrap">
-      <div class="section-head reveal">
-        <span class="eyebrow">文件與回報</span>
-        <h2>想再深入一點</h2>
-        <p>OS 本身與平台功能的說明都在文件站，繁體中文、English、日本語三種語言。</p>
-      </div>
-      <div class="linkgrid reveal">
-        <a class="linkcard" href="docs/os/readme/">
-          <svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>
-          <span><b>OS README</b><small>專案總覽、映像內容與建置方式</small></span>
-        </a>
-        <a class="linkcard" href="docs/">
-          <svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>
-          <span><b>文件索引</b><small>OS repo 的文件導覽頁</small></span>
-        </a>
-        <a class="linkcard" href="docs/os/changelog/">
-          <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
-          <span><b>CHANGELOG</b><small>每個版本改了什麼</small></span>
-        </a>
-        <a class="linkcard" href="docs/os/guides/ai-runtimes/">
-          <svg class="icon" aria-hidden="true"><use href="#i-terminal"></use></svg>
-          <span><b>AI runtimes 指南</b><small>十套 CLI 怎麼打包、哪些沒內建</small></span>
-        </a>
-        <a class="linkcard" href="docs/features/50-duduclaw-os-appliance/">
-          <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
-          <span><b>值班機說明</b><small>平台文件 50</small></span>
-        </a>
-        <a class="linkcard" href="docs/features/51-os-keyboard-shortcuts/">
-          <svg class="icon" aria-hidden="true"><use href="#i-command"></use></svg>
-          <span><b>鍵盤快捷鍵</b><small>平台文件 51</small></span>
-        </a>
-        <a class="linkcard" href="docs/features/52-desktop-edition/">
-          <svg class="icon" aria-hidden="true"><use href="#i-monitor"></use></svg>
-          <span><b>桌面版說明</b><small>平台文件 52</small></span>
-        </a>
-        <a class="linkcard" href="docs/features/53-local-models/">
-          <svg class="icon" aria-hidden="true"><use href="#i-cpu"></use></svg>
-          <span><b>本機模型</b><small>平台文件 53</small></span>
-        </a>
-        <a class="linkcard" href="docs/guides/hardware-requirements/">
-          <svg class="icon" aria-hidden="true"><use href="#i-disk"></use></svg>
-          <span><b>硬體需求</b><small>能不能跑、推薦機型</small></span>
-        </a>
-        <a class="linkcard" href="docs/os/guides/app-compat/">
-          <svg class="icon" aria-hidden="true"><use href="#i-grid"></use></svg>
-          <span><b>app 相容層</b><small>Windows、Android 程式怎麼跑</small></span>
-        </a>
-        <a class="linkcard" href="https://github.com/zhixuli0406/DuDuClaw-OS/issues" rel="noopener">
-          <svg class="icon" aria-hidden="true"><use href="#i-github"></use></svg>
-          <span><b>GitHub Issues</b><small>回報問題與追蹤進度</small></span>
-        </a>
-        <a class="linkcard" href="docs/os/security/">
-          <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
-          <span><b>SECURITY.md</b><small>安全性問題的回報方式</small></span>
-        </a>
-      </div>
-    </div>
-  </section>
-
-  <!-- cta -->
-  <section class="cta">
-    <div class="wrap cta-inner">
-      <h2>準備一個測試環境，開始試用</h2>
-      <p>先確認 pre-GA 狀態與硬體目標，選擇映像並驗簽。想先了解平台，可從 DuDuClaw 網站開始。</p>
-      <div class="hero-cta">
-        <a class="btn btn-primary" href="download.html">
-          <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
-          下載 v0.4.0
-        </a>
-        <a class="btn btn-ghost" href="docs/os/readme/">閱讀入門文件</a>
-        <a class="btn btn-ghost" href="https://duduclaw.dudustudio.monster/" rel="noopener">了解 DuDuClaw 平台</a>
-      </div>
-    </div>
-  </section>
-
+  </section><section class="section" id="docs"><div class="wrap"><div class="section-head"><span class="eyebrow">04 / 下一步</span><h2>按你的進度，繼續往下走。</h2></div><div class="docs-paths"><a href="download.html"><span>準備試用</span><h3>選映像、驗簽與寫入</h3><span aria-hidden="true">↗</span></a><a href="docs/os/readme/"><span>了解專案</span><h3>OS 總覽與建置指南</h3><span aria-hidden="true">↗</span></a><a href="docs/os/guides/ai-runtimes/"><span>設定 AI</span><h3>工具清單與授權方式</h3><span aria-hidden="true">↗</span></a><a href="https://github.com/zhixuli0406/DuDuClaw-OS/issues"><span>參與測試</span><h3>回報問題與追蹤進度</h3><span aria-hidden="true">↗</span></a></div><p class="docs-index"><a href="docs/">全部文件</a> · <a href="docs/os/changelog/">版本紀錄</a> · <a href="docs/os/security/">安全性回報</a></p></div></section>
 </main>
 
 <footer class="footer cv-auto">
@@ -816,10 +535,10 @@
     <div class="footer-grid">
       <div class="footer-brand">
         <a class="brand" href="index.html">
-          <svg class="brand-mark" aria-hidden="true" focusable="false"><use href="#mark-os"></use></svg>
+          <img class="brand-mark" src="assets/brand/duduclaw-os-mark.png" alt="" width="32" height="32">
           <span>DuDuClaw OS</span>
         </a>
-        <p>AI agent 為原生住民的 Linux 作業系統，基座是 Yocto Project 6.0 「wrynose」。</p>
+        <p>Yocto Project 6.0 · Linux 6.18<br>原始碼、文件與版本紀錄。</p>
       </div>
       <div>
         <h4>專案</h4>
@@ -851,7 +570,7 @@
       </div>
     </div>
     <div class="footer-company">
-      <svg class="company-mark" role="img" aria-label="Dudu Technology Ltd." focusable="false"><use href="#mark-company"></use></svg>
+      <img class="company-mark" src="assets/brand/company-mark.png" alt="Dudu Technology Ltd." width="32" height="32">
       <p>Dudu Technology Ltd. · 嘟嘟數位科技有限公司 · 統編 94139082</p>
     </div>
     <p class="footer-legal">
@@ -865,6 +584,8 @@
   </div>
 </footer>
 
-<script src="assets/js/site.js"></script>
+<script src="assets/js/site.js?v=20261018"></script>
+<script type="module" src="assets/js/workspace-demo.mjs?v=20261018"></script>
+<script type="module" src="assets/js/spatial-world.mjs?v=20261018"></script>
 </body>
 </html>

@@ -9,6 +9,7 @@ The owner authorized GCP resources, actual image installation, acceptance and me
 - OS #26 initial baseline: `69033fc82c799f8070a4062cee58e3713639fe57`; reviewed reset-order repair: `27ee4651815f97f32203e6391499d58e52e3a2fd`, based on #25 (`feat/maint-account`).
 - Integration branch: `feat/maint-ssh-ready-20261017`, created from fetched `origin/main` (`77da682`). It includes #25, #27 and #28, then #26's reviewed fallback-path repair. All precursor heads remain separately traceable.
 - Platform source selected for synchronization: `c7068c508ae9ab5afc4392b58237cf86afdb9f2c` (1.74.0), the exact reviewed and CI-tested maintenance dashboard head. This commit is included in platform main.
+- Follow-up candidate: platform `99aeee9c8d819314f72287a8fef6fc72bd733dde` fixes Dropbear’s empty original-command entry after a real CC4 authentication/status success and interactive-menu failure. The preceding c706 selection is historical. Source review and host regression tests passed; fresh images and real interactive SSH acceptance remain pending. No release or merge readiness is implied.
 - Integration payload is committed and includes the reset-order repair. The exact checkout SHA and full tracked-file manifest are recorded in ignored acceptance artifacts and the draft PR head. Layer SHAs, builder image digest and image hashes remain pending actual build. A version string alone is not a source identity.
 
 ## Blockers

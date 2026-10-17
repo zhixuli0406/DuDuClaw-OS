@@ -7,6 +7,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Fixed
+- **Dropbear 互動選單入口**：以原同步腳本更新平台快照至 v1.74.0@`99aeee9c8d819314f72287a8fef6fc72bd733dde`。Dropbear 的 forced command 在客戶端要求 shell 時會傳入空的 `SSH_ORIGINAL_COMMAND`；維修程式將缺省與恰好空字串送入固定選單，非空指令仍沿用白名單。平台 binary 回歸測試與獨立原始碼審查通過；本次快照仍需真實映像建置、安裝與 SSH 互動驗證。
+
 ### Added
 - **維修 SSH 最後整合檢查**：讀取實際 rootfs 的就緒標記、0755 選單與 root-only helper、閘道與 sysd ELF 程式及其 SSH 協定字串；缺件、不安全權限、符號連結、任何位置的 `authorized_keys` 都讓建置失敗。原有帳號、dropbear、防火牆與服務沙箱檢查仍須全部通過。新增就緒檢查正反例 fixture 測試（直接執行相同 rootfs 檢查函式）與平台快照來源／相依 checksum 核對腳本；fixture 不代表真實工具或真實映像已通過。
 - **官網的 SEO／GEO 檔案**（`website/`）：兩頁加上 `robots` meta、canonical 與 hreflang（`zh-TW`、`x-default`）；首頁加 JSON-LD（`Organization` 為 Dudu Technology Ltd.／嘟嘟數位科技有限公司，`SoftwareApplication` 寫 v0.4.0、pre-GA、所有驗證在 QEMU、Apache-2.0），下載頁加 `BreadcrumbList`。新增 `robots.txt`（明列允許 GPTBot、ClaudeBot、PerplexityBot、Google-Extended 等 AI 爬蟲，列出 `sitemap.xml` 與文件站的 `docs/sitemap-index.xml`）、`sitemap.xml`、`llms.txt` 與 `llms-full.txt`，內容取自兩頁現有文案與 `site.js` 的 `RELEASE`。這組檔案原本寫在 #15 的分支上（v0.3.0 時的內容），#15 關閉沒有合併，正式站的 `/robots.txt`、`/llms.txt` 一直是 404；這次在 C1 版面上重做，版本與公司名稱改成現況。`scripts/build-site.sh` 組完 `_site/` 會檢查這四個檔案都在。`deploy/cloudrun/mime.types` 的 `.xml` 改送 `application/xml`，`nginx.conf` 加 `charset utf-8`，`.txt` 送 `text/plain; charset=utf-8`。`website/README.md` 補上 SEO 一節與出新版時要改的地方。

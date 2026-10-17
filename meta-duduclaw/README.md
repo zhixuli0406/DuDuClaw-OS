@@ -157,7 +157,7 @@ docker run --rm --network none \
 
 The platform checkout must match the vendored revision in
 `conf/distro/include/duduclaw-platform-version.inc`. The current source uses
-platform v1.74.0 at `c7068c508ae9ab5afc4392b58237cf86afdb9f2c`. Its CLI recipe
+platform v1.74.0 at `99aeee9c8d819314f72287a8fef6fc72bd733dde`. Its CLI recipe
 builds `duduclaw-cli` and `duduclaw-maint-tools` in one workspace build, then
 packages the menu/helper separately as `duduclaw-maint-tools`; `duduclaw-maint`
 depends on that package and installs `/usr/lib/duduclaw/maint-ssh.ready` with

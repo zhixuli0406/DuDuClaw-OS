@@ -7,6 +7,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 ## [Unreleased]
 
+### Security
+- **ZIP 相依安全修補快照**：由未修改的 `scripts/sync-platform.sh` 同步平台 v1.74.0@`a1f5fd6a964a17c2d3ad9e1165f6df3a8586c213`，保留 Dropbear 空原始指令選單修正，ZIP 改用 9.0.4、rust_xlsxwriter 改用 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crates.io 集合有變，`duduclaw-cli-crates.inc` 仍待在 BitBake 真實執行 `update_crates`；此中間 commit 不可建置或作為映像驗收結果。現有 344 個 dashboard 資產逐檔與前一快照相同，未重新執行 npm build。安全修補仍須後續映像建置及實際安裝驗證。
+
 ### Fixed
 - **Dropbear 互動選單入口**：以原同步腳本更新平台快照至 v1.74.0@`99aeee9c8d819314f72287a8fef6fc72bd733dde`。Dropbear 的 forced command 在客戶端要求 shell 時會傳入空的 `SSH_ORIGINAL_COMMAND`；維修程式將缺省與恰好空字串送入固定選單，非空指令仍沿用白名單。平台 binary 回歸測試與獨立原始碼審查通過；本次快照仍需真實映像建置、安裝與 SSH 互動驗證。
 

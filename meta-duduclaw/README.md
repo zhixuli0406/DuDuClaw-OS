@@ -157,13 +157,18 @@ docker run --rm --network none \
 
 The platform checkout must match the vendored revision in
 `conf/distro/include/duduclaw-platform-version.inc`. The current source uses
-platform v1.74.0 at `99aeee9c8d819314f72287a8fef6fc72bd733dde`. Its CLI recipe
+platform v1.74.0 at `a1f5fd6a964a17c2d3ad9e1165f6df3a8586c213`. Its CLI recipe
 builds `duduclaw-cli` and `duduclaw-maint-tools` in one workspace build, then
 packages the menu/helper separately as `duduclaw-maint-tools`; `duduclaw-maint`
 depends on that package and installs `/usr/lib/duduclaw/maint-ssh.ready` with
 content `1` and a newline. The menu binary is 0755, the root-only helper 0700.
 The tools package includes iproute2, procps and coreutils so diagnostics use
 the expected command options; no new account comes from the tools package.
+
+The security snapshot uses zip 9.0.4, rust_xlsxwriter 0.100.0 and the platform's
+checksum-pinned calamine patch, copied by the unmodified refresh script. The
+CLI registry set has changed: its crate-fetch include is still pending a real
+BitBake `update_crates` run. This intermediate commit is not build-ready.
 
 The final rootfs gate refuses missing, writable or linked tools, old gateway
 or sysd protocol binaries, an invalid marker, or any `authorized_keys` path.

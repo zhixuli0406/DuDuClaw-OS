@@ -22,7 +22,7 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 **v0.4.0 的變更**（2026-10-16）：gateway 不再以 root 執行，改用 `duduclaw` 帳號（uid 1000）；桌面版的容器（任務沙箱、腳本沙箱、電腦操作、Discovery）從 root 的 Docker 換成 rootless Podman，引擎不執行資源上限時這些功能會自動關閉。唯一的 root 輔助程式 `duduclaw-sysd` 只接受 gateway 主行程的請求，系統更新由它自己驗證簽章、雜湊與版本後才安裝。SSH 預設關閉，只能從後台的維護模式打開；基礎版也有了和桌面版相同的預設拒絕防火牆。工廠重置改在下次開機、任何服務啟動前清資料。**升級是單向的**：裝置成功開過 v0.4.0 之後，就不能再回到 v0.3.0 或更早的版本。v0.4.0 發布映像沒有能透過 SSH 登入的帳號，該版維護模式的 SSH 只控制連接埠。完整清單見 [CHANGELOG](CHANGELOG.md) 的 0.4.0 一節。
 
 **尚未發版的原始碼：**layer 已同步平台 v1.74.0 的
-`99aeee9c8d819314f72287a8fef6fc72bd733dde`，包含臨時金鑰 SSH 的閘道、
+`a1f5fd6a964a17c2d3ad9e1165f6df3a8586c213`，包含臨時金鑰 SSH 的閘道、
 root 輔助服務與儀表板。CLI recipe 同時編譯受限選單 `maint-shell` 與
 root 服務 `maint-helper`，帳號套件安裝 SSH 就緒標記。映像檢查會確認
 工具、帳號、服務沙箱與防火牆齊備，並拒絕任何烤進映像的 `authorized_keys`。
@@ -31,6 +31,7 @@ root 服務 `maint-helper`，帳號套件安裝 SSH 就緒標記。映像檢查�
 已發布的下載仍是內嵌平台 v1.73.4 的 v0.4.0。限制見 [安全說明](SECURITY.md)。
 維修選單已修正 Dropbear 傳入空原始指令時的入口，現在進入固定互動選單；
 非空指令仍受原本白名單限制。新映像與實際 SSH 驗證仍待完成。
+安全快照將 ZIP 處理更新為 zip 9.0.4、rust_xlsxwriter 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crate 下載清單仍須在 BitBake 執行 `update_crates`；這份中間原始碼完成再生前不可建置或視為驗收通過。
 
 ## 目錄
 

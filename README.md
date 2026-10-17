@@ -156,6 +156,8 @@ Prerequisites:
 
 The generic image requests built-in KVM guest support. Its kernel build refuses an effective `.config` missing the guest/clock dependencies or required VirtIO and PCI MSI options; host KVM modules keep their existing settings. This build check does not replace native GCE boot and installer validation. See the [layer build reference](meta-duduclaw/README.md#build).
 
+The installed initramfs requests `/run` mode 0755 for strict SSH key-path checks; runtime permissions and normal maintenance login still need guest verification.
+
 A remote builder (GCP, for example) never holds the signing key: run `package --no-sign` there, copy `artifacts/os/v<version>/<machine>/` back to the machine that has the key, then run `sign` and `publish`. A Linux builder with plenty of memory can set `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` instead of the default `serial1.yml` (SPDX still off, no `-j1`); pass the same value to `build`, `smoke` and `package`.
 
 The log patterns `smoke` uses to decide "reached a login prompt" and "QEMU / kas gave up" have their own test: `scripts/tests/smoke-patterns.sh` (no Docker or QEMU needed; it checks each line of the samples in `scripts/tests/fixtures/smoke/`).

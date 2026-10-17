@@ -260,3 +260,6 @@ python duduclaw_require_rootless_guards () {
 }
 do_rootfs[prefuncs] += "duduclaw_require_rootless_guards"
 do_rootfs[vardeps] += "DUDUCLAW_MIN_ROLLBACK_VERSION"
+
+# Local inference is available in both shipping editions (unreleased).
+require recipes-core/images/duduclaw-image-local-model.inc

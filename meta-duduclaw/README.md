@@ -225,7 +225,7 @@ the gateway has no Flatpak rights. `duduclaw-cli` ships
 the gateway with `setpriv --reuid=duduclaw --regid=duduclaw --init-groups`.
 
 Shared payload sets:
-`duduclaw-image-{data,flatpak,desktop,compat,runtimes}.inc`;
+`duduclaw-image-{data,flatpak,desktop,compat,runtimes,local-model}.inc`;
 read-only root wiring: `duduclaw-ro-root.inc`.
 `duduclaw-image-runtimes.inc` (the AI payload: `nodejs` + `nodejs-npm`,
 `duduclaw-ai-runtimes`, `llama-cpp`, `duduclaw-llama-server`) is required
@@ -405,3 +405,9 @@ reached the live environment's automatic login under headless QEMU; the
 installer wizard was not run. The real-hardware machine
 (`duduclaw-genericx86-64`) was built but not booted — it has not yet been
 booted on real hardware.
+
+Unreleased: `duduclaw-image-local-model.inc` adds `duduclaw-llama-server`
+to the base A/B image; its hard dependency supplies `llama-cpp`. It also
+checks the real engine, wrapper and service payload for both shipping
+editions. The desktop runtime bundle remains separate, and model weights
+stay on `/data`. Image and runtime acceptance for this change is pending.

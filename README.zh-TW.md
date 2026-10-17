@@ -33,6 +33,8 @@ root 服務 `maint-helper`，帳號套件安裝 SSH 就緒標記。映像檢查�
 非空指令仍受原本白名單限制。新映像與實際 SSH 驗證仍待完成。
 安全快照將 ZIP 處理更新為 zip 9.0.4、rust_xlsxwriter 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crate 下載清單已由原 BitBake `update_crates` 任務再生，785 筆 registry 項目與 checksum 均符合快照 lock；新映像建置與實際安裝仍待驗證。
 
+尚未發版的原始碼也讓兩版都內建 CPU 本機模型引擎與服務。基礎版只補引擎與服務，不加入桌面版的 coding CLI 套件；權重仍存放在 `/data`。最終映像建置、模型載入與維修選單重啟仍待實測。
+
 ## 目錄
 
 - [為什麼需要 DuDuClaw OS？](#why)

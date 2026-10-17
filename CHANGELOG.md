@@ -58,6 +58,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **原廠重設與維修 SSH 啟動的競態**：重設資料的 oneshot 現在排在 `duduclaw-sysd.service` 與 `dropbearkey.service` 之前，避免 sysd 在清除後寫回舊維修紀錄，或主機金鑰先產生卻又被重設刪除。只增加啟動排序，不要求重設成功才啟動這兩項服務，重設失敗時仍可進後台排查。新增 `scripts/tests/maint-reset-order.py`，從實際 unit 原始碼檢查排序圖、循環與失敗依賴；這是靜態回歸測試，尚未以映像建置或 QEMU 開機驗證。
 - **維修 SSH 後備關窗腳本讀錯視窗狀態路徑**：`maint-ssh-close` 改讀 sysd 實際寫入的 `/data/system/maint-ssh/window.json`，不再從 tmpfs 金鑰目錄找，讓關窗稽核與 `last-close.json` 保留正確的視窗 ID、指紋、游標與計數。狀態檔留給 sysd 重播 journal；即使重開機後金鑰消失，仍記錄持久視窗的關閉；沒有持久視窗也沒有金鑰時，不新增稽核紀錄、不覆寫最後關閉原因。新增 `scripts/tests/maint-ssh-close.py` 與完整 `WindowFile` 範例，核對平台目前的欄位與路徑，並測試上述行為；Linux 容器使用真正的 Bash、檔案與 flock，systemctl／nft 為替身，尚未建置映像或在 QEMU 開機驗證。
 - **安裝串流失敗不再誤報成功**：安裝器改用 Bash（recipe 明確依賴 `bash`）與 `pipefail`，三條寫入路徑的解壓、`pv` 或 `dd` 任一步失敗就停止，不進入 GPT 修復或初始設定注入。進度樣本最高 99，完整串流、進度讀取與同步成功後才發 100；FIFO 改放在私有暫存目錄，失敗會清理並等待背景讀取行程。主程序收到 TERM／INT 會終止並等待本次寫入專用的程序群組，不波及呼叫者的群組；fork 後尚未記錄 PID 時收到的取消會先暫存，記錄後立即處理。新增 29 個 host 路徑案例，直接讀取正式 script 的實際寫入段落；紅測試先重現 6 處串流失敗、6 處取消失敗與 6 處啟動競態，修正後全過。尚待重新建置與兩版正式 ISO 的真空白磁碟安裝，這些 host 測試不代表映像驗收完成。
+- **generic 核心補齊 GCE guest 支援**：新增 generic 專用的 `HYPERVISOR_GUEST`／`PARAVIRT`／`KVM_GUEST`／`PARAVIRT_CLOCK` 設定，並在核心配置後檢查最終 `.config`；缺少必要 guest、VirtIO 或 PCI MSI built-in 就停止建置。既有 host KVM 模組設定不變。回歸測試涵蓋原始 guest 選項缺漏、模組／停用值、缺檔與路徑空白；這項檢查不能取代原生 GCE 開機及安裝驗收。
 - **下載頁的升級說明寫錯版本**：狀態卡寫「從 v0.4.0 經 A/B 更新升上來…還沒驗證」，實際未驗證的是從 v0.3.0 升到 v0.4.0（首頁與 v0.4.0 的 CHANGELOG 都這樣寫），改正。
 
 ## [0.4.0] - 2026-10-16 — gateway 改用一般帳號×rootless Podman×SSH 預設關閉（內嵌平台 v1.73.4）

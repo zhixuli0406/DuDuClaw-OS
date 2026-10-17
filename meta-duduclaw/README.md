@@ -310,6 +310,16 @@ docker exec -u 1000 duduclaw-yocto bash -c \
     "cd /workspace && KAS_TARGET=duduclaw-image-appliance kas build meta-duduclaw/kas/duduclaw-os-genericx86-64.yml"
 ```
 
+For `duduclaw-genericx86-64`, `duduclaw-gce-guest.cfg` requests
+`HYPERVISOR_GUEST`, `PARAVIRT`, `KVM_GUEST` and `PARAVIRT_CLOCK` as built-ins.
+The final kernel `.config` is checked after configuration, before compilation;
+a missing or modular guest dependency, VirtIO PCI/SCSI/network driver or PCI
+MSI option aborts the build. This follows the [GCE custom-kernel
+requirements](https://cloud.google.com/compute/docs/images/building-custom-os).
+The existing host KVM modules are unchanged. Run the host regression with
+`python3 scripts/tests/gce-kernel-guest.py` from the repository root. This
+configuration check is not evidence of a successful native GCE boot or install.
+
 Do not run two kas configs concurrently in one build dir: they rewrite the
 same `build/conf/local.conf` and bitbake fails with cascading
 "metadata not deterministic" errors.

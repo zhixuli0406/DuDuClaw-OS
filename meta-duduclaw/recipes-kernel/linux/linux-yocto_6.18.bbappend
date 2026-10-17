@@ -162,3 +162,22 @@ do_configure:append() {
 		fi
 	done
 }
+
+# --- Generic KVM guest requirements (2026-10-17) ------------------------
+# The generic image also runs as a native GCE guest. This is guest-side
+# support; duduclaw-kvm.cfg's host KVM modules remain unchanged. Google
+# requires the guest clock, VirtIO transport/storage/network and PCI MSI:
+# https://cloud.google.com/compute/docs/images/building-custom-os
+SRC_URI:append:duduclaw-genericx86-64 = " file://duduclaw-gce-guest.cfg"
+DUDUCLAW_GCE_REQUIRED_KCONFIG = "CONFIG_HYPERVISOR_GUEST=y CONFIG_PARAVIRT=y CONFIG_KVM_GUEST=y CONFIG_PARAVIRT_CLOCK=y CONFIG_VIRTIO_PCI=y CONFIG_SCSI_VIRTIO=y CONFIG_VIRTIO_NET=y CONFIG_PCI_MSI=y"
+
+# Kernel config fragments can be dropped when dependencies are missing.
+# Refuse the effective configuration before compilation instead of trusting
+# a requested fragment or allowing an unsupported generic image to ship.
+do_configure:append:duduclaw-genericx86-64() {
+    for opt in ${DUDUCLAW_GCE_REQUIRED_KCONFIG}; do
+        if ! grep -Fqx -- "$opt" "${B}/.config"; then
+            bbfatal "generic kernel .config lacks $opt (required for a GCE guest)"
+        fi
+    done
+}

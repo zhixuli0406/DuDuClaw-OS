@@ -25,7 +25,8 @@
   --accent-text: #8A5A10;          /* links and text in the accent hue, 5.37:1 */
   --accent-tint: rgba(204, 139, 45, 0.12);
   --ink-tint: rgba(16, 43, 72, 0.05);
-  --logo-ink: var(--navy);
+
+
 
   --btn-fill: var(--navy);
   --btn-text: var(--cream);
@@ -79,7 +80,8 @@
     --accent-text: #E0A54F;
     --accent-tint: rgba(204, 139, 45, 0.16);
     --ink-tint: rgba(245, 244, 240, 0.06);
-    --logo-ink: var(--cream);
+
+
     --btn-fill: var(--cream);
     --btn-text: var(--navy);
     --btn-fill-hover: #E4E2DB;
@@ -101,7 +103,8 @@
   --accent-text: #E0A54F;
   --accent-tint: rgba(204, 139, 45, 0.16);
   --ink-tint: rgba(245, 244, 240, 0.06);
-  --logo-ink: var(--cream);
+
+
   --btn-fill: var(--cream);
   --btn-text: var(--navy);
   --btn-fill-hover: #E4E2DB;
@@ -1490,3 +1493,6 @@ th[scope="row"] { font-weight: 600; white-space: nowrap; }
 @media print {
   .nav, .cta, .selector { display: none; }
 }
+
+/* Preserve the delivered PNG colors in every theme. */
+.brand-mark, .company-mark { object-fit: contain; }

@@ -188,12 +188,7 @@ themes, so Expressive Code runs a single dark theme with navy overrides in
 bar the main site uses. Light, dark and system all work: Starlight stamps
 `data-theme` before first paint, the same three-state pattern the main site uses.
 
-The header logo is the C1 cat mark (`src/assets/duduclaw-os-mark.svg`, with a
-cream-ink `-reverse` variant for dark), taken verbatim from Codex's C1 output;
-the site title next to it carries the "DuDuClaw OS" text. The landing pages use
-the same pair as the splash hero image. `public/favicon.svg`,
-`public/favicon.ico` and `public/apple-touch-icon.png` are copies of the main
-site's files.
+The header and splash hero use the delivered C1 raster PNG (`src/assets/duduclaw-os-mark.png`) in every theme. Only transparent outer padding is cropped; the raster contours and alpha are preserved. The title next to it carries the "DuDuClaw OS" text. Transparent `public/favicon-32.png`, `favicon-48.png`, `favicon.ico` and `apple-touch-icon.png` are copied from the main site, with a `v=c1-color-png` cache version in the head. The opaque avatar/app-icon exports, white or monochrome variants and SVG traces are not used by the pages.
 
 The only chrome customisation beyond CSS is `src/components/SiteLink.astro`,
 which replaces Starlight's social-icon slot with two text links, 「回到官網」

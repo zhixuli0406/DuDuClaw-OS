@@ -105,6 +105,7 @@ var RELEASE = {
     function setOpen(open) {
       panel.setAttribute('data-open', open ? 'true' : 'false');
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.setAttribute('aria-label', open ? '關閉導覽選單' : '開啟導覽選單');
     }
 
     setOpen(false);
@@ -311,17 +312,15 @@ var RELEASE = {
   function initNavScroll() {
     var nav = document.querySelector('.nav');
     if (!nav) return;
-    var pending = false;
-    function update() {
-      pending = false;
-      nav.setAttribute('data-scrolled', window.scrollY > 4 ? 'true' : 'false');
-    }
-    window.addEventListener('scroll', function () {
-      if (pending) return;
-      pending = true;
-      window.requestAnimationFrame(update);
-    }, { passive: true });
-    update();
+    if (!('IntersectionObserver' in window)) return;
+    var sentinel = document.createElement('span');
+    sentinel.setAttribute('aria-hidden', 'true');
+    sentinel.style.cssText = 'position:absolute;top:0;height:1px;width:1px;pointer-events:none';
+    document.body.prepend(sentinel);
+    var observer = new IntersectionObserver(function (entries) {
+      nav.setAttribute('data-scrolled', entries[0].isIntersecting ? 'false' : 'true');
+    });
+    observer.observe(sentinel);
   }
 
   /* ---------- boot ---------- */

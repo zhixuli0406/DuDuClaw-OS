@@ -50,14 +50,14 @@ export default defineConfig({
       },
       description:
         'DuDuClaw OS 與 DuDuClaw 平台的公開文件：安裝、桌面、AI runtime、架構與規格。',
-      // C1 mark: navy ink on light, cream ink on dark (the amber layer never
-      // changes). The site title next to it carries the "DuDuClaw OS" text.
+      // Use the delivered original-color raster in every theme.
+      // The site title next to it carries the "DuDuClaw OS" text.
       logo: {
-        light: './src/assets/duduclaw-os-mark.svg',
-        dark: './src/assets/duduclaw-os-mark-reverse.svg',
+        light: './src/assets/duduclaw-os-mark.png',
+        dark: './src/assets/duduclaw-os-mark.png',
         alt: 'DuDuClaw OS',
       },
-      favicon: '/favicon.svg',
+      favicon: '/favicon-32.png?v=c1-color-png',
       customCss: ['./src/styles/custom.css'],
       // No "edit this page" link: the docs live on our own domain. The header
       // carries two text links (main site, DuDuClaw platform site) and a
@@ -69,11 +69,11 @@ export default defineConfig({
       head: [
         {
           tag: 'link',
-          attrs: { rel: 'icon', href: `${docsBasePrefix()}/favicon.ico`, sizes: 'any' },
+          attrs: { rel: 'icon', href: `${docsBasePrefix()}/favicon.ico?v=c1-color-png`, sizes: 'any' },
         },
         {
           tag: 'link',
-          attrs: { rel: 'apple-touch-icon', href: `${docsBasePrefix()}/apple-touch-icon.png` },
+          attrs: { rel: 'apple-touch-icon', href: `${docsBasePrefix()}/apple-touch-icon.png?v=c1-color-png` },
         },
         {
           tag: 'link',

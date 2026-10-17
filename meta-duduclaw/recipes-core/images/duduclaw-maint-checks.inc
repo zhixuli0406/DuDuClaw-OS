@@ -430,3 +430,84 @@ python duduclaw_check_maint_dropbear () {
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_dropbear;"
 do_rootfs[vardeps] += "DUDUCLAW_MAINT_DROPBEAR_ARGV DUDUCLAW_MAINT_DROPBEAR_INACCESSIBLE"
+
+# --- Firewall pieces for the maintenance account (2026-10-16) ---------------
+# duduclaw-sysd checks the live ruleset before it opens a window (the jump,
+# the uid-4800 reject rule, both source sets with exactly these elements);
+# this checks the files that produce it. Keep these constants, nftables.conf
+# and sysd's constants equal.
+DUDUCLAW_MAINT_SRC4 = "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
+DUDUCLAW_MAINT_SRC6 = "fc00::/7 fe80::/10"
+DUDUCLAW_MAINT_NFT_RULE = "/usr/sbin/nft add rule inet filter duduclaw_maint_egress meta skuid ${DUDUCLAW_MAINT_ID} counter reject"
+
+# What fails the build:
+#   - nftables.service.d/60-duduclaw-maint.conf is missing, or its
+#     ExecStartPost=/ExecReload= are not exactly "-" + DUDUCLAW_MAINT_NFT_RULE
+#     (numeric uid, failure tolerated);
+#   - /etc/nftables.conf (when the image has the firewall) names an account
+#     or group in a skuid/skgid match (nft resolves names at load time and an
+#     unknown one fails the whole ruleset), lacks the empty
+#     duduclaw_maint_egress chain, does not have the `oif "lo"` jump to it as
+#     the first rule of the output chain (before the podman jump), has source
+#     sets whose elements differ from the constants above, or lacks the
+#     three maintenance-port rules (v4 accept, v6 accept, reset).
+python duduclaw_check_maint_nft () {
+    import os
+    import re
+
+    root = d.getVar('IMAGE_ROOTFS')
+    errors = []
+
+    dropin = root + d.getVar('systemd_system_unitdir') + '/nftables.service.d/60-duduclaw-maint.conf'
+    want = '-' + d.getVar('DUDUCLAW_MAINT_NFT_RULE')
+    if not os.path.isfile(dropin):
+        errors.append('nftables.service.d/60-duduclaw-maint.conf is missing')
+    else:
+        found = {'ExecStartPost': [], 'ExecReload': []}
+        with open(dropin) as f:
+            for line in f:
+                line = line.strip()
+                for key in found:
+                    if line.startswith(key + '='):
+                        found[key].append(' '.join(line.split('=', 1)[1].split()))
+        for key, vals in found.items():
+            if vals != [want]:
+                errors.append('nftables drop-in %s is %r, expected [%r]' % (key, vals, want))
+
+    conf_path = root + d.getVar('sysconfdir') + '/nftables.conf'
+    if os.path.isfile(conf_path):
+        with open(conf_path) as f:
+            conf = '\n'.join(l.split('#', 1)[0] for l in f)
+        bad = re.findall(r'\bsk(?:uid|gid)\s+(?:(?:==|!=)\s*)?([^\s;{}]+)', conf)
+        named = [b for b in bad if not b.isdigit()]
+        if named:
+            errors.append('/etc/nftables.conf matches on account names %s; use numbers, and keep the maintenance rule out of this file' % named)
+        if not re.search(r'chain\s+duduclaw_maint_egress\s*\{\s*\}', conf):
+            errors.append('/etc/nftables.conf lacks the empty duduclaw_maint_egress chain')
+        out = re.search(r'chain\s+output\s*\{(.*?)\n\s*\}', conf, re.S)
+        rules = [l.strip() for l in out.group(1).split('\n') if l.strip() and not l.strip().startswith('type ')] if out else []
+        if not rules or not re.fullmatch(r'oif\s+"lo"\s+jump\s+duduclaw_maint_egress', rules[0]):
+            errors.append('/etc/nftables.conf: the first rule of the output chain must be `oif "lo" jump duduclaw_maint_egress` (found %r)' % (rules[0] if rules else None))
+        for name, var in (('maintenance_src4', 'DUDUCLAW_MAINT_SRC4'), ('maintenance_src6', 'DUDUCLAW_MAINT_SRC6')):
+            m = re.search(r'set\s+' + name + r'\s*\{(.*?)\}\s*\n', conf, re.S)
+            elems = None
+            if m:
+                e = re.search(r'elements\s*=\s*\{([^}]*)\}', m.group(1) + '}')
+                if e:
+                    elems = sorted(x.strip() for x in e.group(1).split(',') if x.strip())
+            if elems != sorted(d.getVar(var).split()):
+                errors.append('/etc/nftables.conf set %s has %s, expected %s' % (name, elems, sorted(d.getVar(var).split())))
+        for pat, what in (
+                (r'ip\s+saddr\s+@maintenance_src4\s+tcp\s+dport\s+@maintenance_tcp_ports\s+accept', 'IPv4 LAN/VPN accept rule'),
+                (r'ip6\s+saddr\s+@maintenance_src6\s+tcp\s+dport\s+@maintenance_tcp_ports\s+accept', 'IPv6 LAN accept rule'),
+                (r'tcp\s+dport\s+@maintenance_tcp_ports\s+reject\s+with\s+tcp\s+reset', 'reset rule for other sources')):
+            if not re.search(pat, conf):
+                errors.append('/etc/nftables.conf lacks the %s' % what)
+        if re.search(r'^\s*tcp\s+dport\s+@maintenance_tcp_ports\s+accept', conf, re.M):
+            errors.append('/etc/nftables.conf still accepts maintenance_tcp_ports from every source')
+
+    if errors:
+        bb.fatal('duduclaw_check_maint_nft:\n  ' + '\n  '.join(errors))
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_nft;"
+do_rootfs[vardeps] += "DUDUCLAW_MAINT_SRC4 DUDUCLAW_MAINT_SRC6 DUDUCLAW_MAINT_NFT_RULE"

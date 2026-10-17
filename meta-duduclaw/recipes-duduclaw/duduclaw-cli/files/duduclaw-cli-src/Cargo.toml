@@ -15,18 +15,19 @@ members = [
     "crates/duduclaw-inference",
     "crates/duduclaw-license",
     "crates/duduclaw-llm",
+    "crates/duduclaw-maint-tools",
     "crates/duduclaw-memory",
     "crates/duduclaw-odoo",
     "crates/duduclaw-os",
     "crates/duduclaw-redaction",
+    "crates/duduclaw-relay",
     "crates/duduclaw-sandbox",
     "crates/duduclaw-security",
     "crates/duduclaw-sysd",
-    "crates/duduclaw-relay",
 ]
 
 [workspace.package]
-version = "1.73.4"
+version = "1.74.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["DuDuClaw Contributors"]

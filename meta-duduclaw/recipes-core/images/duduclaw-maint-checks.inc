@@ -573,3 +573,89 @@ python duduclaw_check_maint_helper () {
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_helper;"
 do_rootfs[vardeps] += "DUDUCLAW_MAINT_HELPER_SOCKET_SETTINGS DUDUCLAW_MAINT_HELPER_SERVICE_SETTINGS"
+
+# Final integration gate for the image that advertises key-based SSH. The
+# preceding checks validate accounts, dropbear, nftables and helper units;
+# this verifies the actual installed binaries and refuses baked-in keys.
+python duduclaw_check_maint_ready () {
+    import os
+    import stat
+
+    root = d.getVar('IMAGE_ROOTFS')
+    errors = []
+    marker = d.getVar('DUDUCLAW_MAINT_READY')
+    # The menu must be executable by uid 4800, while the privileged helpers
+    # are root-only. Check the full mode, including setuid/setgid/sticky bits.
+    exact_modes = {
+        marker: 0o644,
+        d.getVar('DUDUCLAW_MAINT_SHELL'): 0o755,
+        d.getVar('libexecdir') + '/duduclaw/maint-helper': 0o700,
+        d.getVar('DUDUCLAW_MAINT_CLOSE'): 0o700,
+    }
+
+    def regular_root_file(path, executable=False):
+        full = root + path
+        try:
+            info = os.lstat(full)
+        except OSError:
+            errors.append('%s is missing or unreadable' % path)
+            return False
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                or info.st_mode & 0o022 or (executable and not info.st_mode & 0o111)):
+            errors.append('%s must be a regular root:root file, not group/world-writable%s' %
+                          (path, ', and executable' if executable else ''))
+            return False
+        expected = exact_modes.get(path)
+        if expected is not None and stat.S_IMODE(info.st_mode) != expected:
+            errors.append('%s must have mode %04o (found %04o)' %
+                          (path, expected, stat.S_IMODE(info.st_mode)))
+            return False
+        return True
+
+    if regular_root_file(marker):
+        with open(root + marker, 'rb') as f:
+            if f.read(16) != b'1\n':
+                errors.append('readiness marker must contain exactly 1 and a newline')
+
+    # The fallback is a shell script, so validate its metadata separately
+    # rather than subjecting it to the ELF/protocol checks below.
+    regular_root_file(d.getVar('DUDUCLAW_MAINT_CLOSE'), executable=True)
+
+    # These strings are protocol/JSON dispatch keys, not debug symbols.
+    # Reading in chunks avoids loading the large gateway binary into RAM.
+    binaries = {path: [] for path in d.getVar('DUDUCLAW_MAINT_TOOLS').split()}
+    for path in exact_modes:
+        if path not in (marker, d.getVar('DUDUCLAW_MAINT_CLOSE')):
+            binaries.setdefault(path, [])
+    binaries[d.getVar('bindir') + '/duduclaw-sysd'] = [b'ssh_maint_open', b'ssh_maint_status']
+    binaries[d.getVar('bindir') + '/duduclaw'] = [b'ssh_public_key']
+    for path, tokens in binaries.items():
+        if not regular_root_file(path, executable=True):
+            continue
+        missing = set(tokens)
+        with open(root + path, 'rb') as f:
+            if f.read(4) != b'\x7fELF':
+                errors.append('%s is not an ELF executable' % path)
+            tail = b''
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                data = tail + chunk
+                missing = {token for token in missing if token not in data}
+                tail = data[-64:]
+        if missing:
+            errors.append('%s lacks maintenance SSH protocol keys: %s' %
+                          (path, ', '.join(token.decode() for token in sorted(missing))))
+
+    def walk_error(error):
+        errors.append('cannot inspect image for baked-in keys: %s' % error)
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
+        if 'authorized_keys' in dirs or 'authorized_keys' in files:
+            errors.append('%s contains authorized_keys; no SSH login key may be baked into the image' % directory)
+    if errors:
+        bb.fatal('duduclaw_check_maint_ready:\n  ' + '\n  '.join(errors))
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " duduclaw_check_maint_ready;"
+do_rootfs[vardeps] += "DUDUCLAW_MAINT_READY DUDUCLAW_MAINT_TOOLS DUDUCLAW_MAINT_SHELL DUDUCLAW_MAINT_CLOSE"

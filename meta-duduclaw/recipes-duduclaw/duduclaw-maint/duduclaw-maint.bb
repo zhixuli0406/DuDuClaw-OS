@@ -15,6 +15,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 SRC_URI = " \
     file://maint-ssh-close \
+    file://maint-ssh.ready \
     file://60-duduclaw-maint-nftables.conf \
     file://duduclaw-maint-helper.socket \
     file://duduclaw-maint-helper@.service \
@@ -58,14 +59,10 @@ inherit useradd allarch systemd
 # dropbear reads authorized keys from /run/duduclaw-maint-ssh (its -D
 # option), never from this home.
 #
-# Shell /usr/libexec/duduclaw/maint-shell: the fixed menu from the
-# platform's duduclaw-maint-tools crate. It is NOT built by this recipe and
-# NOT in the image yet: the platform snapshot that carries it comes with
-# the last PR of this series (O-5), which also installs the readiness
-# marker /usr/lib/duduclaw/maint-ssh.ready. Until then the account exists
-# but cannot log in (no shell binary, and the vendored sysd has no verb that
-# writes a key). The image check turns a missing shell into a build failure
-# as soon as the readiness marker is present.
+# The binaries come from duduclaw-cli's duduclaw-maint-tools subpackage,
+# generated from the same platform snapshot as the gateway. The readiness
+# marker below enables key-based SSH; all image assertions must pass before
+# an image containing it can complete do_rootfs.
 USERADD_PACKAGES = "${PN}"
 DUDUCLAW_MAINT_ID = "4800"
 DUDUCLAW_MAINT_HOME = "${datadir}/duduclaw-maint"
@@ -74,6 +71,9 @@ GROUPADD_PARAM:${PN} = "--system --gid ${DUDUCLAW_MAINT_ID} duduclaw-maint"
 USERADD_PARAM:${PN} = "--system --uid ${DUDUCLAW_MAINT_ID} --gid duduclaw-maint --home-dir ${DUDUCLAW_MAINT_HOME} --no-create-home --shell ${DUDUCLAW_MAINT_SHELL} --password '*' duduclaw-maint"
 
 do_install() {
+    install -d ${D}${nonarch_libdir}/duduclaw
+    install -m 0644 ${UNPACKDIR}/maint-ssh.ready ${D}${nonarch_libdir}/duduclaw/maint-ssh.ready
+
     # Read-only, empty home.
     install -d -m 0555 ${D}${DUDUCLAW_MAINT_HOME}
 
@@ -117,6 +117,7 @@ pkg_postinst:${PN} () {
 
 FILES:${PN} += " \
     ${DUDUCLAW_MAINT_HOME} \
+    ${nonarch_libdir}/duduclaw/maint-ssh.ready \
     ${libexecdir}/duduclaw/maint-ssh-close \
     ${systemd_system_unitdir}/nftables.service.d/60-duduclaw-maint.conf \
     ${systemd_system_unitdir}/duduclaw-maint-helper.socket \
@@ -128,7 +129,7 @@ FILES:${PN} += " \
 # adds no polkit daemon or rule to either edition, and no new dynamic
 # system account with it. base-files owns /etc/shells; listing it orders
 # its install before this package's postinst appends to the file.
-RDEPENDS:${PN} += "base-files"
+RDEPENDS:${PN} += "base-files duduclaw-maint-tools"
 # maint-ssh-close is a bash script (arrays, [[ ]]); nft and systemctl come
 # with the firewall and systemd, and the script reports a missing firewall
 # set instead of failing on it. flock (the audit lock it shares with sysd)

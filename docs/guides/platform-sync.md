@@ -9,13 +9,13 @@ crate 依賴它們），快照同樣放在各自 recipe 的 `files/`，但來源
 平台每出一版，OS 這邊要做的事是固定的四步，`scripts/sync-platform.sh` 一次做完：
 
 1. 用 `duduclaw-cli`／`duduclaw-sysd` 各自的 `refresh-src.sh` 從平台 checkout 重新產生快照
-   （`duduclaw-comp`／`duduclaw-shell` 的 `refresh-src.sh` 同一趟也會跑，但讀的是本 repo `crates/`，
+   （CLI 快照也含同次建置的 `duduclaw-maint-tools`，由兩個入口的 path 相依圖計算成員閉包；`duduclaw-comp`／`duduclaw-shell` 的 `refresh-src.sh` 同一趟也會跑，但讀的是本 repo `crates/`，
    覆寫路徑用 `DUDUCLAW_OS_SRC_ROOT`，不吃 `DUDUCLAW_CLI_SRC_ROOT`）；
 2. 把 `meta-duduclaw/conf/distro/include/duduclaw-platform-version.inc` 改成該版本
    （它連動 `DISTRO_VERSION`、os-release 的 `VERSION_ID`、UKI 檔名、A/B loader 項），
    兩個平台 recipe 檔名改成 `<name>_<版本>.bb`，引用這些檔名的註解一併更新
    （comp／shell 的 recipe 檔名保留自己的 PV，不隨平台版本改）；
-3. 比對每份快照的 crates.io 依賴集合有沒有變（變了就得重生 `*-crates.inc`）；
+3. 在版本 include 記錄精確平台 commit `DUDUCLAW_PLATFORM_SRCREV`；回滾下限 `DUDUCLAW_MIN_ROLLBACK_VERSION` 固定在第一個 rootless 映像，不隨同步改動。比對每份快照的 crates.io 依賴集合有沒有變（變了就得重生 `*-crates.inc`）；
 4. 在 `CHANGELOG.md` 的 `[Unreleased]` 放一段 `### Changed` 樣板，列出帶進來的平台 commit。
 
 OS 自己的 release 版本（repo 根目錄 `VERSION`，0.x 直到 GA）不在此腳本的範圍，
@@ -49,9 +49,13 @@ scripts/sync-platform.sh 1.63.0           # 真做
 裡 `CARGO_BUILD_FLAGS` 要換成帶 `app-compat` 的那行（檔內已備好註解掉的替換行）。平台把 `duduclaw compat`
 子命令族改成了預設不編的 feature，而本 image 的殼與 `compat.d/windows-vm.toml` 都會呼叫它；不換的話對齊後的 image 會少掉這個子命令。
 
+任何 refresh 失敗會立即中止，不繼續改版本。CLI 與 sysd 的 lock 以離線 `cargo metadata` 剪裁，不會在本機編譯 Rust；無法解析時先補齊對應的 Cargo 快取，再重新執行。
+
 跑完後若 crates.io 依賴集合有變，腳本會以 exit code 2 結束並列出 recipe：
 `duduclaw-cli` 用 `kas shell … -c 'bitbake -c update_crates duduclaw-cli'`，
-`duduclaw-comp`／`duduclaw-sysd` 用各自目錄的 `gen-crates-inc.py`，做完再烤。
+`duduclaw-comp`／`duduclaw-sysd` 用各自目錄的 `gen-crates-inc.py`，做完再烤。腳本只列待辦，不代表已完成再生；CLI 若需 `update_crates`，仍須在 BitBake 環境實際執行。
+
+可另跑 `python3 scripts/tests/platform-snapshot.py --platform-root ../DuDuClaw`，核對快照的 path 閉包、來源檔案、registry pin 與下載 checksum。這是靜態來源檢查，不能取代真實映像建置。
 
 腳本可重複執行：同一版本再跑一次不會產生任何差異（每份 refresh 的輸出都是確定性的；sysd 的 flattened Cargo.toml 標的是平台 commit，不是產生時間）。
 

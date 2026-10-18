@@ -100,6 +100,27 @@ meta-duduclaw/
 | `duduclaw-image` | `duduclaw-sysd` + `duduclaw` payload on top of `-minimal` | Building block |
 | `duduclaw-image-minimal` | Console-only UKI + systemd-boot image | Bring-up / smoke |
 
+### Journal routing
+
+Journald owns `/dev/log` on this systemd distro. The distro clears
+`VIRTUAL-RUNTIME_base-utils-syslog`, so core-boot does not recommend
+`busybox-syslog`. The `duduclaw-journald` configuration package also
+conflicts with `busybox-syslog` and `busybox-klogd` to prevent a later image
+dependency from reinstalling competing logging services. Journald reads
+kernel records itself; the product does not depend on `/var/log/messages`.
+
+This preserves the original process credentials and systemd metadata used
+by maintenance SSH auditing. It does not relax the audit's UID, executable,
+slice or message checks. BusyBox's logging applets remain part of the base
+utilities; this policy removes the competing service packages.
+
+Rebuilt-image validation must verify that journald's dev-log socket is
+active, the legacy services are absent, and a real maintenance SSH login
+and logout change the live session count and produce trusted audit events.
+The isolated TEST log-route probe reproduced a message reaching the legacy
+log file while missing the journal. Runtime plumbing repair and rebuilt
+base/desktop image acceptance are separate gates and remain pending.
+
 ### Service accounts and privileges
 
 In the layer since 2026-10-15 and shipped in v0.4.0 (rootless gateway; v0.3.0

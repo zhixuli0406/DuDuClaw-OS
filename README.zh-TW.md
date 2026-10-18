@@ -21,6 +21,8 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 
 **v0.4.0 的變更**（2026-10-16）：gateway 不再以 root 執行，改用 `duduclaw` 帳號（uid 1000）；桌面版的容器（任務沙箱、腳本沙箱、電腦操作、Discovery）從 root 的 Docker 換成 rootless Podman，引擎不執行資源上限時這些功能會自動關閉。唯一的 root 輔助程式 `duduclaw-sysd` 只接受 gateway 主行程的請求，系統更新由它自己驗證簽章、雜湊與版本後才安裝。SSH 預設關閉，只能從後台的維護模式打開；基礎版也有了和桌面版相同的預設拒絕防火牆。工廠重置改在下次開機、任何服務啟動前清資料。**升級是單向的**：裝置成功開過 v0.4.0 之後，就不能再回到 v0.3.0 或更早的版本。目前沒有能透過 SSH 登入的帳號，維護模式的 SSH 只控制連接埠。完整清單見 [CHANGELOG](CHANGELOG.md) 的 0.4.0 一節。
 
+**尚未發布的防火牆修正：** 僅放行 link-local 位址之間、來源 UDP 547 到目的 546 的 DHCPv6 啟動回覆。[隔離封包回歸測試](appliance/tests/firewall/README.md) 已通過；重建映像後仍需驗證 GCP 實際取得 IPv6 位址。
+
 ## 目錄
 
 - [為什麼需要 DuDuClaw OS？](#why)

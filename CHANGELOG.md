@@ -22,6 +22,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **官網的吉祥物與裝飾動畫**：緋紅摺紙貓（hero inline SVG、CTA 背景貓、QR 中央的貓）、3D 貓（`assets/js/cat3d/`、`assets/data/cat-panels.json`、`assets/vendor/ogl.mjs`）、走路貓（`assets/js/catwalk/`、`assets/js/hero-cat.js`）、驗收頁 `website/lab/`、hero 的 WebGL 色塊（`assets/js/hero-shader.js`）、影子工作區的粒子凍結示範（`assets/js/freeze-demo.js`）、捲動進度條、磁吸按鈕與截圖傾斜效果，以及 `assets/brand/` 的舊 logo 與 favicon（`duduclaw-cat.svg`、`duduclaw-mark-circle.svg`、`duduclaw-tile.svg`、`favicon.svg`、`mark-{16,32,64,512}.png`、`cat-512.png`）和文件站的 `src/assets/duduclaw-mark-circle.svg`。C1 規範不留吉祥物動畫，也不用漸層與光暈。`scripts/build-site.sh` 移除刪 `lab/` 的步驟。
 
 ### Fixed
+- **DHCPv6 啟動回覆遭預設拒絕防火牆擋下**：新增僅限 link-local 來源與目的位址、UDP 547 → 546 的放行規則；多播 Solicit 對應的單播回覆可能是 `ct NEW`，無法只靠 established/related 放行。Yocto 與凍結的 Debian 防火牆參考副本同步。隔離 Linux 核心封包測試重現舊規則丟棄、新規則接收，錯誤來源埠與非 link-local 來源仍被拒絕；尚待重建映像後確認 GCP 自動取得 IPv6 位址，未宣稱實機問題已閉合。
 - **下載頁的升級說明寫錯版本**：狀態卡寫「從 v0.4.0 經 A/B 更新升上來…還沒驗證」，實際未驗證的是從 v0.3.0 升到 v0.4.0（首頁與 v0.4.0 的 CHANGELOG 都這樣寫），改正。
 
 ## [0.4.0] - 2026-10-16 — gateway 改用一般帳號×rootless Podman×SSH 預設關閉（內嵌平台 v1.73.4）

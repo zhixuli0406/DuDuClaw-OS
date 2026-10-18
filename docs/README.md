@@ -24,6 +24,7 @@
 | [../meta-duduclaw/README.md](../meta-duduclaw/README.md) | The Yocto layer: target release, layout, image recipes and their roles, builder container, `kas build`, QEMU boot, machine-aliasing gotchas | Current |
 | [../appliance/README.md](../appliance/README.md) | The earlier Debian/mkosi appliance line: layout, boot sequence, A/B wiring, Flatpak layer, open points | **Frozen** (reference only) |
 | [../appliance/tests/README.md](../appliance/tests/README.md) | VM acceptance-test helper library (QMP screendump, serial expect-login, OCR screen assertions) | Frozen with the line |
+| [../appliance/tests/firewall/README.md](../appliance/tests/firewall/README.md) | DHCPv6 firewall policy and isolated Linux packet regression; image-validation boundary | Current (shared policy tests) |
 | [../website/README.md](../website/README.md) | The zero-build marketing site (home + download pages): screenshot pipeline, interactive modules, what to update on a new release, Cloud Run deploy and custom-domain notes | Current |
 | [../docs-site/README.md](../docs-site/README.md) | The documentation site (Astro + Starlight) that publishes this tree and the platform repo's public docs at `/docs/`: how to run it, the public whitelist, the three-locale layout, and the sync script | Current |
 | `../deploy/cloudrun/` + `../scripts/deploy-cloudrun.sh` | Cloud Run container for the public site (nginx, CSP/cache headers, extra MIME types) and the build-and-deploy script; one-time domain mapping notes live in `../website/README.md` | Current |

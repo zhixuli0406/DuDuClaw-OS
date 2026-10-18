@@ -21,6 +21,8 @@ This repo is the **base-OS line**: the `meta-duduclaw/` Yocto layer (distro poli
 
 **New in v0.4.0** (2026-10-16): the gateway no longer runs as root. It runs as the `duduclaw` account (uid 1000), and the desktop edition's containers (task sandbox, script sandbox, computer use, discovery) run on rootless Podman instead of root Docker; if the engine does not enforce resource limits, those features turn themselves off. `duduclaw-sysd`, the only root helper, accepts requests only from the gateway's main process and verifies OS updates itself before installing them. SSH is off by default and opens only through the dashboard's maintenance mode, and the base edition now has the same default-deny firewall as the desktop edition. Factory reset wipes data at the next boot, before any service starts. **The upgrade is one-way:** once a v0.4.0 image has booted successfully, the device cannot go back to v0.3.0 or earlier. No account can log in over SSH yet, so maintenance-mode SSH only controls the port. Full list: [CHANGELOG](CHANGELOG.md), section 0.4.0.
 
+**Unreleased firewall fix:** DHCPv6 bootstrap replies are allowed only between link-local addresses, from UDP 547 to 546. The [isolated packet regression](appliance/tests/firewall/README.md) passes; a rebuilt image still needs GCP address-assignment validation.
+
 ## Contents
 
 - [Why DuDuClaw OS?](#why)

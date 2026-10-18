@@ -4,6 +4,8 @@ VM-based acceptance tests for the DuDuClaw OS appliance image.
 
 - `ab-update/` — A/B partition update acceptance probes (boot, health-check,
   negative-path injection).
+- [`firewall/`](firewall/README.md) — current Yocto and frozen-reference DHCPv6
+  packet-filter regression in private Linux network/mount namespaces.
 - `wifi-hwsim/` — `mac80211_hwsim`-based Wi-Fi integration tests.
 - `lib/` — **shared VM acceptance-testing helper library** (this document's
   subject). Promotes patterns that used to live only as ad-hoc, host-local,

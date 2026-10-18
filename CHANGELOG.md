@@ -11,6 +11,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **ZIP 相依安全修補快照**：由未修改的 `scripts/sync-platform.sh` 同步平台 v1.74.0@`a1f5fd6a964a17c2d3ad9e1165f6df3a8586c213`，保留 Dropbear 空原始指令選單修正，ZIP 改用 9.0.4、rust_xlsxwriter 改用 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crates.io 集合有變，`duduclaw-cli-crates.inc` 已在固定版本的 BitBake 環境實際執行原 `update_crates` 任務產生；785 筆 registry 項目與 checksum 逐筆符合快照 lock。原中間 commit 缺少新 fetch 的失敗紀錄保留；這次來源與下載清單核對通過，尚不能作為映像驗收結果。現有 344 個 dashboard 資產逐檔與前一快照相同，未重新執行 npm build。安全修補仍須後續映像建置及實際安裝驗證。
 
 ### Fixed
+- **維修 SSH 狀態查詢失敗警示**：以正常同步腳本更新平台快照至 `89755520`。系統服務無法查詢或回覆缺欄位時顯示關閉未確認，並記錄每次異常的通知嘗試；確認恢復後清除該警示。包含平台 Ammonia 4.1.8 安全修補與既有空白 SSH 指令選單修正。映像與實際安裝驗收尚待完成。
 - **A/B 更新保留 ESP／DATA 掛載來源**：基礎版與桌面版共用既有固定 GPT PARTUUID 產生 `/boot`、`/data` 的 fstab，並禁止 Wic 注入新工廠映像的 FAT／ext4 UUID。修正新 root 更新到舊磁碟後，等待不存在的裝置而使日誌、gateway、kiosk 啟動失敗的問題；不改舊磁碟或 rollback 槽。verity 與一般映像共用同一個建置 hook，DATA 保留 nosuid／nodev／growfs。主機回歸已重現原問題並通過修正；重建映像與真實舊版 OTA 開機仍待驗收。
 - **通知登入憑證遭拒後會重新登入**：gateway 明確回覆 `AuthRejected` 時，桌面通知會清除被拒絕的憑證，下一輪依原本的重試間隔重新取得本機 session；一般連線錯誤與業務拒絕不會清除憑證。審批操作失敗仍顯示失敗，不會自動重送。已完成純 feed／backoff 回歸測試；完整映像編譯與 GUI 恢復仍待驗收。
 - **Dropbear 互動選單入口**：以原同步腳本更新平台快照至 v1.74.0@`99aeee9c8d819314f72287a8fef6fc72bd733dde`。Dropbear 的 forced command 在客戶端要求 shell 時會傳入空的 `SSH_ORIGINAL_COMMAND`；維修程式將缺省與恰好空字串送入固定選單，非空指令仍沿用白名單。平台 binary 回歸測試與獨立原始碼審查通過；本次快照仍需真實映像建置、安裝與 SSH 互動驗證。

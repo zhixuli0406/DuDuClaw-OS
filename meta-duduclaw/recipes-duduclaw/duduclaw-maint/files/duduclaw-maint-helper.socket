@@ -1,0 +1,35 @@
+# DuDuClaw OS: the maintenance account's only root entry point (2026-10-16).
+#
+# Authority: commercial/docs/DESIGN-maintenance-ssh-account-2026-10.md
+# (private platform tree) r4 section 5.2. duduclaw-maint is not in
+# systemd-journal, has no polkit grant and no sudo. Its menu (maint-shell)
+# connects here and sends exactly one token; a root instance of
+# duduclaw-maint-helper@.service then either returns filtered, redacted
+# lines from the gateway's or the local model server's journal (gateway,
+# gateway-follow, model, model-follow; both services run as uid 1000, so
+# this shows nothing uid 1000 cannot already read) or restarts one of those
+# two units (restart-gateway, restart-model; unit names are constants in
+# the binary, rate-limited). Any other token, or a peer that is not uid
+# 4800, is disconnected.
+#
+# Who may connect: the socket is root:duduclaw-maint 0660 and that group has
+# no other member; the service additionally checks SO_PEERCRED for uid
+# 4800. Accept=yes: one short-lived instance per connection, at most 4 at a
+# time (a follow is bounded by the service's RuntimeMaxSec).
+#
+# The helper binary (platform duduclaw-maint-tools) comes with the platform
+# snapshot sync; until then a connection starts an instance that fails to
+# execute, and nobody can log in as the account to connect anyway.
+[Unit]
+Description=DuDuClaw maintenance helper socket
+
+[Socket]
+ListenStream=/run/duduclaw-maint-helper.sock
+SocketUser=root
+SocketGroup=duduclaw-maint
+SocketMode=0660
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

@@ -2,7 +2,7 @@
 # from crates/duduclaw-sysd/Cargo.toml — DO NOT HAND-EDIT, re-run the script.
 # workspace.* shorthand fields resolved to concrete values (source: repo-root
 # Cargo.toml [workspace.package] / [workspace.dependencies], read at
-# generation time from platform commit b8d16c87).
+# generation time from platform commit a1f5fd6a).
 
 # Empty [workspace] table: makes this manifest cargo-standalone even though
 # it physically nests inside the DuDuClaw monorepo (which has its own
@@ -16,7 +16,7 @@
 
 [package]
 name = "duduclaw-sysd"
-version = "1.73.4"
+version = "1.74.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["DuDuClaw Contributors"]
@@ -42,6 +42,7 @@ anyhow = "1"
 libc = "0.2"
 minisign-verify = "0.2"
 sha2 = "0.10"
+base64 = "0.22"
 
 # dev-dependencies deliberately omitted: the Yocto recipe only ever runs
 # `cargo build --release` (cargo.bbclass), never `cargo test` -- keeping

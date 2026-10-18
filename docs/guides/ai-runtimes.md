@@ -16,11 +16,11 @@ v0.4.0 moved it to 1.73.4. Every bundled CLI is a runtime in platform
 catalog also lists Kiro CLI and Google Antigravity, which the image does
 not bundle (see [Not installed](#not-installed)).
 
-The platform deprecated its Gemini CLI runtime in v1.67.0. Platform 1.73.4
-(embedded in v0.4.0) still carries it. The platform has since postponed the
-removal to v1.75.0 (Antigravity is the named replacement); the Gemini API
-provider is not affected. `gemini` stays in this image until the OS syncs to
-a platform release without that runtime.
+The platform deprecated its Gemini CLI runtime in v1.67.0 and removed it in
+v1.75.0. OS v0.4.0 still embeds platform 1.73.4 and bundles `gemini`; the
+Gemini API provider is not affected. This image does not include the platform
+v1.75.0 Codex remote-login fix or its account-removal UI. Those features need
+a separately built and verified OS image, not a platform release alone.
 
 This guide covers where that payload comes from, how to refresh it, where
 credentials are stored, and what the image deliberately does *not* carry.

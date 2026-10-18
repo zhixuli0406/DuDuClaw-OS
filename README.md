@@ -42,6 +42,8 @@ snapshot lock. Fresh image builds and real installations remain pending.
 
 Both editions now include the CPU local-model service in the unreleased source. The base image adds the engine and service without the desktop coding-CLI bundle; weights remain user data on `/data`. Final image builds, model loading and maintenance restart verification are still pending.
 
+**Unreleased firewall fix:** DHCPv6 bootstrap replies are allowed only between link-local addresses, from UDP 547 to 546. The [isolated packet regression](appliance/tests/firewall/README.md) passes; a rebuilt image still needs GCP address-assignment validation.
+
 ## Contents
 
 - [Why DuDuClaw OS?](#why)

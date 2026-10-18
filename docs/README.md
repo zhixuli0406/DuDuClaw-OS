@@ -26,6 +26,7 @@
 | [../meta-duduclaw/README.md](../meta-duduclaw/README.md) | The Yocto layer: target release, layout, image recipes and their roles, builder container, `kas build`, QEMU boot, machine-aliasing gotchas | Current |
 | [../appliance/README.md](../appliance/README.md) | The earlier Debian/mkosi appliance line: layout, boot sequence, A/B wiring, Flatpak layer, open points | **Frozen** (reference only) |
 | [../appliance/tests/README.md](../appliance/tests/README.md) | VM acceptance-test helper library (QMP screendump, serial expect-login, OCR screen assertions) | Frozen with the line |
+| [../appliance/tests/firewall/README.md](../appliance/tests/firewall/README.md) | DHCPv6 firewall policy and isolated Linux packet regression; image-validation boundary | Current (shared policy tests) |
 | [../appliance/tests/maintenance-ssh/README.md](../appliance/tests/maintenance-ssh/README.md) | Yocto maintenance SSH guest baseline and host validator tests; real guest acceptance is recorded separately | Candidate; live acceptance pending |
 | [../appliance/tests/installer/README.md](../appliance/tests/installer/README.md) | Host-only tests for the Yocto installer's stream failures, byte preservation and progress cleanup; separate from real image/installation acceptance | Current |
 | [../website/README.md](../website/README.md) | The zero-build marketing site (home + download pages): screenshot pipeline, interactive modules, what to update on a new release, Cloud Run deploy and custom-domain notes | Current |

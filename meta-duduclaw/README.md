@@ -224,6 +224,11 @@ the gateway has no Flatpak rights. `duduclaw-cli` ships
 `runuser` is not in the image (util-linux builds it only with PAM); act as
 the gateway with `setpriv --reuid=duduclaw --regid=duduclaw --init-groups`.
 
+The unreleased firewall policy permits DHCPv6 client bootstrap replies only
+between IPv6 link-local addresses (UDP source 547, destination 546). Existing
+SSH source restrictions and egress policy are unchanged. See the
+[packet regression and image-validation boundary](../appliance/tests/firewall/README.md).
+
 Shared payload sets:
 `duduclaw-image-{data,flatpak,desktop,compat,runtimes,local-model}.inc`;
 read-only root wiring: `duduclaw-ro-root.inc`.

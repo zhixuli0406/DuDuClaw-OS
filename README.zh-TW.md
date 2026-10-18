@@ -35,6 +35,8 @@ root 服務 `maint-helper`，帳號套件安裝 SSH 就緒標記。映像檢查�
 
 尚未發版的原始碼也讓兩版都內建 CPU 本機模型引擎與服務。基礎版只補引擎與服務，不加入桌面版的 coding CLI 套件；權重仍存放在 `/data`。最終映像建置、模型載入與維修選單重啟仍待實測。
 
+**尚未發布的防火牆修正：** 僅放行 link-local 位址之間、來源 UDP 547 到目的 546 的 DHCPv6 啟動回覆。[隔離封包回歸測試](appliance/tests/firewall/README.md) 已通過；重建映像後仍需驗證 GCP 實際取得 IPv6 位址。
+
 ## 目錄
 
 - [為什麼需要 DuDuClaw OS？](#why)

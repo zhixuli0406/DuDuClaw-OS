@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "boot_id": "0f0e0d0c-0b0a-4908-8706-050403020100",
+  "window_id": "window-persistent-123",
+  "key_type": "ssh-ed25519",
+  "key_fingerprint": "SHA256:YoPXM1Ypqr+D/3+TBuMYB3Z4IZH0k0ErqeSny62rhCE",
+  "host_key_fingerprints": ["SHA256:hostKeyFixture"],
+  "ttl_seconds": 3600,
+  "deadline_boottime_ms": 4600000,
+  "opened_at_unix": 1760600000,
+  "open_cursor": "s=a;i=1",
+  "last_cursor": "s=a;i=9",
+  "logins_recorded": 3,
+  "logins_over_cap": 1,
+  "logouts_recorded": 2,
+  "logouts_over_cap": 0,
+  "auth_failures": 7,
+  "auth_failure_sources": ["203.0.113.9"],
+  "open_record": {
+    "ts": 1760600000,
+    "event": "open",
+    "window_id": "window-persistent-123",
+    "key_type": "ssh-ed25519",
+    "key_fingerprint": "SHA256:YoPXM1Ypqr+D/3+TBuMYB3Z4IZH0k0ErqeSny62rhCE",
+    "ttl_seconds": 3600,
+    "expires_at": 1760603600,
+    "host_key_fingerprints": ["SHA256:hostKeyFixture"]
+  }
+}

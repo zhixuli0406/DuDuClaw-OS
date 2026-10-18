@@ -1,0 +1,1 @@
+import{t as e}from"./SharedWikiPage-CudbsZOz.js";export{e as SharedWikiPage};

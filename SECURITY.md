@@ -129,11 +129,91 @@ hardware.
   image version of v0.4.0 itself. Known gap: before the first rootless
   image is blessed, code running as uid 1000 on it can make its trial boots
   fail and so trigger systemd-boot's fallback to the previous image.
-- SSH (dropbear) is off by default on both editions. The dashboard's
+- In the published v0.4.0 images, SSH (dropbear) is off by default on both editions. The dashboard's
   maintenance mode starts it and opens port 22 in the default-deny
   firewall; closing the window stops dropbear, ends every session and
-  closes the port. No account can log in over SSH yet (root is locked), so
-  the switch currently controls only the port.
+  closes the port. Those images have no SSH login account (root is locked),
+  so their switch controls only the port.
+- Maintenance SSH login (in the layer, lands in the next OS image, not in
+  v0.4.0): a dedicated account, `duduclaw-maint`, with a fixed uid/gid of
+  4800, password field `*`, no supplementary groups, an empty read-only
+  home and a fixed menu as its login shell instead of a general shell. Its
+  only actions are restarting the gateway or the local model server, done
+  by a root helper service on its behalf (no polkit, no sudo). The image
+  build fails if 4800 is used by any other
+  account or falls inside the host's dynamic system ids, the gateway's
+  subordinate ids, the Android ids Waydroid runs as host ids, or systemd's
+  reserved ranges, and if any account changed its id against the previous
+  release (an id that moves leaves files on `/data` owned by the wrong
+  account after an A/B update). The source now vendors platform v1.74.0
+  at `99aeee9c8d819314f72287a8fef6fc72bd733dde`, including both menu binaries,
+  per-window key handling and the dashboard. The readiness marker contains
+  `1\n` and is installed by the account package, which depends on the
+  `duduclaw-maint-tools` subpackage built from that same CLI snapshot.
+  A final rootfs gate requires root-owned regular ELF executables, current
+  SSH protocol keys in the gateway/sysd, and no `authorized_keys` anywhere
+  in the image. These are build requirements, not evidence of a successful
+  image build: this candidate has not yet passed Yocto/QEMU verification.
+  dropbear (same next image) lets only that account's group log in
+  (`-G duduclaw-maint`), only with a public key (`-s`), reads authorized
+  keys only from `/run/duduclaw-maint-ssh` (tmpfs, written by
+  `duduclaw-sysd` for one window), runs the menu for every session
+  whatever the client asks (`-c`, which also replaces scp and sftp), and
+  refuses port forwarding (`-j -k`). Sessions run with
+  `IPAddressDeny=any`, `NoNewPrivileges`, `ProtectProc=invisible`,
+  `ProtectSystem=strict` and no access to the gateway's and kiosk's homes,
+  saved Wi-Fi networks or the container store. Both the listening socket
+  and the sessions are bound to `duduclaw-sysd.service`, so they stop if
+  sysd stops or fails for good. The build fails if the kernel lacks
+  `CONFIG_CGROUP_BPF` (without it systemd skips `IPAddressDeny=` with only
+  a warning), if the dropbear command differs from the expected one, or if
+  a host key is baked into the image. The host key is one ed25519 key in
+  `/data/system/dropbear`, generated on the device (the desktop edition's
+  root is read-only) and deleted by a factory reset together with the
+  maintenance SSH audit log and persistent window state. The reset oneshot
+  is ordered before sysd's startup replay and host-key generation, so those
+  services cannot race the wipe by restoring old audit data or generating a
+  key that the wipe then removes. This is ordering only: a failed reset is
+  still reported while the dashboard remains reachable. The ordering has
+  static regression coverage; it has not been verified in a built image or
+  a QEMU boot. If sysd does not close a window in time, a
+  timer in PID 1 runs a root script that deletes the key, stops dropbear,
+  removes port 22 from the firewall and writes the audit record. Residual
+  risk: the script tries that audit write once. If the audit file or its
+  lock is not a root-owned 0600 file, or the lock is held for more than
+  10 seconds, the record is not written (the reason goes to the journal)
+  and is not retried; the window is still closed, and sysd's next startup
+  cleanup writes its own close record from the state it kept.
+  While a window is open the firewall accepts port 22 only from LAN
+  ranges (RFC 1918, 169.254.0.0/16, fc00::/7, fe80::/10) and
+  100.64.0.0/10, the shared address space VPNs such as Tailscale use; any
+  other source, every global IPv6 address included, gets a TCP reset.
+  Two consequences: a scanner can tell from the reset that a window is
+  open, and on a WAN that hands the device an ISP carrier-grade NAT
+  (100.64.0.0/10) or 10.x address, other customers of that ISP are in
+  range too. A firewall rule added at runtime by number (uid 4800, never a
+  name, so it cannot break the ruleset) rejects every loopback connection
+  the maintenance account opens, keeping it away from the gateway's
+  loopback-only entry points and the local model server.
+  The account is not in `systemd-journal` and has no polkit grant or
+  sudo. Its menu reaches root only through `duduclaw-maint-helper.socket`
+  (root:duduclaw-maint 0660, one root instance per connection with no
+  capabilities at all, `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectProc=invisible`, unix sockets only, the `@system-service`
+  syscall filter, no devices, no write-and-execute memory, no network, at
+  most an hour), which accepts six fixed requests from uid
+  4800 only: the gateway's or the local model server's journal entries
+  (the platform's helper drops the one-time bootstrap password line and
+  redacts secrets), or a rate-limited restart of one of those two units.
+  An Admin must re-enter their password, type the confirmation and paste
+  one public key to open a window of at most 24 hours. The dashboard clears
+  pasted private keys. Five wrong passwords lock opening for 15 minutes.
+  Compare the technician-key and host-key fingerprints with the separate
+  Admin notification; if no notification channel is available, use the
+  device's local screen. A configured channel does not prove delivery, and
+  the dashboard alone cannot authenticate the device. An unconfirmed close
+  remains a warning. Real-image SSH, firewall, expiry, restarts, A/B account
+  stability and notification delivery remain unverified for this candidate.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
   do (that code is in the platform repo).

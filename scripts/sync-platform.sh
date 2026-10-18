@@ -151,7 +151,10 @@ if [[ $CHECK -eq 1 ]]; then say "check: all guards pass for $OLD → $NEW (nothi
 # ── 1. Refresh the snapshots (platform-vendored + OS-local) ───────────────
 for r in "${RECIPES[@]}" "${OS_LOCAL_RECIPES[@]}"; do
     say "==> refresh $r"
-    bash "$RECIPES_DIR/$r/refresh-src.sh" 2>&1 | grep -E '^(Wrote|refresh-src:)' || true
+    if ! bash "$RECIPES_DIR/$r/refresh-src.sh"; then
+        echo "sync-platform: refresh failed for $r; stop before changing the embedded version" >&2
+        exit 1
+    fi
 done
 
 # ── 2. crates.io dependency sets vs HEAD (→ *-crates.inc regeneration?) ───
@@ -192,7 +195,7 @@ if [[ "$OLD" != "$NEW" ]]; then
     # comments that cite the recipe filenames / the DISTRO_VERSION example
     # (only the two platform recipes: comp / shell keep their own PV)
     while IFS= read -r f; do
-        sed -i.bak -E "s/(duduclaw-(cli|sysd))_${OLD//./\\.}\.bb/\1_$NEW.bb/g; s/${OLD//./\\.}-y1-bringup/$NEW-y1-bringup/g" "$f" && rm -f "$f.bak"
+        sed -i.bak -E "s/(duduclaw-(cli|sysd))_${OLD//./\\.}\.bb/\1_$NEW.bb/g" "$f" && rm -f "$f.bak"
     done < <(grep -rlE "duduclaw-(cli|sysd)_${OLD//./\\.}\.bb|${OLD//./\\.}-y1-bringup" "$OS_ROOT/meta-duduclaw" "$OS_ROOT/scripts" 2>/dev/null | grep -v "/files/" || true)
     sed -i.bak -E "s/e\.g\. \"${OLD//./\\.}\" — the vendored/e.g. \"$NEW\" — the vendored/" "$OS_ROOT/scripts/release-os.sh" && rm -f "$OS_ROOT/scripts/release-os.sh.bak"
     left="$(grep -rnE "\b${OLD//./\\.}\b" "$OS_ROOT/meta-duduclaw" "$OS_ROOT/scripts" --include='*.bb' --include='*.inc' --include='*.conf' --include='*.bbappend' --include='*.bbclass' --include='*.sh' 2>/dev/null | grep -v "/files/" || true)"
@@ -201,6 +204,20 @@ else
     ok "embedded platform version already $NEW — no rename"
 fi
 
+# Keep the exact platform commit alongside its semver (unreleased changes
+# can deliberately share a version with the last release).
+source_revision="$(git -C "$SRC_ROOT" rev-parse HEAD)"
+python3 - "$INC" "$source_revision" <<'PYSOURCE'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); text = p.read_text()
+line = 'DUDUCLAW_PLATFORM_SRCREV = "' + sys.argv[2] + '"'
+if re.search(r'^DUDUCLAW_PLATFORM_SRCREV = .*$', text, re.M):
+    text = re.sub(r'^DUDUCLAW_PLATFORM_SRCREV = .*$', line, text, flags=re.M)
+else:
+    text += line + '\n'
+p.write_text(text)
+PYSOURCE
+
 # ── 4. CHANGELOG stub ─────────────────────────────────────────────────────
 CL="$OS_ROOT/CHANGELOG.md"
 if grep -qE "同步到 v$NEW" "$CL"; then
@@ -208,7 +225,7 @@ if grep -qE "同步到 v$NEW" "$CL"; then
 else
     commits="$(git -C "$SRC_ROOT" log --format='%h %s' "v$OLD..v$NEW" 2>/dev/null | head -15 | sed 's/^/    - /' || true)"
     inc_note="快照的 crates.io 依賴集合與 $OLD 相同，\`*-crates.inc\` 未動"
-    [[ ${#NEED_INC[@]} -eq 0 ]] || inc_note="crates.io 依賴集合有變（${NEED_INC[*]}），\`*-crates.inc\` 已重生"
+    [[ ${#NEED_INC[@]} -eq 0 ]] || inc_note="crates.io 依賴集合有變（${NEED_INC[*]}），\`*-crates.inc\` 必須再生後才能建置"
     python3 - "$CL" "$OLD" "$NEW" "$inc_note" "$commits" <<'PY'
 import sys
 p,old,new,inc_note,commits=sys.argv[1:6]

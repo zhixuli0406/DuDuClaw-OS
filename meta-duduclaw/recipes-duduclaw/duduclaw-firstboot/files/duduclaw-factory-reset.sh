@@ -18,6 +18,13 @@
 #            3b. empty /data/system/windows-vm (Windows RemoteApp registry,
 #               owned by the gateway) and remove /data/system/legacy (root
 #               files the rootless migration parked there)
+#            3c. remove /data/system/dropbear (the SSH host key, so the
+#               next owner's maintenance windows show a new fingerprint) and
+#               the maintenance SSH audit log /data/system/maint-ssh-audit.log
+#               with its rotated copies .1 to .5 and its .lock file (a new
+#               owner does not inherit the previous owner's login records),
+#               and /data/system/maint-ssh (duduclaw-sysd's persistent window
+#               state, journal cursor and pending audit records)
 #            4. remove /data/system/machine-id, so the next boot gets a new
 #               machine identity, as it did when machine-id still lived in
 #               the gateway home (moved out on 2026-10-15)
@@ -141,6 +148,29 @@ remove_tree() {
     return 1
 }
 
+# remove_file FILE: remove a single file; refuse a symlink (it is removed by
+# nothing and reported) and anything that is not a regular file.
+remove_file() {
+    local f=$1
+    if [[ -L $f ]]; then
+        log "refusing: $f is a symlink"
+        return 1
+    fi
+    if [[ ! -e $f ]]; then
+        return 0
+    fi
+    if [[ ! -f $f ]]; then
+        log "refusing: $f is not a regular file"
+        return 1
+    fi
+    if rm -f -- "$f" && [[ ! -e $f ]]; then
+        log "removed $f"
+        return 0
+    fi
+    log "failed to remove $f"
+    return 1
+}
+
 # --- 1. read and validate the marker -------------------------------------
 if [[ ! -e $MARKER && ! -L $MARKER ]]; then
     log "no $MARKER, nothing to do"
@@ -198,6 +228,11 @@ else
 fi
 wipe_contents /data/system/windows-vm || failed=1
 remove_tree /data/system/legacy || failed=1
+remove_tree /data/system/dropbear || failed=1
+remove_tree /data/system/maint-ssh || failed=1
+for f in /data/system/maint-ssh-audit.log /data/system/maint-ssh-audit.log.{1..5} /data/system/maint-ssh-audit.log.lock; do
+    remove_file "$f" || failed=1
+done
 if [[ -L /data/system/machine-id ]]; then
     log "refusing: /data/system/machine-id is a symlink"
     failed=1

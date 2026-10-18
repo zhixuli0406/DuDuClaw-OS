@@ -25,6 +25,43 @@ PARTUUID contract stays the same. [Host stream regression tests](../appliance/te
 cover the failure paths and temporary FIFO cleanup; rebuilding and real blank-disk
 installation of both shipping ISOs remain unverified for this change.
 
+## A/B persistent mount identities (unreleased)
+
+Both `duduclaw-image-ab` (base) and `duduclaw-image-appliance` (desktop)
+bake `/boot` and `/data` fstab entries in the shared `duduclaw-ab-partflags`
+rootfs hook. They reference the existing fixed GPT `PARTUUID`s, not the
+filesystem UUIDs created for a new factory image. A normal A/B update replaces
+only the inactive root slot; the installed ESP, DATA, and their filesystem
+UUIDs must remain intact. Wic sets `--no-fstab-update` on the **root-A**
+partition so its ext4 writer cannot replace this fstab with the generated
+mount table. The flag does not exclude individual ESP/DATA rows from that
+table; putting it on those partitions would not protect the root. Verity uses
+the same hook before hashing. Root-A/B selection remains in the signed UKI.
+
+The Wic installed image is also the input to `appliance/tools/make-payload.py`
+and to the ISO installer's whole-disk copy, so base/desktop factory installs,
+QEMU/GCE installations, and OTA payloads share this rootfs fix. The Debian/mkosi
+line already uses stable `PARTLABEL=duduclaw-data` and is unchanged. The older
+three-partition `duduclaw-image-data` developer image is not an A/B payload source.
+
+Fixed GPT identities retain the existing single-installation-disk assumption:
+do not attach another full DuDuClaw disk with the same `PARTUUID`s while booting.
+This does not introduce a global `LABEL=boot` selector or change the disk's
+identifiers, layout, signatures, rollback slot, or data. Rebuilding and a real
+old-disk OTA/reboot remain required; host fixtures are not boot acceptance.
+
+Run `python3 -B scripts/tests/ab-persistent-mounts.py` from the repository root.
+It executes the rootfs hook for verity on/off, checks the old/new filesystem
+UUID mismatch, root/unrelated mounts, DATA flags, and the root-A writer flag.
+For the engine regression, add `--wic-engine-dir /path/to/wic/src/wic` from
+pinned Wic commit `5974ade11032f218841d9f449ef0efeee3f9a2ca`. The test verifies
+full source hashes, executes the original `update_fstab` method on temporary
+files, and evaluates the original ext4 writer guard. It proves that removing
+the root-A flag reopens injection of duplicate mount rows. No upstream source
+is copied into this repository and no mkfs, debugfs, disk or guest is used.
+Without the source path this engine case is explicitly skipped; the other
+checks alone are not engine proof.
+
 ## Target release
 
 Yocto Project **6.0 "wrynose"** (LTS, supported to 2028-04); kernel

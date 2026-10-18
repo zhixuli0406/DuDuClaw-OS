@@ -300,30 +300,9 @@ DEPENDS:append = "${@ ' cryptsetup-native' if d.getVar('DUDUCLAW_VERITY_ENABLE')
 # else here.
 IMAGE_INSTALL:append = "${@ ' cryptsetup' if d.getVar('DUDUCLAW_VERITY_ENABLE') == '1' else ''}"
 
-# Static /boot + /data fstab lines (round-8 QEMU root cause, full evidence
-# at DUDUCLAW_AB_ESP_PARTUUID's definition in duduclaw-ab-partflags
-# .bbclass): wic only injects fstab entries into partitions built by its
-# `rootfs` source plugin — the rawcopy'd verity root never receives them,
-# so the booted image had NO data.mount at all and the entire /data bind
-# chain (journald included) collapsed. With p1/p6 PARTUUIDs now build-time
-# constants, the two lines can simply be baked into the hashed rootfs.
-# Mount option parity with the wic-generated lines they replace: /data
-# keeps x-systemd.growfs + fspassno 2 (wks p6's own comment explains both
-# are load-bearing); /boot keeps stock defaults (rw — firstboot's
-# secure-boot-enroll downgrade and sysupdate's UKI writes both need it).
-# Gated on DUDUCLAW_VERITY_ENABLE: the non-verity build still gets its
-# fstab lines from wic's own injection, and static duplicates would race
-# it.
-duduclaw_verity_static_fstab () {
-    if [ "${DUDUCLAW_VERITY_ENABLE}" != "1" ]; then
-        return 0
-    fi
-    cat >> ${IMAGE_ROOTFS}${sysconfdir}/fstab <<EOF
-PARTUUID=${DUDUCLAW_AB_ESP_PARTUUID}	/boot	vfat	defaults	0	0
-PARTUUID=${DUDUCLAW_AB_DATA_PARTUUID}	/data	ext4	defaults,x-systemd.growfs	0	2
-EOF
-}
-ROOTFS_POSTPROCESS_COMMAND += "duduclaw_verity_static_fstab; "
+# /boot and /data fstab entries are shared with non-verity A/B images in
+# duduclaw-ab-partflags.bbclass. They must exist before the rootfs is hashed;
+# Wic's rawcopy source cannot add them afterwards.
 
 # Pulls in oe-core's own do_image_ext4 task (image_types.bbclass) — see
 # this class's header "REFACTORED" section for why this class now reuses

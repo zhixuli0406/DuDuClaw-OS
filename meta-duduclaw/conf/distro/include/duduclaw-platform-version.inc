@@ -3,7 +3,8 @@
 # Since the 2026-09 repo split, OS release artifacts and tags use the
 # independent repo-root VERSION file. This value records the platform source
 # vendored into the image; it drives DISTRO_VERSION in ../duduclaw-os.conf
-# and the PV of the cli/comp/sysd/shell recipes. It need not equal VERSION.
+# and the PV of the cli/sysd recipes. The comp/shell recipes keep their
+# own version. It need not equal VERSION.
 #
 # Update with scripts/sync-platform.sh <platform-version>, which checks the
 # platform checkout, refreshes all four source snapshots, updates this file
@@ -11,4 +12,5 @@
 #
 # The -y1-bringup suffix remains separately owned in duduclaw-os.conf;
 # syncing platform source must not silently change that milestone marker.
-DUDUCLAW_PLATFORM_VERSION = "1.73.4"
+DUDUCLAW_PLATFORM_VERSION = "1.74.0"
+DUDUCLAW_PLATFORM_SRCREV = "a1f5fd6a964a17c2d3ad9e1165f6df3a8586c213"

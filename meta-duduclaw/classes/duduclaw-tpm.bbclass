@@ -63,12 +63,12 @@
 # that exact line and its own neighboring root-B comment, which states
 # explicitly that a `--fstype`-tagged partition with no `--source` still
 # gets a real, empty, formatted filesystem, not raw unformatted bytes).
-# `/etc/fstab`'s existing `/data` line (classes/duduclaw-verity.bbclass's
-# own `duduclaw_verity_static_fstab()`, baked into the read-only rootfs
+# `/etc/fstab`'s existing `/data` line (classes/duduclaw-ab-partflags.bbclass's
+# own `duduclaw_ab_static_fstab()`, baked into the read-only rootfs
 # when DUDUCLAW_VERITY_ENABLE=1 — a hard prerequisite state for THIS
 # variable to make sense, per §5.1's own SB→verity→TPM order) reads
 # `PARTUUID=${DUDUCLAW_AB_DATA_PARTUUID} /data ext4 defaults,
-# x-systemd.growfs 0 2` — a PLAIN mount, unconditionally. A device that
+# nosuid,nodev,x-systemd.growfs 0 2` — a PLAIN mount, unconditionally. A device that
 # has TPM2-converted `/data` to LUKS2 needs a DIFFERENT `data.mount` (one
 # that mounts `/dev/mapper/duduclaw-data`, ordered after an unlock step)
 # on THAT SAME immutable rootfs — and a device WITHOUT TPM must keep

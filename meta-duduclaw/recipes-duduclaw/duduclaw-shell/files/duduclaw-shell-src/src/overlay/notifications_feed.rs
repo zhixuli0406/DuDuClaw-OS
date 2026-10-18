@@ -382,9 +382,8 @@ impl NotificationsFeed {
     /// regardless of which specific reason (`Refused`/`Unreachable`/
     /// `Http`/`Malformed`/`NonLoopback`) it was; see `gateway_client::
     /// GatewayError`'s own doc comment for why the UI layer doesn't
-    /// distinguish these. `kind` is the RETRY-policy distinction only (429
-    /// vs everything else), which is a different axis from the UI's own
-    /// collapse — see `notifications_backoff::FailureKind`.
+    /// distinguish these. The bootstrap has no cached credential to
+    /// invalidate; `kind` controls retry spacing and log denoise here.
     pub fn apply_session_err(&mut self, kind: FailureKind) -> FetchErrOutcome {
         self.busy = false;
         let changed = self.status != FeedStatus::Offline;
@@ -436,6 +435,11 @@ impl NotificationsFeed {
     }
 
     pub fn apply_list_err(&mut self, kind: FailureKind) -> FetchErrOutcome {
+        if kind == FailureKind::AuthRejected {
+            // The next scheduled fetch must bootstrap instead of endlessly
+            // presenting a credential the gateway has already rejected.
+            self.session_jwt = None;
+        }
         self.busy = false;
         let changed = self.status != FeedStatus::Offline;
         self.status = FeedStatus::Offline;
@@ -525,6 +529,22 @@ impl NotificationsFeed {
         self.decided.truncate(MAX_DECIDED_HISTORY);
     }
 
+    /// Apply exactly one operator decision attempt. Authentication loss
+    /// invalidates the cache for a later poll, but never retries this write.
+    /// A fresh session still requires a new two-step operator confirmation.
+    pub fn apply_decide_result(&mut self, id: &str, approve: bool, result: Result<(), crate::gateway_client::RpcError>) {
+        match result {
+            Ok(()) => self.apply_decide_ok(id, approve),
+            Err(error) => {
+                if matches!(error, crate::gateway_client::RpcError::AuthRejected) {
+                    self.session_jwt = None;
+                    self.status = FeedStatus::Offline;
+                }
+                self.apply_decide_err(id, approve);
+            }
+        }
+    }
+
     /// `approvals.decide` failed (network/RPC error — a server-side
     /// rejection of the DECISION ITSELF, e.g. a stale id, still lands here
     /// too: `gateway_client::decide_approval` only ever returns `Ok(())` on
@@ -561,6 +581,100 @@ mod tests {
 
     fn item(id: &str, agent: &str, summary: &str) -> ApprovalItem {
         ApprovalItem { id: id.to_string(), agent_id: agent.to_string(), kind: "tool_call".to_string(), summary: summary.to_string(), created_at: "now".to_string(), simulation: None }
+    }
+
+    #[test]
+    fn rejected_cached_session_is_cleared_for_the_next_bootstrap() {
+        use crate::gateway_client::{GatewayError, RpcError};
+        let mut feed = NotificationsFeed::default();
+        feed.apply_session_ok("rejected-jwt".into());
+        feed.apply_list_ok(vec![item("a1", "agent", "pending")]);
+        assert!(feed.begin_refresh());
+        feed.apply_list_err(FailureKind::classify(&GatewayError::Rpc(RpcError::AuthRejected)));
+        assert_eq!(feed.session_jwt(), None, "a rejected token must not be cached forever");
+        assert_eq!(feed.status, FeedStatus::Offline);
+        assert_eq!(feed.pending_count(), 1, "failed authentication must not fabricate decisions");
+        assert!(!feed.is_busy());
+        assert!(!feed.is_stale(), "normal retry backoff still applies");
+        assert!(!feed.begin_refresh(), "the rejected credential cannot be reused");
+        assert!(feed.begin_bootstrap(), "the next scheduled attempt can request a fresh session");
+        feed.apply_session_ok("fresh-jwt".into());
+        let ok = feed.apply_list_ok(vec![]);
+        assert_eq!(ok.recovered, Some(1));
+        assert_eq!(feed.status, FeedStatus::Ready);
+        assert_eq!(feed.session_jwt(), Some("fresh-jwt"));
+    }
+
+    #[test]
+    fn other_rpc_failures_preserve_the_cached_session() {
+        use crate::gateway_client::{GatewayError, RpcError};
+        for error in [
+            RpcError::Rejected("AuthRejected".into()),
+            RpcError::Timeout,
+            RpcError::RateLimited,
+            RpcError::Malformed("invalid JWT".into()),
+            RpcError::Unreachable("AuthRejected".into()),
+        ] {
+            let mut feed = NotificationsFeed::default();
+            feed.apply_session_ok("valid-jwt".into());
+            assert!(feed.begin_refresh());
+            feed.apply_list_err(FailureKind::classify(&GatewayError::Rpc(error.clone())));
+            assert_eq!(feed.session_jwt(), Some("valid-jwt"), "{error:?}");
+            assert_eq!(feed.status, FeedStatus::Offline);
+            assert!(!feed.is_busy());
+            assert!(!feed.is_stale());
+        }
+    }
+
+    #[test]
+    fn rejected_decision_clears_session_but_never_settles_or_replays_it() {
+        use crate::gateway_client::RpcError;
+        let mut feed = NotificationsFeed::default();
+        feed.apply_session_ok("rejected-jwt".into());
+        feed.apply_list_ok(vec![item("a1", "agent", "pending")]);
+        assert!(feed.begin_confirm("a1", true));
+        assert_eq!(feed.begin_decide("a1"), Some(true));
+        feed.apply_decide_result("a1", true, Err(RpcError::AuthRejected));
+        assert_eq!(feed.session_jwt(), None);
+        assert_eq!(feed.status, FeedStatus::Offline);
+        assert_eq!(feed.rows()[0].decision, RowDecision::Failed { approve: true });
+        assert!(feed.decided().is_empty());
+        assert!(!feed.is_busy());
+        feed.apply_session_ok("fresh-jwt".into());
+        assert_eq!(feed.begin_decide("a1"), None, "fresh auth cannot replay the prior click");
+        assert!(feed.begin_confirm("a1", false), "another decision needs a new confirmation");
+        assert_eq!(feed.begin_decide("a1"), Some(false));
+    }
+
+    #[test]
+    fn decision_transport_or_business_failure_preserves_session_and_does_not_settle() {
+        use crate::gateway_client::RpcError;
+        for error in [RpcError::Rejected("AuthRejected".into()), RpcError::Timeout, RpcError::RateLimited] {
+            let mut feed = NotificationsFeed::default();
+            feed.apply_session_ok("valid-jwt".into());
+            feed.apply_list_ok(vec![item("a1", "agent", "pending")]);
+            feed.begin_confirm("a1", false);
+            assert_eq!(feed.begin_decide("a1"), Some(false));
+            feed.apply_decide_result("a1", false, Err(error));
+            assert_eq!(feed.session_jwt(), Some("valid-jwt"));
+            assert_eq!(feed.status, FeedStatus::Ready);
+            assert_eq!(feed.rows()[0].decision, RowDecision::Failed { approve: false });
+            assert!(feed.decided().is_empty());
+            assert_eq!(feed.begin_decide("a1"), None);
+        }
+    }
+
+    #[test]
+    fn successful_decision_is_the_only_result_that_settles_the_row() {
+        let mut feed = NotificationsFeed::default();
+        feed.apply_session_ok("valid-jwt".into());
+        feed.apply_list_ok(vec![item("a1", "agent", "pending")]);
+        feed.begin_confirm("a1", true);
+        assert_eq!(feed.begin_decide("a1"), Some(true));
+        feed.apply_decide_result("a1", true, Ok(()));
+        assert_eq!(feed.session_jwt(), Some("valid-jwt"));
+        assert_eq!(feed.pending_count(), 0);
+        assert_eq!(feed.decided()[0].decision, RowDecision::Settled { approved: true });
     }
 
     #[test]

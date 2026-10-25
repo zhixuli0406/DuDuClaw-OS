@@ -42,7 +42,7 @@ echo "==> DOCS_BASE=$DOCS_BASE  (output always assembles into _site/docs/)"
 
 if [[ "${SKIP_DOCS:-0}" != "1" ]]; then
   if ! command -v npm >/dev/null 2>&1; then
-    echo "build-site: npm not found — the docs site needs Node 20+ / npm." >&2
+    echo "build-site: npm not found — the docs site needs Node 22.23.4+ / npm." >&2
     echo "            Re-run with SKIP_DOCS=1 to assemble the marketing site only." >&2
     exit 1
   fi

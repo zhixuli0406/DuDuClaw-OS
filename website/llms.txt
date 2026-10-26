@@ -2,7 +2,7 @@
 
 > 內嵌 DuDuClaw AI 員工平台與交辦桌面的 x86-64 Linux 作業系統映像，把一台電腦設成 AI 員工的值班機。目前版本 v0.4.0（2026-10-16 發布），pre-GA：所有驗證都在 QEMU 完成，尚未在真實 x86-64 硬體上開機。
 
-開發者：Dudu Technology Ltd.（嘟嘟數位科技有限公司，https://www.dudustudio.monster/）。授權：Apache-2.0。v0.4.0 內嵌 DuDuClaw 平台 1.73.4，基座為 Yocto Project 6.0「wrynose」與 Linux 6.18。
+開發者：Dudu Technology Ltd.（嘟嘟數位科技有限公司，https://www.dudustudio.monster/）。授權：Apache-2.0。v0.4.0 內嵌 DuDuClaw 平台 1.73.4，基座為 Yocto Project 6.0「wrynose」與 Linux 6.18；DuDuClaw 平台 v1.76.0 尚未進入這份映像。
 
 ## 現況（照實標註）
 

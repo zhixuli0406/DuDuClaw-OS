@@ -65,30 +65,49 @@ if [[ ! -f "$REPO_ROOT/crates/duduclaw-cli/Cargo.toml" ]]; then
 fi
 OUT_DIR="$_SCRIPT_DIR/files/duduclaw-cli-src"
 
-# The member closure -- every workspace crate duduclaw-cli reaches through a
-# declared path dependency (normal, dev, build and target-specific tables,
-# optional ones included, because cargo loads the manifest of every declared
-# path dependency), computed by a BFS over the platform's Cargo.toml files.
-# First derived 2026-08-25 (21 members + duduclaw-desktop + duduclaw-relay);
-# re-derived 2026-10-13 for platform v1.73.1: duduclaw-cli-worker is gone
-# from the platform, duduclaw-db is new (duduclaw-gateway depends on it), and
-# duduclaw-desktop dropped out (the gateway's `desktop` feature is now empty
-# and no member references the crate). Re-derive whenever the platform adds
-# or removes a crate: a missing member fails `cp` here or cargo's "failed to
-# read .../Cargo.toml" right away, so staleness is loud, not silent.
-MEMBERS=(
-    duduclaw-agent duduclaw-auth duduclaw-cli duduclaw-cli-runtime
-    duduclaw-container duduclaw-core duduclaw-dashboard duduclaw-db
-    duduclaw-fork duduclaw-gateway duduclaw-identity duduclaw-inference
-    duduclaw-license duduclaw-llm duduclaw-memory duduclaw-odoo duduclaw-os
-    duduclaw-redaction duduclaw-sandbox duduclaw-security duduclaw-sysd
-    # duduclaw-gateway declares an optional `duduclaw-relay = { workspace =
-    # true }` path dependency that stays inactive under the dashboard-only
-    # feature set, but cargo still needs its manifest present to load the
-    # workspace graph ("failed to read .../duduclaw-relay/Cargo.toml"
-    # without it).
-    duduclaw-relay
+# Include both appliance entry points and every declared path dependency.
+# Cargo loads optional/dev/target-specific path manifests even when their
+# features are inactive, so walk those too rather than keeping a stale list.
+MEMBERS=()
+while IFS= read -r member; do MEMBERS+=("$member"); done < <(
+    python3 - "$REPO_ROOT" <<'PYMEMBERS'
+import pathlib, sys, tomllib
+root = pathlib.Path(sys.argv[1]).resolve()
+ws = tomllib.loads((root / 'Cargo.toml').read_text())
+shared = ws.get('workspace', {}).get('dependencies', {})
+pending = [root / 'crates/duduclaw-cli', root / 'crates/duduclaw-maint-tools']
+seen = set()
+while pending:
+    crate = pending.pop().resolve()
+    if crate in seen:
+        continue
+    if crate.parent != root / 'crates':
+        sys.exit('refresh-src: unexpected path dependency outside crates/: ' + str(crate))
+    seen.add(crate)
+    data = tomllib.loads((crate / 'Cargo.toml').read_text())
+    tables = [data, *data.get('target', {}).values()]
+    for table in tables:
+        for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+            for name, spec in table.get(kind, {}).items():
+                if not isinstance(spec, dict):
+                    continue
+                if spec.get('workspace'):
+                    spec = shared.get(name, {})
+                    base = root
+                else:
+                    base = crate
+                if isinstance(spec, dict) and 'path' in spec:
+                    pending.append(base / spec['path'])
+for crate in sorted(seen):
+    print(crate.name)
+PYMEMBERS
 )
+# Process substitution does not propagate Python's exit status; validate
+# both roots before deleting a previously usable snapshot.
+[[ " ${MEMBERS[*]} " == *" duduclaw-cli "* && " ${MEMBERS[*]} " == *" duduclaw-maint-tools "* ]] || {
+    echo "refresh-src: could not resolve the CLI and maintenance-tools member closure" >&2
+    exit 1
+}
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/crates"
@@ -171,6 +190,6 @@ cp "$REPO_ROOT/Cargo.lock" "$OUT_DIR/Cargo.lock"
 # build would (same conservative pin-respecting behavior the comment above
 # wants) and rewrites the lock without compiling anything, so the prune is
 # cheap enough to fold in here instead of trusting a follow-up step.
-(cd "$OUT_DIR" && cargo metadata --format-version 1 >/dev/null)
+(cd "$OUT_DIR" && cargo metadata --offline --format-version 1 >/dev/null)
 
 echo "Wrote $OUT_DIR (root Cargo.toml narrowed to ${#MEMBERS[@]} members, Cargo.lock pruned via cargo metadata to this narrowed workspace)"

@@ -1,0 +1,2 @@
+# Preserve checksum-pinned upstream crate bytes in generated snapshots.
+/meta-duduclaw/recipes-duduclaw/duduclaw-cli/files/duduclaw-cli-src/vendor/calamine/** -text

@@ -19,7 +19,23 @@ DuDuClaw OS 是一套用 Yocto 建出來的 Linux 作業系統，AI agent 是原
 
 > **狀態：bring-up（0.4.0，pre-GA，內嵌平台 v1.73.4）。** 映像能開機、能 A/B 更新並回滾；信任鏈在 layer 已接好，但截至 v0.4.0，發布映像仍未啟用簽章／verity／TPM（見信任鏈一節）。這不是正式版：`0.x` 追蹤 bring-up，`1.0.0` 才是第一個 GA。目前所有驗證都在 QEMU 上完成，**尚未在真實 x86-64 硬體上開機過**。
 
-**v0.4.0 的變更**（2026-10-16）：gateway 不再以 root 執行，改用 `duduclaw` 帳號（uid 1000）；桌面版的容器（任務沙箱、腳本沙箱、電腦操作、Discovery）從 root 的 Docker 換成 rootless Podman，引擎不執行資源上限時這些功能會自動關閉。唯一的 root 輔助程式 `duduclaw-sysd` 只接受 gateway 主行程的請求，系統更新由它自己驗證簽章、雜湊與版本後才安裝。SSH 預設關閉，只能從後台的維護模式打開；基礎版也有了和桌面版相同的預設拒絕防火牆。工廠重置改在下次開機、任何服務啟動前清資料。**升級是單向的**：裝置成功開過 v0.4.0 之後，就不能再回到 v0.3.0 或更早的版本。目前沒有能透過 SSH 登入的帳號，維護模式的 SSH 只控制連接埠。完整清單見 [CHANGELOG](CHANGELOG.md) 的 0.4.0 一節。
+**v0.4.0 的變更**（2026-10-16）：gateway 不再以 root 執行，改用 `duduclaw` 帳號（uid 1000）；桌面版的容器（任務沙箱、腳本沙箱、電腦操作、Discovery）從 root 的 Docker 換成 rootless Podman，引擎不執行資源上限時這些功能會自動關閉。唯一的 root 輔助程式 `duduclaw-sysd` 只接受 gateway 主行程的請求，系統更新由它自己驗證簽章、雜湊與版本後才安裝。SSH 預設關閉，只能從後台的維護模式打開；基礎版也有了和桌面版相同的預設拒絕防火牆。工廠重置改在下次開機、任何服務啟動前清資料。**升級是單向的**：裝置成功開過 v0.4.0 之後，就不能再回到 v0.3.0 或更早的版本。v0.4.0 發布映像沒有能透過 SSH 登入的帳號，該版維護模式的 SSH 只控制連接埠。完整清單見 [CHANGELOG](CHANGELOG.md) 的 0.4.0 一節。
+
+**尚未發版的原始碼：**layer 已同步平台 v1.74.0 的
+`a1f5fd6a964a17c2d3ad9e1165f6df3a8586c213`，包含臨時金鑰 SSH 的閘道、
+root 輔助服務與儀表板。CLI recipe 同時編譯受限選單 `maint-shell` 與
+root 服務 `maint-helper`，帳號套件安裝 SSH 就緒標記。映像檢查會確認
+工具、帳號、服務沙箱與防火牆齊備，並拒絕任何烤進映像的 `authorized_keys`。
+管理員須提供一把技術人員公鑰，維修視窗最長 24 小時；不開放密碼登入
+或任意 shell。**這份候選原始碼尚未通過 Yocto 映像建置與 QEMU 驗證。**
+已發布的下載仍是內嵌平台 v1.73.4 的 v0.4.0。限制見 [安全說明](SECURITY.md)。
+維修選單已修正 Dropbear 傳入空原始指令時的入口，現在進入固定互動選單；
+非空指令仍受原本白名單限制。新映像與實際 SSH 驗證仍待完成。
+安全快照將 ZIP 處理更新為 zip 9.0.4、rust_xlsxwriter 0.100.0，並帶入平台以 checksum 固定來源的 calamine 相容性修補。CLI 的 crate 下載清單已由原 BitBake `update_crates` 任務再生，785 筆 registry 項目與 checksum 均符合快照 lock；新映像建置與實際安裝仍待驗證。
+
+尚未發版的原始碼也讓兩版都內建 CPU 本機模型引擎與服務。基礎版只補引擎與服務，不加入桌面版的 coding CLI 套件；權重仍存放在 `/data`。最終映像建置、模型載入與維修選單重啟仍待實測。
+
+**尚未發布的防火牆修正：** 僅放行 link-local 位址之間、來源 UDP 547 到目的 546 的 DHCPv6 啟動回覆。[隔離封包回歸測試](appliance/tests/firewall/README.md) 已通過；重建映像後仍需驗證 GCP 實際取得 IPv6 位址。
 
 ## 目錄
 
@@ -111,6 +127,8 @@ dd if=<iso> of=/dev/<usb> bs=4M conv=fsync    # 或用 balenaEtcher
 
 目標機用 UEFI 開機，**Secure Boot 關閉**（截至 v0.4.0，發布映像仍未簽章；簽章版才會在首次開機自動 enroll 金鑰）。從 USB 開機進圖形安裝精靈，選目標 SSD 安裝；重開機後就是 A/B UKI + systemd-boot 系統，用同一區網的瀏覽器開後台。
 
+**尚未發布的安裝器修正**：開發版原始碼在解壓、進度管線或寫碟失敗時會停止，完整串流與同步成功後才報 100%。失敗可能留下部分寫入的磁碟，請重新安裝後再從該磁碟開機。host 回歸測試已過；重新建置與兩版正式 ISO 的真空白磁碟安裝仍待驗證。見[安裝器測試](appliance/tests/installer/README.md)。
+
 **整碟映像（桌面版：桌面＋應用程式＋出貨硬化）**
 
 ```bash
@@ -140,6 +158,10 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 ./scripts/release-os.sh sign       # 簽 builder 上以 package --no-sign 產出、複製回來的檔案
 ./scripts/release-os.sh publish    # 上傳到 GitHub Release
 ```
+
+generic 映像會要求內建 KVM guest 支援；最終核心 `.config` 缺少 guest／時鐘前置選項、必要 VirtIO 或 PCI MSI 時，建置會停止。host KVM 模組沿用既有設定。這項組態檢查不能取代原生 GCE 開機與安裝驗收，詳見 [layer 建置參考](meta-duduclaw/README.md#build)。
+
+installed initramfs 會明確設定 `/run` mode 0755，供嚴格 SSH 金鑰路徑檢查；runtime 權限與正常維修登入仍須在重建客體驗證。
 
 遠端 builder（例如 GCP）不放簽章金鑰：在 builder 上跑 `package --no-sign`，把 `artifacts/os/v<版本>/<機型>/` 複製回持有金鑰的機器，再跑 `sign` 與 `publish`。大記憶體的 Linux builder 可以用 `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` 取代預設的 `serial1.yml`（同樣關掉 SPDX，但不做 `-j1`），`build`／`smoke`／`package` 要帶同一個值。
 

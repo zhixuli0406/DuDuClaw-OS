@@ -238,12 +238,10 @@ fn apply_fetch_outcome(feed: &mut NotificationsFeed, outcome: Result<(Option<Str
             }
             ok.changed
         }
-        // Distinguishes "never got a session at all" from "had one, but the
-        // RPC itself failed" only for the stderr diagnostic's own wording —
-        // both still land the panel on the same Offline banner either way
-        // (`NotificationsFeed::apply_session_err`/`::apply_list_err` — see
-        // `gateway_client::GatewayError`'s own doc comment for why the UI
-        // layer doesn't need the distinction beyond that).
+        // Both paths render Offline. Preserve typed RPC authentication
+        // rejection so apply_list_err can discard the rejected credential;
+        // the next scheduled attempt bootstraps through the normal server
+        // authorization gate, while other failures retain the session.
         Err(err) => {
             let kind = FailureKind::classify(&err);
             let outcome = match &err {
@@ -739,28 +737,19 @@ fn dispatch_decide(id: String, approve: bool, view: &mut ShellView, cx: &mut Con
         // the durable, content-bearing audit record is the gateway's own
         // `approvals.db` + audit log (task brief: "決策動作有稽核可循——
         // gateway 端本就有").
-        let ok = match gateway_client::decide_approval(&jwt, &id_for_thread, approve) {
-            Ok(()) => {
-                eprintln!("[notifications] approvals.decide id={id_for_thread} approve={approve} ok");
-                true
-            }
-            Err(e) => {
-                eprintln!("[notifications] approvals.decide id={id_for_thread} approve={approve} failed: {e:?}");
-                false
-            }
-        };
-        let _ = tx.send(ok);
+        let result = gateway_client::decide_approval(&jwt, &id_for_thread, approve);
+        match &result {
+            Ok(()) => eprintln!("[notifications] approvals.decide id={id_for_thread} approve={approve} ok"),
+            Err(e) => eprintln!("[notifications] approvals.decide id={id_for_thread} approve={approve} failed: {e:?}"),
+        }
+        let _ = tx.send(result);
     });
 
     cx.spawn(async move |weak, cx| loop {
         match rx.try_recv() {
-            Ok(ok) => {
+            Ok(result) => {
                 let _ = weak.update(cx, |view, cx| {
-                    if ok {
-                        view.overlay_ui.notifications.apply_decide_ok(&id, approve);
-                    } else {
-                        view.overlay_ui.notifications.apply_decide_err(&id, approve);
-                    }
+                    view.overlay_ui.notifications.apply_decide_result(&id, approve, result);
                     cx.notify();
                 });
                 break;

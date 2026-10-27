@@ -21,6 +21,11 @@ SRC_URI = "file://duduclaw.conf"
 
 S = "${UNPACKDIR}"
 
+# A second local syslog daemon must not replace journald's /dev/log socket.
+# Keep an explicit dependency conflict if another image adds the legacy
+# packages despite the distro's empty core-boot syslog recommendation.
+RCONFLICTS:${PN} += "busybox-syslog busybox-klogd"
+
 do_install() {
     install -d ${D}${sysconfdir}/systemd/journald.conf.d
     install -m 0644 ${UNPACKDIR}/duduclaw.conf ${D}${sysconfdir}/systemd/journald.conf.d/duduclaw.conf

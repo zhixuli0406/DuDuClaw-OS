@@ -65,6 +65,9 @@ const BASE = docsBasePrefix();
 /** Public whitelist for the platform repo. Nothing else is ever read. */
 const SECTIONS = ['features', 'guides', 'architecture', 'spec', 'api'];
 
+/** Platform pages inside SECTIONS that stay off this public site. */
+const EXCLUDED_PLATFORM_IDS = new Set(['guides/white-label']);
+
 /** Source subdirectory -> site locale. */
 const LOCALE_DIRS = { 'zh-TW': 'root', 'ja-JP': 'ja' };
 const LOCALE_PREFIX = { root: '', en: 'en', ja: 'ja' };
@@ -411,6 +414,7 @@ function collectPlatformPages() {
 
     for (const file of englishFiles) {
       const id = `${section}/${slugForBasename(file)}`;
+      if (EXCLUDED_PLATFORM_IDS.has(id)) continue;
       pages.push({ id, locale: 'en', source: file, origin: 'platform' });
 
       const zh = path.join(dir, 'zh-TW', path.basename(file));
@@ -436,6 +440,7 @@ function collectPlatformPages() {
         if (!e.isFile() || !isMarkdown(e.name)) continue;
         if (fs.existsSync(path.join(dir, e.name))) continue;
         const id = `${section}/${slugForBasename(e.name)}`;
+        if (EXCLUDED_PLATFORM_IDS.has(id)) continue;
         pages.push({ id, locale, source: path.join(sub, e.name), origin: 'platform' });
       }
     }

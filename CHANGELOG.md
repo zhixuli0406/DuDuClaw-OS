@@ -18,6 +18,9 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 
 - **`docs/guides/ai-runtimes.md` 與兩份 README 跟上平台 v1.74.0 的文件**：Gemini CLI runtime 的移除，平台已延到 v1.75.0（v0.4.0 內嵌的 1.73.4 仍帶著它），README 的 AI 工具鏈一條與 ai-runtimes 都改了。ai-runtimes 的訂閱登入一段拿掉「Anthropic 與 Google 自 2026 年 3 月起在伺服器端擋掉」這個找不到一手出處的說法，改引 Anthropic 的規範與 Google Gemini CLI／Antigravity 條款，文字與 #21 改的同一段相同。OS 映像沒有變，v0.4.0 仍內嵌平台 v1.73.4。
 
+- **官網、兩份 README、`docs/guides/ai-runtimes.md` 與 `llms*.txt` 跟上平台 v1.78.0**：Antigravity 的安裝與條款敘述改成一句移除說明（平台 v1.77.1 移除，映像從未打包）；首頁寫明 v0.4.0 內嵌的 1.73.4 之後的平台版本都不在這份映像裡，文件站轉載的平台功能頁描述的是最新平台版本。OS 版本與映像沒有變動。
+- **文件站不再轉載平台的 `guides/white-label`**（`docs-site/scripts/sync-docs.mjs`）：那一頁含授權簽發細節，不放公開網站。
+
 ### Removed
 - **官網的吉祥物與裝飾動畫**：緋紅摺紙貓（hero inline SVG、CTA 背景貓、QR 中央的貓）、3D 貓（`assets/js/cat3d/`、`assets/data/cat-panels.json`、`assets/vendor/ogl.mjs`）、走路貓（`assets/js/catwalk/`、`assets/js/hero-cat.js`）、驗收頁 `website/lab/`、hero 的 WebGL 色塊（`assets/js/hero-shader.js`）、影子工作區的粒子凍結示範（`assets/js/freeze-demo.js`）、捲動進度條、磁吸按鈕與截圖傾斜效果，以及 `assets/brand/` 的舊 logo 與 favicon（`duduclaw-cat.svg`、`duduclaw-mark-circle.svg`、`duduclaw-tile.svg`、`favicon.svg`、`mark-{16,32,64,512}.png`、`cat-512.png`）和文件站的 `src/assets/duduclaw-mark-circle.svg`。C1 規範不留吉祥物動畫，也不用漸層與光暈。`scripts/build-site.sh` 移除刪 `lab/` 的步驟。
 

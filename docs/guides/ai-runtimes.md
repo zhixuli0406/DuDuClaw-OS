@@ -13,14 +13,16 @@ when v0.3.0 moved the embedded platform from 1.63.0 to 1.73.1, or when
 v0.4.0 moved it to 1.73.4. Every bundled CLI is a runtime in platform
 1.73.4's runtime catalog
 (`crates/duduclaw-core/src/runtime_catalog.rs` in the platform repo). The
-catalog also lists Kiro CLI and Google Antigravity, which the image does
-not bundle (see [Not installed](#not-installed)).
+catalog also lists Kiro CLI, which the image does not bundle (see
+[Not installed](#not-installed)).
 
 The platform deprecated its Gemini CLI runtime in v1.67.0 and removed it in
 v1.75.0. OS v0.4.0 still embeds platform 1.73.4 and bundles `gemini`; the
 Gemini API provider is not affected. This image does not include the platform
-v1.75.0 Codex remote-login fix or its account-removal UI. Those features need
-a separately built and verified OS image, not a platform release alone.
+v1.75.0 Codex remote-login fix or its account-removal UI, or any later platform
+behaviour, such as the v1.78.0 outgoing checks on CLI built-in tools. Those
+features need a separately built and verified OS image, not a platform release
+alone.
 
 This guide covers where that payload comes from, how to refresh it, where
 credentials are stored, and what the image deliberately does *not* carry.
@@ -59,14 +61,9 @@ component, plus a `skipped:` line for anything that is not there.
 
 ### Not installed
 
-**Google Antigravity (`agy`).** The platform's catalog lists it (already in
-the 1.63.0 snapshot v0.2.0 embedded, and the named replacement for the
-deprecated Gemini CLI since 1.73.1), but the 2026-09-05 bundle does not contain
-it. The catalog installs it with the vendor script
-(`https://antigravity.google/cli/install.sh`), which drops `agy` in
-`$HOME/.local/bin`; on this image that is `/data/duduclaw/.local/bin`, a path
-the gateway probes. Installing it on a running v0.4.0 image has not been
-tested.
+**Antigravity (`agy`).** Never bundled in any image, and removed from the
+platform in v1.77.1. A later OS image that embeds that platform refuses an
+employee still set to it. Choose another runtime.
 
 **Kiro CLI.** Not in the image, and there is deliberately no `/usr/bin/
 kiro-cli` stub: `duduclaw` decides "installed" by whether the binary
@@ -142,8 +139,7 @@ third-party product is a vendor-terms question:
 [Anthropic's policy](https://code.claude.com/docs/en/legal-and-compliance)
 does not let third-party products route requests through Claude subscription
 credentials and may be enforced without notice, and Google's
-[Gemini CLI terms](https://geminicli.com/docs/resources/tos-privacy/) and
-[Antigravity terms](https://antigravity.google/terms) (section 6) say
+[Gemini CLI terms](https://geminicli.com/docs/resources/tos-privacy/) say
 third-party software accessing the service through a subscription sign-in may
 get the account suspended or terminated. OpenAI's and xAI's positions are
 unclear; their terms still apply. The OOBE shows that risk and requires an explicit

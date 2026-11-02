@@ -15,6 +15,16 @@ the raw boot/build transcripts are under
 [`wiki/reports/bring-up-evidence/`](../wiki/reports/bring-up-evidence/).
 Release-by-release status is in the repo-root [`CHANGELOG.md`](../CHANGELOG.md).
 
+## Installer stream validation (unreleased)
+
+The live installer's write paths now require Bash `pipefail`; its recipe declares
+`bash` as a runtime dependency. Decoder, progress-pipe and disk-write errors stop
+before GPT repair or settings injection. Progress reaches 100 only after the
+complete stream, progress reader and sync succeed. The whole-disk byte-copy and
+PARTUUID contract stays the same. [Host stream regression tests](../appliance/tests/installer/README.md)
+cover the failure paths and temporary FIFO cleanup; rebuilding and real blank-disk
+installation of both shipping ISOs remain unverified for this change.
+
 ## Target release
 
 Yocto Project **6.0 "wrynose"** (LTS, supported to 2028-04); kernel

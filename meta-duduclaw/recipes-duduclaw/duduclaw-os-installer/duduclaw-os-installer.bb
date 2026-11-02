@@ -16,6 +16,7 @@ SRC_URI = "file://duduclaw-os-install.sh"
 S = "${UNPACKDIR}"
 
 # Runtime tools the installer shells out to:
+#  - bash            → pipefail: decoder/pv errors must stop whole-disk writes
 #  - gptfdisk        → sgdisk -e (move GPT backup header to real disk end)
 #  - zstd            → zstd -dc (decompress-stream the .wic.zst to disk) +
 #                      zstd -lv (Y20-P3: exact decompressed byte count for
@@ -26,7 +27,7 @@ S = "${UNPACKDIR}"
 #                      pulled explicitly so the script's `stat -c`/`du -h`
 #                      behave identically regardless of the base image's
 #                      busybox config) + mkfifo (Y20-P3's progress-line
-#                      bridge, POSIX sh has no process substitution)
+#                      bridge in a private temporary directory)
 #  - pv              → Y20-P3: numeric (`-n`) progress samples feeding
 #                      DUDUCLAW_INSTALL_PROGRESS=1's `DUDUCLAW_PROGRESS:<pct>`
 #                      lines (see the script's own §5 comment); a real
@@ -35,6 +36,7 @@ S = "${UNPACKDIR}"
 #                      live feature of the shipped image, not something that
 #                      happens to work only when pv is present.
 RDEPENDS:${PN} = " \
+    bash \
     gptfdisk \
     zstd \
     parted \

@@ -174,6 +174,15 @@ IMAGE_INSTALL:append = " duduclaw-firstboot"
 # by linux-yocto_6.18.bbappend.
 IMAGE_INSTALL:append = " duduclaw-firewall"
 
+# --- Previous release's account ids (2026-10-16) --------------------------
+# duduclaw_check_maint_account (duduclaw-maint-checks.inc, required by
+# duduclaw-image.bb) compares this image's /etc/passwd and /etc/group with
+# the base edition of the last release and fails the build if any id moved:
+# after an A/B update the files on /data would otherwise belong to a
+# different account. duduclaw-image-appliance.bb requires this file and
+# points the variable at its own table.
+DUDUCLAW_ACCOUNT_BASELINE := "${THISDIR}/duduclaw-image-ab/account-ids.txt"
+
 # Y9-2 (2026-08-27): factory UKI naming + loader.conf default, so the very
 # first boot's own UKI competes in the SAME sysupdate-managed namespace as
 # every future update instead of permanently winning by static pin.

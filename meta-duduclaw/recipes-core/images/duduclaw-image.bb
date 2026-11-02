@@ -232,6 +232,21 @@ SRC_URI += "file://duduclaw-loader.conf"
 
 IMAGE_INSTALL:append = " duduclaw-rescue"
 
+# --- Maintenance SSH account (2026-10-16) ---------------------------------
+# Authority: commercial/docs/DESIGN-maintenance-ssh-account-2026-10.md
+# (private platform tree). The account a support technician logs in as
+# during an Admin-opened maintenance window (Entry A); unlike
+# duduclaw-rescue (Entry B, physical rescue boot, real bash) it gets a
+# fixed menu, no password, a fixed uid/gid 4800 and a key that only exists
+# while the window is open. Installed at this base level so both shipping
+# editions carry it (no polkit: the menu's restarts go through a root
+# helper service the platform ships). The build checks in duduclaw-maint-checks.inc
+# read the finished rootfs (id collisions, shell, home, previous-release id
+# table); the shipping image recipes point DUDUCLAW_ACCOUNT_BASELINE at
+# their own table.
+IMAGE_INSTALL:append = " duduclaw-maint"
+require recipes-core/images/duduclaw-maint-checks.inc
+
 # WS-3/B2 (2026-09-01, DESIGN-os-security-line-2026-09.md §2 支柱二 B2 /
 # G17: "journald 現況零配置"). Added at this base level, not scoped to the
 # appliance payload the way A4's firewall was (that recipe's own comment

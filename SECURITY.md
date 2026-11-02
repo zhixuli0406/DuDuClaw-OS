@@ -134,6 +134,20 @@ hardware.
   firewall; closing the window stops dropbear, ends every session and
   closes the port. No account can log in over SSH yet (root is locked), so
   the switch currently controls only the port.
+- Maintenance SSH login (in the layer, lands in the next OS image, not in
+  v0.4.0): a dedicated account, `duduclaw-maint`, with a fixed uid/gid of
+  4800, password field `*`, no supplementary groups, an empty read-only
+  home and a fixed menu as its login shell instead of a general shell. Its
+  only actions are restarting the gateway or the local model server, done
+  by a root helper service on its behalf (no polkit, no sudo). The image
+  build fails if 4800 is used by any other
+  account or falls inside the host's dynamic system ids, the gateway's
+  subordinate ids, the Android ids Waydroid runs as host ids, or systemd's
+  reserved ranges, and if any account changed its id against the previous
+  release (an id that moves leaves files on `/data` owned by the wrong
+  account after an A/B update). The account cannot log in until the
+  platform snapshot that carries the menu and the per-window key handling
+  is vendored into the image.
 - What remains: kernel bugs reachable from an unprivileged user namespace,
   and whatever `duduclaw-sysd`'s request handlers allow a uid-1000 caller to
   do (that code is in the platform repo).

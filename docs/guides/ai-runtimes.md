@@ -1,10 +1,21 @@
 # AI runtimes and local models on DuDuClaw OS
 
-DuDuClaw OS ships the AI coding CLIs in the image. A factory-fresh box can
+The desktop edition ships the AI coding CLIs in the image. A factory-fresh box can
 be handed an API key and put to work without installing anything: `claude`,
 `codex`, `gemini`, `qwen`, `kimi`, `copilot`, `grok`, `agent` (Cursor),
 `opencode` and `vibe` are all on `PATH` at first boot, and `llama-server`
 is there for running a model locally with no network at all.
+
+**Unreleased base-edition support:** both shipping image recipes now require
+`llama-server`, `llama-cli` and `duduclaw-llama-server.service`. The base
+edition installs only the model service and its engine dependency; the
+vendor coding-CLI bundle remains desktop-only. No model weights are baked
+in. The existing service runs as `duduclaw` (uid 1000) and stays inactive
+until its model directory and `llama-server.env` exist. Use the dashboard's
+local-model download and serve flow to provision it. A rootfs check rejects
+missing, non-root-owned, wrongly permissioned or non-x86-64 engine payloads.
+This describes source changes, not a published release or completed model
+load/restart acceptance. Those require new images and real execution.
 
 The payload is the bundle generated on 2026-09-05
 (`DUDUCLAW_AI_RUNTIMES_DATE = "20260905"` in the recipe). v0.2.0, v0.3.0

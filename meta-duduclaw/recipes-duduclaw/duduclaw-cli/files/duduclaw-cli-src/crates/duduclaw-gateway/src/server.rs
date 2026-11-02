@@ -1894,20 +1894,34 @@ pub async fn start_gateway(config: GatewayConfig) -> duduclaw_core::error::Resul
         );
     }
 
-    // ── Maintenance Mode — Entry A: boot-time-only reassert-closed ────
+    // ── Maintenance Mode — Entry A: boot reassert-closed + supervisor ────
     // `DESIGN-maintenance-mode-2026-08.md` §2.4: a gateway process restart
     // force-closes any in-flight maintenance window, unconditionally (even
     // with TTL time left) — stricter than `resume_on_restart=pause` above,
     // which still offers an `auto` mode; maintenance mode has no such
-    // option at all. Called exactly once, here, at boot — never from a hot
-    // reload path, mirroring `pause_inflight_goal_tasks_on_restart`'s own
-    // contract. Runs unconditionally (no feature gate): a stale open window
-    // surviving an in-memory-state wipe is exactly the orphan-window
-    // scenario this call exists to close.
-    if crate::maintenance::reassert_closed_on_boot(&home_dir).await > 0 {
-        warn!(
-            "maintenance mode was open before this restart — force-closed (revoke_reason=gateway_restart)"
-        );
+    // option at all. The ledger part runs here, before the dashboard serves
+    // anything. Then the maintenance supervisor starts as its own task
+    // (`DESIGN-maintenance-ssh-account-2026-10.md` M9, R3): it waits for sysd
+    // (every 2 s, up to 60 s), closes an orphan SSH key, runs the revoked
+    // windows' close actions, and from then on every 30 s does the TTL sweep,
+    // the sysd poll and the audit mirror. No feature gate and no dependency
+    // on `[dispatch] enabled`: a window must expire whatever else is off.
+    // Only the process holding `<home>/locks/gateway.lock` runs it: a second
+    // gateway on the same home must not revoke or stop the first one's window
+    // (its `WINDOW_LOCK` cannot see the other process's `opening` row).
+    if duduclaw_core::gateway_instance::held(&home_dir) {
+        let boot_revoked = crate::maintenance::revoke_on_boot(&home_dir).await;
+        if !boot_revoked.is_empty() {
+            warn!(
+                "maintenance mode was open before this restart — force-closed (revoke_reason=gateway_restart)"
+            );
+        }
+        let env = crate::maintenance::MaintEnv::system(&home_dir, Some(user_db.clone()));
+        // Reserve the window writer lock before serving RPCs, even if the
+        // spawned supervisor has not been polled yet. Status stays readable.
+        crate::maintenance::supervisor::spawn(Arc::new(env), boot_revoked).await;
+    } else {
+        error!("another gateway holds this data directory: the maintenance supervisor does not run in this process");
     }
 
     // ── D5: semi-automatic topology evolution (human-gated) ───
@@ -3099,7 +3113,7 @@ async fn handle_otp_request(
             );
             tokio::spawn(async move {
                 let text =
-                    format!("🐾 DuDuClaw 登入驗證碼：{code}\n5 分鐘內有效，請勿分享給任何人。");
+                    format!("DuDuClaw 登入驗證碼：{code}\n5 分鐘內有效，請勿分享給任何人。");
                 match deliverer.deliver(&channel, &chat_id, &text).await {
                     Ok(()) => {
                         let _ = user_db.log_action(
@@ -16246,10 +16260,10 @@ async fn handle_mcp_oauth_callback(
     axum::response::Html(
         "<html><body style=\"font-family: system-ui, sans-serif; display: flex; \
          justify-content: center; align-items: center; height: 100vh; margin: 0; \
-         background: #fafaf9;\">\
+         background: #F5F4F0;\">\
          <div style=\"text-align: center;\">\
-         <h2 style=\"color: #1c1917;\">Authentication Successful</h2>\
-         <p style=\"color: #78716c;\">You can close this window and return to the dashboard.</p>\
+         <h2 style=\"color: #102B48;\">Authentication Successful</h2>\
+         <p style=\"color: #5B6470;\">You can close this window and return to the dashboard.</p>\
          </div></body></html>"
             .to_string(),
     )
@@ -16279,16 +16293,16 @@ fn remote_mcp_result_page(ok: bool, message: &str, back: Option<&str>) -> axum::
     let title = if ok { "Connected" } else { "Sign-in did not complete" };
     let link = match back {
         Some(origin) => format!(
-            "<p><a href=\"{}\" style=\"color:#b45309\">Back to the dashboard</a></p>",
+            "<p><a href=\"{}\" style=\"color:#8A5A10\">Back to the dashboard</a></p>",
             html_escape(&format!("{origin}/manage/integrations?tab=mcp&mcp_tab=remote"))
         ),
-        None => "<p style=\"color:#78716c\">You can close this window.</p>".to_string(),
+        None => "<p style=\"color:#5B6470\">You can close this window.</p>".to_string(),
     };
     let body = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">\
          <title>DuDuClaw</title></head><body style=\"font-family:system-ui,sans-serif;display:flex;justify-content:center;\
-         align-items:center;min-height:100vh;margin:0;background:#fafaf9;color:#1c1917\"><div style=\"max-width:32rem;padding:1.5rem;text-align:center\">\
-         <h2>{}</h2><p style=\"color:#57534e\">{}</p>{link}</div></body></html>",
+         align-items:center;min-height:100vh;margin:0;background:#F5F4F0;color:#102B48\"><div style=\"max-width:32rem;padding:1.5rem;text-align:center\">\
+         <h2>{}</h2><p style=\"color:#5B6470\">{}</p>{link}</div></body></html>",
         html_escape(title),
         html_escape(message),
     );

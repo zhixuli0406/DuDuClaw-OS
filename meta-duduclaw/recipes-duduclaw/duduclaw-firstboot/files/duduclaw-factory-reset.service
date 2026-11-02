@@ -16,6 +16,11 @@
 # and the device still boots on its current data, so the dashboard stays
 # reachable. Making the gateway depend on it would turn a bad marker into a
 # device with no dashboard.
+#
+# Order the wipe before sysd's startup replay and host-key generation too:
+# otherwise sysd can write the previous owner's SSH records back after the
+# wipe, or a completed key-generation oneshot can have its key wiped away.
+# Ordering only: neither service requires a successful reset to start.
 [Unit]
 Description=DuDuClaw factory reset (wipe gateway, kiosk and container data on request)
 RequiresMountsFor=/data
@@ -24,6 +29,7 @@ After=data.mount
 Before=duduclaw-firstboot-provision.service duduclaw-home-owner.service duduclaw-data-migrate.service
 Before=duduclaw-podman.service duduclaw-gateway.service duduclaw-kiosk.service duduclaw-secaudit-scan.service
 Before=iwd.service
+Before=duduclaw-sysd.service dropbearkey.service
 
 [Service]
 Type=oneshot

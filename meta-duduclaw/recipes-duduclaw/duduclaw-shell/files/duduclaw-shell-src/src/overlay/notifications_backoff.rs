@@ -84,19 +84,19 @@ pub(crate) const JITTER_CEILING_MULTIPLIER: f64 = 1.0 + JITTER_FRACTION;
 /// been offline for a very long time.
 const MAX_EXPONENT: u32 = 16;
 
-/// Why a fetch failed, reduced to the only distinction the retry policy
-/// actually acts on. Deliberately NOT a mirror of `GatewayError`'s full
-/// shape: the panel already collapses every failure to one Offline banner
-/// (see `notifications_feed::FeedStatus::Offline`), and the retry policy
-/// only needs "was this us calling too fast, or something else".
+/// Typed failure policy for the notification feed. Rate limiting needs a
+/// longer retry delay; a rejected authentication also invalidates the cached
+/// session. Other failures retain that session. All still render Offline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FailureKind {
     /// HTTP 429 from the gateway's token bucket, on either the session
     /// bootstrap (`SessionError::Http(429)`) or the WS upgrade
     /// (`RpcError::RateLimited`).
     RateLimited,
-    /// Everything else — gateway down, auth rejected, malformed response,
-    /// timeout. All one bucket on purpose (see this enum's own doc comment).
+    /// Only a rejected connect handshake invalidates the cached session.
+    /// Uses the ordinary retry delay; a business rejection is not auth loss.
+    AuthRejected,
+    /// Gateway down, malformed response, timeout or a business rejection.
     Other,
 }
 
@@ -108,6 +108,7 @@ impl FailureKind {
     pub(crate) fn classify(err: &GatewayError) -> Self {
         match err {
             GatewayError::Rpc(RpcError::RateLimited) => FailureKind::RateLimited,
+            GatewayError::Rpc(RpcError::AuthRejected) => FailureKind::AuthRejected,
             GatewayError::Session(SessionError::Http(429)) => FailureKind::RateLimited,
             _ => FailureKind::Other,
         }
@@ -220,7 +221,7 @@ impl RefreshBackoff {
 pub(crate) fn delay_for(kind: FailureKind, consecutive_failures: u32, jitter: f64) -> Duration {
     let base = match kind {
         FailureKind::RateLimited => RATE_LIMITED_BASE_DELAY,
-        FailureKind::Other => BASE_DELAY,
+        FailureKind::AuthRejected | FailureKind::Other => BASE_DELAY,
     };
     let exponent = consecutive_failures.saturating_sub(1).min(MAX_EXPONENT);
     let scaled = base.saturating_mul(1u32 << exponent);
@@ -397,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_maps_both_429_paths_and_nothing_else() {
+    fn classify_preserves_rate_limits_and_auth_rejection() {
         assert_eq!(FailureKind::classify(&GatewayError::Rpc(RpcError::RateLimited)), FailureKind::RateLimited);
         assert_eq!(FailureKind::classify(&GatewayError::Session(SessionError::Http(429))), FailureKind::RateLimited);
 
@@ -405,7 +406,7 @@ mod tests {
         assert_eq!(FailureKind::classify(&GatewayError::Session(SessionError::Refused)), FailureKind::Other);
         assert_eq!(FailureKind::classify(&GatewayError::Session(SessionError::NonLoopback)), FailureKind::Other);
         assert_eq!(FailureKind::classify(&GatewayError::Rpc(RpcError::Timeout)), FailureKind::Other);
-        assert_eq!(FailureKind::classify(&GatewayError::Rpc(RpcError::AuthRejected)), FailureKind::Other);
+        assert_eq!(FailureKind::classify(&GatewayError::Rpc(RpcError::AuthRejected)), FailureKind::AuthRejected);
         // The pre-fix shape of the very failure this whole module exists for
         // — a 429 that reached the UI as an untyped `Unreachable` string —
         // must NOT be pattern-matched back out of the text.

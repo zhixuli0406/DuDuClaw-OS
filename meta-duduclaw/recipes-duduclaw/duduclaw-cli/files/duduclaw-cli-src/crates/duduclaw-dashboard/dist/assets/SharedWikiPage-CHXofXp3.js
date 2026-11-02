@@ -1,1 +1,0 @@
-import{t as e}from"./SharedWikiPage-Cd4UtE6r.js";export{e as SharedWikiPage};

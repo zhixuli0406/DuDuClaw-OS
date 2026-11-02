@@ -1,1 +1,0 @@
-import{f as e}from"./utils-BhomWwm6.js";import{mn as t,xn as n}from"./mds-C6eXj5tl.js";import{t as r}from"./BillingPage-ueRWXI3N.js";var i=e();function a(){let[e]=n();return e.get(`tab`)===`accounts`?(0,i.jsx)(t,{to:`/app/system/accounts`,replace:!0}):(0,i.jsx)(r,{})}export{a as BillingShell};

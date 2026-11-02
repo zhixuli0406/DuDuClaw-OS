@@ -3,7 +3,9 @@
 > **Frozen line.** This Debian/mkosi recipe is the earlier DuDuClaw OS
 > appliance line, kept as a reference and transition artifact only. The
 > product is built from the Yocto layer in [`../meta-duduclaw/`](../meta-duduclaw/README.md);
-> nothing below is shipped or maintained for fixes. Paths like `crates/...`
+> nothing below is shipped. The shared firewall reference is synchronized with
+> the Yocto DHCPv6 fix and tested by [isolated packet tests](tests/firewall/README.md);
+> this does not resume Debian image builds or acceptance. Paths like `crates/...`
 > refer to the DuDuClaw platform repo's Rust workspace; `commercial/docs/...`
 > and `research/...` refer to the maintainers' private design tree (not
 > published).
@@ -335,7 +337,8 @@ onboarding flow all need a real machine.
    `crates/duduclaw-core/src/data_migrations.rs` and `duduclaw data-migrate
    --pending|--check|--run`.
 5. `duduclaw-gateway.service` starts, Avahi advertises `duduclaw.local`,
-   nftables allows only the dashboard port + mDNS in from the LAN. It now
+   nftables allows the dashboard port and mDNS from the LAN, with ICMP/IPv6
+   discovery and narrow link-local DHCPv6 client replies for network setup. It now
    also `sd_notify`s systemd (`Type=notify` + `WatchdogSec=60`) once its
    listener is bound, and pings the watchdog every 30s after that — a
    hung-but-still-running process gets killed and restarted, not just a

@@ -140,3 +140,44 @@ SRC_URI:append = " file://duduclaw-verity.cfg"
 # at this file's own pinned SRCREV) and for why this one fragment is also
 # deliberately NOT gated behind that variable.
 SRC_URI:append = " file://duduclaw-tpm.cfg"
+
+# --- Kernel options security features depend on (2026-10-16) -------------
+# A config fragment is a request, not a guarantee: a symbol whose
+# dependencies are missing is dropped by olddefconfig, and the kernel-cache
+# audit only warns. Some options back a security layer that systemd turns
+# into a silent no-op when the kernel lacks them, so the build checks the
+# final .config instead:
+#   CONFIG_CGROUP_BPF  IPAddressDeny=/IPAddressAllow= (the maintenance SSH
+#                      sessions' dropbear@.service.d/60-duduclaw-maint.conf
+#                      has IPAddressDeny=any) are cgroup BPF programs;
+#                      without this option systemd logs a warning and starts
+#                      the unit unfiltered. Requested in duduclaw-rootless.cfg.
+# Add a line here, with its reason, whenever a unit or script relies on an
+# option failing closed rather than being skipped.
+DUDUCLAW_REQUIRED_KCONFIG = "CONFIG_CGROUP_BPF=y"
+do_configure:append() {
+	for opt in ${DUDUCLAW_REQUIRED_KCONFIG}; do
+		if ! grep -qx -- "$opt" ${B}/.config; then
+			bbfatal "kernel .config lacks $opt (see DUDUCLAW_REQUIRED_KCONFIG in linux-yocto_6.18.bbappend)"
+		fi
+	done
+}
+
+# --- Generic KVM guest requirements (2026-10-17) ------------------------
+# The generic image also runs as a native GCE guest. This is guest-side
+# support; duduclaw-kvm.cfg's host KVM modules remain unchanged. Google
+# requires the guest clock, VirtIO transport/storage/network and PCI MSI:
+# https://cloud.google.com/compute/docs/images/building-custom-os
+SRC_URI:append:duduclaw-genericx86-64 = " file://duduclaw-gce-guest.cfg"
+DUDUCLAW_GCE_REQUIRED_KCONFIG = "CONFIG_HYPERVISOR_GUEST=y CONFIG_PARAVIRT=y CONFIG_KVM_GUEST=y CONFIG_PARAVIRT_CLOCK=y CONFIG_VIRTIO_PCI=y CONFIG_SCSI_VIRTIO=y CONFIG_VIRTIO_NET=y CONFIG_PCI_MSI=y"
+
+# Kernel config fragments can be dropped when dependencies are missing.
+# Refuse the effective configuration before compilation instead of trusting
+# a requested fragment or allowing an unsupported generic image to ship.
+do_configure:append:duduclaw-genericx86-64() {
+    for opt in ${DUDUCLAW_GCE_REQUIRED_KCONFIG}; do
+        if ! grep -Fqx -- "$opt" "${B}/.config"; then
+            bbfatal "generic kernel .config lacks $opt (required for a GCE guest)"
+        fi
+    done
+}

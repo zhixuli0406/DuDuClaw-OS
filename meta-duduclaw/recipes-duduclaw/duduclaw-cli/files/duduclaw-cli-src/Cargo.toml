@@ -15,18 +15,19 @@ members = [
     "crates/duduclaw-inference",
     "crates/duduclaw-license",
     "crates/duduclaw-llm",
+    "crates/duduclaw-maint-tools",
     "crates/duduclaw-memory",
     "crates/duduclaw-odoo",
     "crates/duduclaw-os",
     "crates/duduclaw-redaction",
+    "crates/duduclaw-relay",
     "crates/duduclaw-sandbox",
     "crates/duduclaw-security",
     "crates/duduclaw-sysd",
-    "crates/duduclaw-relay",
 ]
 
 [workspace.package]
-version = "1.73.4"
+version = "1.74.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["DuDuClaw Contributors"]
@@ -75,8 +76,9 @@ ring = "0.17"
 base64 = "0.22"
 
 # HTML sanitization (white-label About block) — servo ecosystem standard,
-# allowlist-based; security review low. Pinned to the 4.x line.
-ammonia = "4"
+# allowlist-based; security review low. Exact patched version avoids selecting
+# vulnerable 4.2.0-4.2.3 releases under a caret requirement.
+ammonia = "=4.1.8"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -136,4 +138,7 @@ opt-level = 3
 # Keep Songbird's Serenity bridge while moving its TLS transport onto the
 # workspace's maintained rustls 0.23 stack. The vendored SDK retains its version.
 [patch.crates-io]
+# Official calamine 0.36.1, with only its zip requirement raised past the
+# RustSec extraction fixes. scripts/verify_security_vendor.py pins the patch.
+calamine = { path = "vendor/calamine" }
 serenity = { path = "vendor/serenity" }

@@ -1,0 +1,16 @@
+Subject: [PATCH] init: mount /run tmpfs with mode 0755
+
+The kernel defaults a tmpfs root to 1777. The finish module moves this
+mount to the installed root, and systemd skips its own mode=0755 mount
+when /run is already mounted. Set the intended mode at creation so that
+strict external authorized_keys ancestor checks can trust /run.
+
+Upstream-Status: Pending
+
+--- a/init
++++ b/init
+@@ -86,3 +86,3 @@
+ mount -t sysfs sysfs /sys
+-mount -t tmpfs tmpfs /run
++mount -t tmpfs -o mode=0755 tmpfs /run
+ mkdir -p /run/lock

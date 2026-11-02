@@ -29,7 +29,7 @@ set -euo pipefail
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "${DUDUCLAW_CLI_SRC_ROOT:-}" ]]; then
     REPO_ROOT="$DUDUCLAW_CLI_SRC_ROOT"
-elif [[ -d "$_SCRIPT_DIR/../../../crates" ]]; then
+elif [[ -f "$_SCRIPT_DIR/../../../crates/duduclaw-sysd/Cargo.toml" ]]; then
     REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." && pwd)"          # monorepo
 else
     REPO_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)/DuDuClaw"  # split: sibling checkout
@@ -99,6 +99,7 @@ anyhow = "1"
 libc = "0.2"
 minisign-verify = "0.2"
 sha2 = "0.10"
+base64 = "0.22"
 
 # dev-dependencies deliberately omitted: the Yocto recipe only ever runs
 # \`cargo build --release\` (cargo.bbclass), never \`cargo test\` -- keeping
@@ -109,29 +110,8 @@ sha2 = "0.10"
 unsafe_code = "warn"
 EOF
 
-# Cargo.lock: start from the real workspace lock (so every version pin
-# matches what's actually developed/tested against, never re-resolved to
-# something newer), then let `cargo generate-lockfile` PRUNE it down to only
-# the packages reachable from the flattened, standalone Cargo.toml above.
-#
-# This step is required, not cosmetic: cargo.bbclass builds with `--frozen`
-# (= --locked --offline), and `--locked` refuses to silently drop unreachable
-# [[package]] entries at build time -- verified by hitting it directly:
-# `cargo build --release --locked` against the full 1059-package workspace
-# lock errored with "cannot update the lock file ... because --locked was
-# passed to prevent this". A plain `cargo build --release` (no --locked) DID
-# succeed and rewrote Cargo.lock down to duduclaw-sysd's real closure (98
-# packages including itself), keeping every version pin IDENTICAL to the
-# workspace lock (verified: clap stayed 4.6.1, tokio stayed 1.52.0, etc.).
-#
-# Deliberately NOT `cargo generate-lockfile` here -- tried that first and it
-# re-resolved to "latest Rust-compatible versions" instead of preserving the
-# existing pins (clap silently jumped 4.6.1 -> 4.6.6), which is exactly what
-# this script must never do: the whole point is shipping the SAME versions
-# already developed/tested against, just pruned to duduclaw-sysd's closure.
-# A real `cargo build` respects the existing lock far more conservatively
-# (only touches entries it must), so that's what prunes it here; the
-# resulting target/ is build waste, discarded immediately after.
+# Start with the tested workspace lock and prune it with Cargo's resolver.
+# Metadata performs no compilation and preserves existing package pins.
 # The [dependencies] list above is hand-flattened, so a dependency added to
 # crates/duduclaw-sysd/Cargo.toml upstream is silently missing here until
 # someone notices the bake failing (2026-10-15: minisign-verify and sha2 for
@@ -146,13 +126,6 @@ if missing:
     sys.exit("refresh-src.sh: flattened Cargo.toml lacks upstream dependencies: " + ", ".join(missing))
 PY
 cp "$REPO_ROOT/Cargo.lock" "$OUT_DIR/Cargo.lock"
-# Prune the copied workspace lock by building once; a failed build must stop
-# the refresh (it used to fall through, leaving an unpruned lock and target/).
-if ! (cd "$OUT_DIR" && { cargo build --release --offline >/dev/null 2>&1 || cargo build --release >/dev/null; }); then
-    rm -rf "$OUT_DIR/target"
-    echo "refresh-src.sh: cargo build of the flattened snapshot failed" >&2
-    exit 1
-fi
-rm -rf "$OUT_DIR/target"
+(cd "$OUT_DIR" && cargo metadata --offline --format-version 1 >/dev/null)
 
 echo "Wrote $OUT_DIR (Cargo.toml flattened, Cargo.lock pruned to $(grep -c '^name = ' "$OUT_DIR/Cargo.lock") packages, src/ synced)"

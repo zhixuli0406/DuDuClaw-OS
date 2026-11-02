@@ -85,6 +85,14 @@ require recipes-core/images/duduclaw-image-runtimes.inc
 # resolved shipping cmdline, matching the test variant's own ordering note.
 require recipes-core/images/duduclaw-ro-root.inc
 
+# Previous release's account ids for THIS edition (2026-10-16). Overrides
+# the base edition's table set in duduclaw-image-ab.bb: the desktop edition
+# installs more packages with system accounts (flatpak, polkit, the
+# flatpak-verify account), so the same names have different dynamic ids
+# here. duduclaw-image-appliance-test.bb requires this file and shares the
+# table. See duduclaw-maint-checks.inc for what the comparison enforces.
+DUDUCLAW_ACCOUNT_BASELINE := "${THISDIR}/duduclaw-image-appliance/account-ids.txt"
+
 # `serial-autologin-root` / `empty-root-password` (design doc §2.3, "必須
 # 移除，非可選"): duduclaw-image.bb's own IMAGE_FEATURES carries both,
 # annotated there with "MUST NOT ship with this on" -- every image in this

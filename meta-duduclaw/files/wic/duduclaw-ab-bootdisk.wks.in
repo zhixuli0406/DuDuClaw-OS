@@ -200,7 +200,9 @@ part /boot --source bootimg_efi --sourceparams="loader=${EFI_PROVIDER}" --label 
 # root-A at runtime (the ESP, a separate GPT partition, is what
 # systemd-boot/the UKI actually boot from), only wasted space, well
 # inside this slot's own multi-GB budget (DUDUCLAW_AB_SLOT_SIZE_MB).
-part / --source ${DUDUCLAW_AB_ROOTA_WIC_SOURCE} --fstype=ext4 ${DUDUCLAW_AB_ROOTA_LABEL_OPT} --align 1024 --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DISTRO_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
+# Protect the prebuilt /etc/fstab inside root-A: Wic's per-partition flag
+# gates the rootfs writer (not update_fstab's mountpoint row generation).
+part / --source ${DUDUCLAW_AB_ROOTA_WIC_SOURCE} --fstype=ext4 --no-fstab-update ${DUDUCLAW_AB_ROOTA_LABEL_OPT} --align 1024 --uuid="${DUDUCLAW_AB_ROOTA_PARTUUID}" --part-name="duduclaw-os_${DISTRO_VERSION}" --part-type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709 --fixed-size ${DUDUCLAW_AB_SLOT_SIZE_MB}
 
 # p3 (VER-V, 2026-09-02): root-a-verity — the hash tree covering root-A's
 # own content, only present when DUDUCLAW_VERITY_ENABLE=1. Blank line
@@ -338,48 +340,10 @@ ${DUDUCLAW_AB_ROOTB_VERITY_WKS_LINE}
 # installed AI runtimes and Flatpak apps). Waydroid under nodev is not yet
 # re-verified (V-list).
 #
-# --use-uuid + --fsoptions + --fspassno (Y11-2, 2026-08-27): THE FIX for the
-# bug Y9-2 (same day, earlier round) reproduced live on this exact wks — with
-# neither `--use-uuid` nor `--use-label` set, wic's own `update_fstab()`
-# (plugins/imager/direct.py, `if part.use_uuid: ... UUID=... elif
-# part.use_label: ... LABEL=... else: /dev/%s%s%d`) fell back to a raw
-# `/dev/<disk><partnum>` device path, and wic's own internal disk-name
-# default is `sda` — baked into /etc/fstab as `/dev/sda4` regardless of what
-# the target machine's actual block device is. On this layer's QEMU machines
-# the disk is virtio-blk (`/dev/vda*`), so `/dev/sda4` never existed: a cold
-# boot hung ~90s on `A start job is running for /dev/sda4` before timing out
-# and continuing without /data ever mounting — confirmed directly via
-# `mount | grep /data` returning nothing on a fresh boot, not inferred. Every
-# earlier round's `df -h /data` "looked mounted" because `df` silently
-# reports the CONTAINING filesystem's usage when the mountpoint itself has
-# nothing mounted on it — a fallback illusion, not a real PASS (see Y9-2's
-# own "新發現" section in TODO-agent-first-os-2026-08.md for the full
-# reproduction). This is the exact same fstab identifier gap
-# files/wic/duduclaw-data-bootdisk.wks.in's own /data line already closed
-# (Y9-1, same day) and real-QEMU-verified (`/dev/vda3 on /data type ext4
-# (rw,relatime,x-systemd.growfs)`, reboot-idempotent, gateway self-config
-# read back from it) — this line mirrors that ALREADY-PROVEN fix verbatim
-# rather than reaching for a third, unverified identifier scheme: the
-# Debian/mkosi appliance line's equivalent fstab entry
-# (appliance/mkosi.extra/etc/fstab) uses `PARTLABEL=duduclaw-data`, but that
-# is mkosi.repart's own `Label=` directive writing the GPT partition Name
-# field directly — a DIFFERENT tool with a different fstab vocabulary. wic's
-# kickstart parser has no `--use-partlabel` equivalent at all (confirmed by
-# reading `ksparser.py`'s `part` argument list, same way Y9-2 confirmed
-# `--label`/`--part-name` land on different GPT fields on the wic side); the
-# two options wic actually offers are `--use-uuid` (ext4 filesystem UUID) and
-# `--use-label` (ext4 filesystem LABEL via `mkfs -L` — NOT the raw GPT
-# Name/PARTLABEL field p2/p3's own comments above already warn is a
-# different, easily-confused namespace on this tool). Picking `--use-uuid`
-# — the option with real QEMU boot evidence behind it on this exact layer —
-# over blindly porting the Debian line's `PARTLABEL=` wording is a deliberate
-# call to not repeat the class of mistake Y9-2 just finished fixing (Bug 1:
-# assuming a Debian/mkosi vocabulary term maps onto the same-named wic
-# option). `--fsoptions=defaults,x-systemd.growfs --fspassno=2` mirror the
-# data wks's own /data line for the same reason stated there: a
-# GPT-level GrowFileSystem resize alone does not resize the ext4 filesystem
-# living inside the partition — `x-systemd.growfs` is the mount-time hook
-# that does, and without it this line's own GrowFileSystem bit (set below by
-# duduclaw-ab-partflags.bbclass) would silently do nothing once /data
-# actually starts mounting.
+# A/B updates preserve the installed ESP and DATA filesystem UUIDs. The
+# shared rootfs hook writes stable GPT PARTUUID mount sources; ROOT-A's
+# --no-fstab-update protects that fstab from Wic's generated mount table.
+# Placing the flag on ESP/DATA would NOT exclude their generated rows.
+# --uuid still fixes the GPT PARTUUID, not the filesystem UUID.
+# Keep growfs and fsck policy, and keep /data nosuid,nodev in both modes.
 part /data --fstype=ext4 --label duduclaw-data --align 1024 --use-uuid --uuid="${DUDUCLAW_AB_DATA_PARTUUID}" --fsoptions=defaults,nosuid,nodev,x-systemd.growfs --fspassno=2 --part-name="duduclaw-data" --part-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4 --size ${DUDUCLAW_AB_DATA_SIZE_MB}

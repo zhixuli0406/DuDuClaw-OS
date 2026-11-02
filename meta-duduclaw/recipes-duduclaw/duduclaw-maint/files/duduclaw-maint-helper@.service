@@ -1,0 +1,69 @@
+# DuDuClaw OS: one maintenance helper request (2026-10-16).
+#
+# Started by duduclaw-maint-helper.socket for each connection (see that
+# unit's header for the six tokens and who may connect). Runs as root so it
+# can read the journal and restart the two units without giving any login
+# account systemd-journal, polkit or sudo; everything else a root process
+# does not need for "run journalctl or systemctl restart with a fixed argv"
+# is taken away:
+#   NoNewPrivileges, ProtectSystem=strict (nothing on disk is writable
+#   except its own runtime directory), PrivateNetwork + IPAddressDeny=any
+#   (no network at all; the request arrives on the inherited unix socket,
+#   and systemctl reaches PID 1 over its unix socket), RuntimeMaxSec=3600
+#   (a follow ends after an hour), ProtectProc=invisible (the same /proc
+#   view the SSH sessions get).
+# No capabilities at all (empty bounding set): uid 0 reaches PID 1's
+# private socket /run/systemd/private (root 0600) and reads the journal
+# files (root-owned) by plain file ownership, and systemd authorizes
+# `systemctl restart` by the peer uid, so none is needed (verified in a
+# systemd 257 container). AF_UNIX only, @system-service syscalls, the
+# kernel/cgroup/clock/hostname protections, no devices, no /home, private
+# /tmp, no namespaces, no W+X memory.
+# RuntimeDirectory: /run/duduclaw-maint-helper (root 0700), kept between
+# instances, is the only writable place; the platform helper (P-2) keeps
+# its restart rate-limit state there, so it is required, not optional.
+# CollectMode=inactive-or-failed ([Unit]): a failed instance is garbage-collected
+# like a successful one instead of piling up as failed units.
+# It runs in its own slice, not system-dropbear.slice, so the window close
+# that a gateway restart triggers (cgroup.kill of that slice) does not kill
+# a restart in progress.
+# stdin and stdout are the connection; stderr goes to the journal so an
+# error message never reaches the client.
+[Unit]
+Description=DuDuClaw maintenance helper (one connection)
+CollectMode=inactive-or-failed
+
+[Service]
+User=root
+ExecStart=/usr/libexec/duduclaw/maint-helper
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectProc=invisible
+PrivateNetwork=yes
+IPAddressDeny=any
+RuntimeMaxSec=3600
+RuntimeDirectory=duduclaw-maint-helper
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+PrivateDevices=yes
+ProtectHome=yes
+PrivateTmp=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes

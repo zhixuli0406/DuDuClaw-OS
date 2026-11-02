@@ -1,6 +1,8 @@
 # DuDuClaw OS Documentation
 
-> Public documentation index for DuDuClaw OS (v0.4.0, bring-up, embedding platform v1.73.4). Every
+> Public documentation index for DuDuClaw OS. Published v0.4.0 embeds platform
+> v1.73.4; this unreleased candidate synchronizes v1.74.0 source and awaits
+> image acceptance. Every
 > document in this repo is filed by the same TYPE × CONFIDENTIALITY rule as
 > the DuDuClaw platform repo — see [`../CLAUDE.md`](../CLAUDE.md) →
 > "Documentation Classification & Placement".
@@ -24,6 +26,9 @@
 | [../meta-duduclaw/README.md](../meta-duduclaw/README.md) | The Yocto layer: target release, layout, image recipes and their roles, builder container, `kas build`, QEMU boot, machine-aliasing gotchas | Current |
 | [../appliance/README.md](../appliance/README.md) | The earlier Debian/mkosi appliance line: layout, boot sequence, A/B wiring, Flatpak layer, open points | **Frozen** (reference only) |
 | [../appliance/tests/README.md](../appliance/tests/README.md) | VM acceptance-test helper library (QMP screendump, serial expect-login, OCR screen assertions) | Frozen with the line |
+| [../appliance/tests/firewall/README.md](../appliance/tests/firewall/README.md) | DHCPv6 firewall policy and isolated Linux packet regression; image-validation boundary | Current (shared policy tests) |
+| [../appliance/tests/maintenance-ssh/README.md](../appliance/tests/maintenance-ssh/README.md) | Yocto maintenance SSH guest baseline and host validator tests; real guest acceptance is recorded separately | Candidate; live acceptance pending |
+| [../appliance/tests/installer/README.md](../appliance/tests/installer/README.md) | Host-only tests for the Yocto installer's stream failures, byte preservation and progress cleanup; separate from real image/installation acceptance | Current |
 | [../website/README.md](../website/README.md) | The zero-build marketing site (home + download pages): screenshot pipeline, interactive modules, what to update on a new release, Cloud Run deploy and custom-domain notes | Current |
 | [../docs-site/README.md](../docs-site/README.md) | The documentation site (Astro + Starlight) that publishes this tree and the platform repo's public docs at `/docs/`: how to run it, the public whitelist, the three-locale layout, and the sync script | Current |
 | `../deploy/cloudrun/` + `../scripts/deploy-cloudrun.sh` | Cloud Run container for the public site (nginx, CSP/cache headers, extra MIME types) and the build-and-deploy script; one-time domain mapping notes live in `../website/README.md` | Current |
@@ -67,6 +72,7 @@ User-facing OS docs, authored in the platform repo and published on the docs sit
 |----------|-------------|
 | [../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md](../wiki/impl/meta-duduclaw-bring-up-notes-2026-08.md) | Archived layer README from the Y1–Y9 bring-up waves: why three repos / why kas, UKI chain verification, disk strategy, fcitx5 dependency closure, `/data` provisioning. Dated; superseded by the CHANGELOG and the current layer README |
 | [../wiki/impl/gcp-builder-2026-10.md](../wiki/impl/gcp-builder-2026-10.md) | GCP Linux builder (n2-standard-16) setup, the v0.3.0 and v0.4.0 bakes on it (timelines, peaks, pitfalls), signing kept on the maintainer's Mac via `package --no-sign` / `sign`, cost estimate, teardown |
+| [../wiki/pm/maintenance-ssh-acceptance-2026-10-17.md](../wiki/pm/maintenance-ssh-acceptance-2026-10-17.md) | Maintenance SSH image acceptance tracker: source freeze, GCP prerequisite, real installation versus boot, security cases, evidence and cleanup |
 | [../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md](../wiki/eval/real-hw-acceptance-checklist-y6-3-2026-08-26.md) | Real-hardware acceptance checklist written for the Y6 burn package (N305 / 8845HS). Its premises predate v0.1.0 |
 | [../wiki/reports/bring-up-evidence/](../wiki/reports/bring-up-evidence/README.md) | QEMU boot and bitbake transcripts behind the bring-up "verified" claims |
 | [../wiki/reports/rootless-verification/2026-10-15.md](../wiki/reports/rootless-verification/2026-10-15.md) | First real bake + QEMU run of the rootless gateway (GCP builder, HEAD af2fc2d): V1–V25 and extra checks, the six release-blocking failures F1–F6 with their bisection, raw guest output, and the re-verify round on 5d332c8 (35 of 36 checks passed) that cleared v0.4.0 |

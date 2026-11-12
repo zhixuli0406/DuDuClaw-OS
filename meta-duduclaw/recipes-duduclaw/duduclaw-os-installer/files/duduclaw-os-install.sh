@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # DuDuClaw OS installer (Y19, 2026-08-28).
 #
 # Runs INSIDE the live environment (duduclaw-image-live). Its one job: take
@@ -65,7 +65,7 @@
 # All unset (an operator who backed out of the account step, or a build
 # from before this WP) -> §7 is skipped entirely, byte-identical to before
 # this round.
-set -eu
+set -euo pipefail
 
 INSTALL_IMAGE_NAME="duduclaw-install.wic.zst"
 # Edition marker written next to the payload by the image recipe (optional —
@@ -221,67 +221,111 @@ log "正在寫入映像到 ${TARGET_DEV}（解壓串流，請勿中斷電源）�
 for p in $(lsblk -lno NAME "$TARGET_DEV" 2>/dev/null | tail -n +2); do
     umount "/dev/$p" 2>/dev/null || true
 done
-# DUDUCLAW_INSTALL_PROGRESS=1 (Y20-P3, 2026-08-29): machine-readable
-# progress for a graphical front end. Interface (defined here, consumed by
-# `live_install/steps` + `install_runner.rs` in duduclaw-shell — the two
-# sides were versioned together in the same round): every line of the exact
-# shape `DUDUCLAW_PROGRESS:<0-100>` on THIS SCRIPT's own stdout is a
-# percentage sample (integers, not necessarily monotonic to the last digit —
-# see below); a final `DUDUCLAW_PROGRESS:100` is always emitted once dd/sync
-# settle, regardless of what the last `pv` sample said. No other stdout line
-# uses this prefix, so the consumer can filter on it with a plain anchored
-# match. When this variable is unset/0, or `pv` is not on PATH, behavior is
-# BYTE-IDENTICAL to before this round — the two branches below are
-# untouched.
-#
-# Percent math: `pv -n -s <total>` (numeric mode — one integer 0..100 per
-# line on ITS OWN stderr, see pv(1)) needs a byte total up front. The exact
-# decompressed size is available WITHOUT a second decompression pass via
-# `zstd -lv` (verbose long-listing)'s own "Decompressed Size: ... (<exact
-# bytes> B)" line — the parenthesized figure is always the precise byte
-# count regardless of which human-readable unit precedes it (verified
-# against a live capture: "Decompressed Size: 4.77 MiB (5000000 B)"). If
-# that parse ever fails (a future zstd release reformats the line, or a
-# multi-frame image this awk doesn't expect), this falls back to
-# `IMG_BYTES * 3` — the SAME floor-check ratio the size-sanity warning above
-# already uses for the identical "we don't know the exact decompressed
-# size" situation — so a percentage still renders, just potentially not
-# landing exactly on 100 the instant dd's last byte lands (the script's own
-# final `DUDUCLAW_PROGRESS:100` line is what guarantees the consumer always
-# sees a clean 100 once the write step is actually done, regardless of what
-# pv's own numeric stream reported up to that point).
-#
-# POSIX `sh` has no process substitution, so pv's numeric stderr stream is
-# routed through a named pipe read by a background prefixing loop rather
-# than `<(...)` — portable across dash/busybox sh, not just bash.
-if [ "${DUDUCLAW_INSTALL_PROGRESS:-0}" = "1" ] && command -v pv >/dev/null 2>&1; then
-    TOTAL_BYTES="$(zstd -lv "$IMG" 2>&1 | awk -F'[()]' '/Decompressed Size/{print $2}' | awk '{print $1}')"
-    case "$TOTAL_BYTES" in
-        ''|*[!0-9]*) TOTAL_BYTES=$((IMG_BYTES * 3)) ;;
-    esac
-    [ "$TOTAL_BYTES" -gt 0 ] 2>/dev/null || TOTAL_BYTES=$((IMG_BYTES * 3))
+# Stream failures must stop before GPT repair or settings injection. Bash
+# pipefail covers every producer, not only the final dd. The function's
+# subshell keeps its EXIT/signal cleanup local to the progress resources.
+write_image() (
+    # The supervising parent starts this subshell as its own job/process
+    # group. Disable monitor mode here so all stream/reader children remain
+    # in THAT group instead of creating nested groups of their own.
+    set +m
+    PROGRESS_DIR=''
+    PROGRESS_READER_PID=''
+    cleanup_progress() {
+        if [ -n "$PROGRESS_READER_PID" ]; then
+            kill "$PROGRESS_READER_PID" 2>/dev/null || true
+            wait "$PROGRESS_READER_PID" 2>/dev/null || true
+        fi
+        [ -z "$PROGRESS_DIR" ] || rm -rf -- "$PROGRESS_DIR"
+    }
+    trap cleanup_progress EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
-    PROGRESS_FIFO="$(mktemp -u "${TMPDIR:-/tmp}/duduclaw-install-progress.XXXXXX")"
-    mkfifo "$PROGRESS_FIFO"
-    ( while IFS= read -r pct; do
-          case "$pct" in *[!0-9]*|'') continue ;; esac
-          [ "$pct" -gt 100 ] 2>/dev/null && pct=100
-          printf 'DUDUCLAW_PROGRESS:%s\n' "$pct"
-      done < "$PROGRESS_FIFO" ) &
-    PROGRESS_READER_PID=$!
+    if [ "${DUDUCLAW_INSTALL_PROGRESS:-0}" = "1" ] && command -v pv >/dev/null 2>&1; then
+        # Listing is only a size hint: a missing/reformatted frame size falls
+        # back to the old compressed-size floor. Actual decoding MUST succeed.
+        TOTAL_BYTES="$(zstd -lv "$IMG" 2>&1 | awk -F'[()]' '/Decompressed Size/{print $2}' | awk '{print $1}' || true)"
+        case "$TOTAL_BYTES" in
+            ''|*[!0-9]*) TOTAL_BYTES=$((IMG_BYTES * 3)) ;;
+        esac
+        [ "$TOTAL_BYTES" -gt 0 ] 2>/dev/null || TOTAL_BYTES=$((IMG_BYTES * 3))
 
-    zstd -dc "$IMG" | pv -n -s "$TOTAL_BYTES" 2>"$PROGRESS_FIFO" | dd of="$TARGET_DEV" bs=4M conv=fsync 2>/dev/null
+        # mktemp -d creates a private namespace; never reserve a FIFO name with
+        # mktemp -u, which leaves a race before mkfifo creates it.
+        PROGRESS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/duduclaw-install-progress.XXXXXX")"
+        PROGRESS_FIFO="$PROGRESS_DIR/samples"
+        mkfifo "$PROGRESS_FIFO"
+        ( while IFS= read -r pct; do
+              case "$pct" in *[!0-9]*|'') continue ;; esac
+              # pv can report 100 before a late decoder/checksum or dd error.
+              # Reserve 100 for the verified stream plus sync below.
+              [ "$pct" -gt 99 ] 2>/dev/null && pct=99
+              printf 'DUDUCLAW_PROGRESS:%s\n' "$pct"
+          done < "$PROGRESS_FIFO" ) &
+        PROGRESS_READER_PID=$!
 
-    wait "$PROGRESS_READER_PID" 2>/dev/null || true
-    rm -f "$PROGRESS_FIFO"
-    printf 'DUDUCLAW_PROGRESS:100\n'
-elif command -v pv >/dev/null 2>&1; then
-    zstd -dc "$IMG" | pv | dd of="$TARGET_DEV" bs=4M conv=fsync 2>/dev/null
-else
-    zstd -dc "$IMG" | dd of="$TARGET_DEV" bs=4M conv=fsync
+        if ! zstd -dc "$IMG" | pv -n -s "$TOTAL_BYTES" 2>"$PROGRESS_FIFO" | dd of="$TARGET_DEV" bs=4M conv=fsync 2>/dev/null; then
+            fail "映像解壓或寫入失敗，目標磁碟可能僅部分寫入；請重新執行安裝。"
+        fi
+        wait "$PROGRESS_READER_PID" || fail "無法讀取安裝進度，請重新執行安裝。"
+        PROGRESS_READER_PID=''
+    elif command -v pv >/dev/null 2>&1; then
+        if ! zstd -dc "$IMG" | pv | dd of="$TARGET_DEV" bs=4M conv=fsync 2>/dev/null; then
+            fail "映像解壓或寫入失敗，目標磁碟可能僅部分寫入；請重新執行安裝。"
+        fi
+    else
+        if ! zstd -dc "$IMG" | dd of="$TARGET_DEV" bs=4M conv=fsync; then
+            fail "映像解壓或寫入失敗，目標磁碟可能僅部分寫入；請重新執行安裝。"
+        fi
+    fi
+)
+# A signal sent only to the installer's main PID must cancel disk writes too.
+# Bash monitor mode puts this one background job in its own process group;
+# $! is its leader. Never signal the caller's group or match process names.
+WRITE_IMAGE_PID=''
+pending_write_signal=0
+stop_write_image() {
+    # Coalesce further cancellation requests while reaping. A trapped signal
+    # can interrupt Bash wait, so retry only while this recorded job runs.
+    trap 'pending_write_signal=143' INT TERM
+    if [ -n "$WRITE_IMAGE_PID" ]; then
+        local write_pid=$WRITE_IMAGE_PID
+        kill -TERM -- "-$write_pid" 2>/dev/null || true
+        while ! wait "$write_pid" 2>/dev/null; do
+            [ "$(jobs -pr)" = "$write_pid" ] || break
+        done
+        WRITE_IMAGE_PID=''
+    fi
+}
+trap stop_write_image EXIT
+# Do not exit between fork and recording $!: remember cancellation until the
+# dedicated group leader is known. These handlers stay active through setup.
+trap 'pending_write_signal=130' INT
+trap 'pending_write_signal=143' TERM
+set -m
+write_image &
+WRITE_IMAGE_PID=$!
+set +m
+trap 'stop_write_image; exit 130' INT
+trap 'stop_write_image; exit 143' TERM
+if [ "$pending_write_signal" -ne 0 ]; then
+    cancel_status=$pending_write_signal
+    stop_write_image
+    exit "$cancel_status"
 fi
-log "映像寫入完成，同步中…"
+write_status=0
+wait "$WRITE_IMAGE_PID" || write_status=$?
+WRITE_IMAGE_PID=''
+trap - EXIT INT TERM
+[ "$write_status" -eq 0 ] || exit "$write_status"
+log "正在同步映像…"
 sync
+# Machine-readable progress contract: samples 0..99 while streaming; only a
+# successful complete stream, progress reader and sync may publish 100.
+if [ "${DUDUCLAW_INSTALL_PROGRESS:-0}" = "1" ] && command -v pv >/dev/null 2>&1; then
+    printf 'DUDUCLAW_PROGRESS:100\n'
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Repair the GPT: move the backup header to the real end of the target

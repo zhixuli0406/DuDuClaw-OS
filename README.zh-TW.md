@@ -141,6 +141,8 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 ./scripts/release-os.sh publish    # 上傳到 GitHub Release
 ```
 
+generic 映像會要求內建 KVM guest 支援；最終核心 `.config` 缺少 guest／時鐘前置選項、必要 VirtIO 或 PCI MSI 時，建置會停止。host KVM 模組沿用既有設定。這項組態檢查不能取代原生 GCE 開機與安裝驗收，詳見 [layer 建置參考](meta-duduclaw/README.md#build)。
+
 遠端 builder（例如 GCP）不放簽章金鑰：在 builder 上跑 `package --no-sign`，把 `artifacts/os/v<版本>/<機型>/` 複製回持有金鑰的機器，再跑 `sign` 與 `publish`。大記憶體的 Linux builder 可以用 `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` 取代預設的 `serial1.yml`（同樣關掉 SPDX，但不做 `-j1`），`build`／`smoke`／`package` 要帶同一個值。
 
 smoke 判斷「到了登入畫面」與「QEMU／kas 已經放棄」用的 log 樣式有自己的測試：`scripts/tests/smoke-patterns.sh`（不需要 Docker 或 QEMU，對 `scripts/tests/fixtures/smoke/` 的範例逐行比對）。

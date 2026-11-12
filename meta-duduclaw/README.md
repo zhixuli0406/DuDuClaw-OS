@@ -219,6 +219,12 @@ same `build/conf/local.conf` and bitbake fails with cascading
 
 ### Boot under QEMU
 
+The installed initramfs mounts `/run` tmpfs with explicit `mode=0755` before
+handing it to systemd. Existing mounts retain their mode; strict Dropbear
+authorized-key ancestor checks reject a writable `/run`. The patch regression
+(`python3 scripts/tests/initramfs-run-mode.py`) does not replace runtime `/run`
+and normal maintenance-login verification on the rebuilt guest.
+
 OVMF (UEFI firmware for QEMU) is a host-side tool the image does not depend
 on; build it once:
 

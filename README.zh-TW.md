@@ -141,6 +141,8 @@ dd if=<wic> of=/dev/<目標磁碟> bs=4M conv=fsync    # 或 bmaptool copy
 ./scripts/release-os.sh publish    # 上傳到 GitHub Release
 ```
 
+installed initramfs 會明確設定 `/run` mode 0755，供嚴格 SSH 金鑰路徑檢查；runtime 權限與正常維修登入仍須在重建客體驗證。
+
 遠端 builder（例如 GCP）不放簽章金鑰：在 builder 上跑 `package --no-sign`，把 `artifacts/os/v<版本>/<機型>/` 複製回持有金鑰的機器，再跑 `sign` 與 `publish`。大記憶體的 Linux builder 可以用 `DUDUCLAW_OS_KAS_OVERLAY=meta-duduclaw/kas/release-linux-builder.yml` 取代預設的 `serial1.yml`（同樣關掉 SPDX，但不做 `-j1`），`build`／`smoke`／`package` 要帶同一個值。
 
 smoke 判斷「到了登入畫面」與「QEMU／kas 已經放棄」用的 log 樣式有自己的測試：`scripts/tests/smoke-patterns.sh`（不需要 Docker 或 QEMU，對 `scripts/tests/fixtures/smoke/` 的範例逐行比對）。

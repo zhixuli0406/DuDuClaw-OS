@@ -11,6 +11,7 @@ DuDuClaw OS 所有值得記錄的變更都在這裡。版號與 DuDuClaw 平台*
 - **官網的 SEO／GEO 檔案**（`website/`）：兩頁加上 `robots` meta、canonical 與 hreflang（`zh-TW`、`x-default`）；首頁加 JSON-LD（`Organization` 為 Dudu Technology Ltd.／嘟嘟數位科技有限公司，`SoftwareApplication` 寫 v0.4.0、pre-GA、所有驗證在 QEMU、Apache-2.0），下載頁加 `BreadcrumbList`。新增 `robots.txt`（明列允許 GPTBot、ClaudeBot、PerplexityBot、Google-Extended 等 AI 爬蟲，列出 `sitemap.xml` 與文件站的 `docs/sitemap-index.xml`）、`sitemap.xml`、`llms.txt` 與 `llms-full.txt`，內容取自兩頁現有文案與 `site.js` 的 `RELEASE`。這組檔案原本寫在 #15 的分支上（v0.3.0 時的內容），#15 關閉沒有合併，正式站的 `/robots.txt`、`/llms.txt` 一直是 404；這次在 C1 版面上重做，版本與公司名稱改成現況。`scripts/build-site.sh` 組完 `_site/` 會檢查這四個檔案都在。`deploy/cloudrun/mime.types` 的 `.xml` 改送 `application/xml`，`nginx.conf` 加 `charset utf-8`，`.txt` 送 `text/plain; charset=utf-8`。`website/README.md` 補上 SEO 一節與出新版時要改的地方。
 
 ### Changed
+- **官網與 `llms*.txt` 跟上平台 v1.84.0**：首頁「選用你的 AI 服務」卡的尚未進入映像說明延伸到 v1.84.0，代表項目加上 v1.84.0 的備援引擎規則與記憶語言設定；`llms*.txt` 改寫「平台 v1.84.0 尚未進入這份映像」。OS 映像沒有變，v0.4.0 仍內嵌平台 v1.73.4。
 - **官網與 `llms*.txt` 跟上平台 v1.83.0**：首頁「選用你的 AI 服務」卡的尚未進入映像說明延伸到 v1.83.0，代表項目加上 v1.83.0 的步數上限設定與無進展時限；`llms*.txt` 改寫「平台 v1.83.0 尚未進入這份映像」。OS 映像沒有變，v0.4.0 仍內嵌平台 v1.73.4。
 - **官網與 `llms*.txt` 跟上平台 v1.82.0**：首頁「選用你的 AI 服務」卡的尚未進入映像說明延伸到 v1.82.0，代表項目加上 v1.82.0 的兩步驟驗證首次設定與 MCP 金鑰管理；`llms*.txt` 改寫「平台 v1.82.0 尚未進入這份映像」。OS 映像沒有變，v0.4.0 仍內嵌平台 v1.73.4。
 - **官網與 `llms*.txt` 跟上平台 v1.81.0**：首頁「選用你的 AI 服務」卡的尚未進入映像說明改成到 v1.81.0 為止的代表項目（v1.81.0 的對話保存設定、組織圖調整與工具權限表），不再逐版完整列舉，避免卡片越來越長；`llms*.txt` 改寫「平台 v1.81.0 尚未進入這份映像」。OS 映像沒有變，v0.4.0 仍內嵌平台 v1.73.4。
